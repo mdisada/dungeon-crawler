@@ -27,11 +27,11 @@ def _track_usage(purpose, model, cost):
 def ask(model: str, user_prompt: str,  purpose: str, system_prompt: str | None = None, schema: dict | None = None):
     if model in ollama_models:
         if ollama.is_available():
-            result, cost = ollama.run(model, user_prompt)
+            result, cost = ollama.run(model, user_prompt, system=system_prompt, schema=schema)
         else:
             result, cost = run_openrouter(openrouter_models[0], user_prompt, system_prompt, schema)
     elif model in openrouter_models:
-        result, cost = run_openrouter(openrouter_models[0], user_prompt, system_prompt, schema)
+        result, cost = run_openrouter(model, user_prompt, system_prompt, schema)
     else:
         result = f"ERROR: Model {model} not found in llm list"
         cost = 0.0
@@ -41,4 +41,4 @@ def ask(model: str, user_prompt: str,  purpose: str, system_prompt: str | None =
 
     _track_usage(purpose, model, cost)
 
-    return result
+    return result, cost

@@ -64,7 +64,8 @@ def run(model: str, prompt: str, **kwargs) -> tuple[str, float]:
         model: Ollama model identifier, e.g. "gemma4:e4b", "qwen3.5:9b".
         prompt: The user prompt to send.
         **kwargs: Optional extra parameters passed through to the API
-                  (e.g. options={"temperature": 0.7}, system="...").
+                  (e.g. options={"temperature": 0.7}, system="...",
+                  schema=<OpenRouter-envelope JSON schema dict>).
 
     Returns:
         (result, cost) tuple:
@@ -80,12 +81,17 @@ def run(model: str, prompt: str, **kwargs) -> tuple[str, float]:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
+    schema = kwargs.pop("schema", None)
+
     payload = {
         "model": model,
         "messages": messages,
         "stream": False,
         **kwargs,
     }
+
+    if schema:
+        payload["format"] = schema.get("schema", schema)
 
     try:
         response = requests.post(

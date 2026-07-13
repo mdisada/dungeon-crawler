@@ -219,3 +219,6 @@ __marimo__/
 
 # Discord voice recordings
 backend/recordings/
+
+# Local data (usage log, campaigns database)
+backend/data/
