@@ -319,10 +319,12 @@ dependencies = [
     { name = "faster-whisper" },
     { name = "llvmlite" },
     { name = "numba" },
+    { name = "onnx-asr", extra = ["cpu", "hub"] },
     { name = "py-cord", extra = ["voice"] },
     { name = "pydub" },
     { name = "python-dotenv" },
     { name = "setuptools" },
+    { name = "soundfile" },
     { name = "supabase" },
     { name = "torch", version = "2.6.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "python_full_version < '3.14'" },
     { name = "torch", version = "2.13.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "python_full_version >= '3.14'" },
@@ -338,10 +340,12 @@ requires-dist = [
     { name = "faster-whisper", specifier = ">=1.2.1" },
     { name = "llvmlite", specifier = ">=0.40.0" },
     { name = "numba", specifier = ">=0.57.0" },
+    { name = "onnx-asr", extras = ["cpu", "hub"], specifier = ">=0.11.0" },
     { name = "py-cord", extras = ["voice"], git = "https://github.com/Pycord-Development/pycord.git?branch=fix%2Fvoice-rec-2" },
     { name = "pydub", specifier = ">=0.25.1" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "setuptools", specifier = ">=70,<81" },
+    { name = "soundfile", specifier = ">=0.14.0" },
     { name = "supabase", specifier = ">=2.31.0" },
     { name = "torch", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cu126" },
     { name = "torchaudio", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cu126" },
@@ -2197,6 +2201,27 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b8/8a/da2a97ab46fe6e0cd9beb3ac14603a22f5be492f9ca347faf8233a07bb33/onnx-1.22.0-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2632406b8f523ef2e2873c363f90b20a3d88c0fbcfac757d3addffccf8f452c2", size = 19110420, upload-time = "2026-06-15T12:49:57.665Z" },
     { url = "https://files.pythonhosted.org/packages/b9/a3/ce984063017518307ebfaa545782fc400e593dc2d7fdf4f23ce4be1ed197/onnx-1.22.0-cp314-cp314t-win_amd64.whl", hash = "sha256:a3a39fc4643867aecb33417fdddb11e308ee79d2d4a584b9d50cc7aec2091b13", size = 17237547, upload-time = "2026-06-15T12:50:00.382Z" },
     { url = "https://files.pythonhosted.org/packages/00/50/257a880384a1dd502d543b0067945074d63cd17d0840e958355bc8197da8/onnx-1.22.0-cp314-cp314t-win_arm64.whl", hash = "sha256:8e268cdc0547e3949799ffd4a44451dc2b9080b57d0824a2db680b6ec65506f0", size = 17231391, upload-time = "2026-06-15T12:50:03.047Z" },
+]
+
+[[package]]
+name = "onnx-asr"
+version = "0.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/f6/b154881761a593312f509522f99542acffa2516f7a1df6ddf5660ad4a162/onnx_asr-0.11.0.tar.gz", hash = "sha256:57ad8d9571dc17db95f0daf9ba432b9472383de320c610735850e56b5375a37d", size = 43665, upload-time = "2026-03-23T02:30:57.349Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/04/bdffd682cc38b43144b6528186c80451f219a05e3fd0eb331a548f455b9a/onnx_asr-0.11.0-py3-none-any.whl", hash = "sha256:142d8b3ce7716684992826a269304f5ce9cf1c0fe704b751358e223f45d2a5cf", size = 138349, upload-time = "2026-03-23T02:30:58.566Z" },
+]
+
+[package.optional-dependencies]
+cpu = [
+    { name = "onnxruntime" },
+]
+hub = [
+    { name = "huggingface-hub" },
 ]
 
 [[package]]
