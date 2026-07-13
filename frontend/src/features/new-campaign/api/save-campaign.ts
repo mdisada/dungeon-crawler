@@ -1,18 +1,15 @@
 import { sendRealtimeRequest } from '@/lib/realtime-request'
 import { CAMPAIGN_BUILDER_TOPIC, TIMEOUTS } from '../constants'
-import type { CampaignOutline, CampaignSavedResponse, CampaignType, OutlineLocks } from '../types'
+import type { CampaignSavedResponse, CampaignType, PlotPoint } from '../types'
 
 export type SaveCampaignPayload = {
   userId: string
   model: string
   plot: string
   campaignType: CampaignType
-  chapterCount: number
-  sessionsPerChapter: number
-  outline: CampaignOutline
+  plotPoints: PlotPoint[]
   plotCost: number
-  outlineCost: number
-  locks: OutlineLocks
+  generationCost: number
 }
 
 export function saveCampaign(

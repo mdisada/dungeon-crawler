@@ -1,41 +1,57 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useSession } from '@/features/auth'
 import { timeJob } from '@/lib/job-timer'
-import { generateOutline } from '../api/generate-outline'
 import { generatePlot } from '../api/generate-plot'
-import { regenerateOutline } from '../api/regenerate-outline'
+import { generatePlotPoints } from '../api/generate-plot-points'
+import { improvePlot } from '../api/improve-plot'
+import { listPlotDrafts } from '../api/list-plot-drafts'
+import { regeneratePlotPoints } from '../api/regenerate-plot-points'
 import { saveCampaign } from '../api/save-campaign'
-import { buildDefaultLocks } from '../outline-locks'
-import type { CampaignOutline, CampaignSetup, ChapterOutline, OutlineLocks, SessionOutline } from '../types'
+import { savePlotDraft } from '../api/save-plot-draft'
+import { buildDefaultLocks } from '../plot-point-locks'
+import type {
+  CampaignSetup,
+  PlotDraft,
+  PlotDraftSource,
+  PlotPoint,
+  PlotPointLocks,
+} from '../types'
 
-export type CampaignManagerStep = 'setup' | 'outline' | 'saved'
+export type CampaignManagerStep = 'setup' | 'plot-points' | 'saved'
 
 const DEFAULT_SETUP: CampaignSetup = {
   model: '',
   plot: '',
   campaignType: 'multi-chapter',
-  minChapters: 3,
-  maxChapters: 5,
-  minSessionsPerChapter: 2,
-  maxSessionsPerChapter: 4,
 }
 
 export function useCampaignManager() {
   const { session } = useSession()
+  const userId = session?.user.id
 
   const [step, setStep] = useState<CampaignManagerStep>('setup')
   const [setup, setSetup] = useState<CampaignSetup>(DEFAULT_SETUP)
 
   const [plotCost, setPlotCost] = useState<number | null>(null)
-  const [outline, setOutline] = useState<CampaignOutline | null>(null)
-  const [outlineCost, setOutlineCost] = useState<number | null>(null)
-  const [chapterCount, setChapterCount] = useState<number | null>(null)
-  const [sessionsPerChapter, setSessionsPerChapter] = useState<number | null>(null)
-  const [locks, setLocks] = useState<OutlineLocks | null>(null)
+  const [plotPoints, setPlotPoints] = useState<PlotPoint[] | null>(null)
+  const [generationCost, setGenerationCost] = useState<number | null>(null)
+  const [locks, setLocks] = useState<PlotPointLocks | null>(null)
   const [savedCampaignId, setSavedCampaignId] = useState<number | null>(null)
 
+  // Instant, in-memory undo — no round trip needed to step backward through what's been typed
+  // or generated in this session.
+  const [plotHistoryStack, setPlotHistoryStack] = useState<string[]>([])
+  // Persisted history (this user's own drafts, across sessions) for the history popover —
+  // fetched lazily when it's opened.
+  const [plotDrafts, setPlotDrafts] = useState<PlotDraft[]>([])
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false)
+  // Avoids re-saving the same content twice in a row (e.g. opening the popover right after a
+  // generate call that already recorded its own result).
+  const lastRecordedDraftRef = useRef<string | null>(null)
+
   const [isGeneratingPlot, setIsGeneratingPlot] = useState(false)
-  const [isGeneratingOutline, setIsGeneratingOutline] = useState(false)
+  const [isImprovingPlot, setIsImprovingPlot] = useState(false)
+  const [isGeneratingPlotPoints, setIsGeneratingPlotPoints] = useState(false)
   const [isRegenerating, setIsRegenerating] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -44,17 +60,36 @@ export function useCampaignManager() {
     setSetup((prev) => ({ ...prev, ...patch }))
   }
 
+  const recordPlotDraft = (content: string, source: PlotDraftSource) => {
+    lastRecordedDraftRef.current = content
+    if (!userId) return
+    timeJob('save-plot-draft', (jobId) => savePlotDraft(jobId, { userId, content, source })).catch(() => {})
+  }
+
+  // Snapshots whatever is currently in the textarea — unless it's empty or already the most
+  // recently recorded draft — right before a Generate/Improve/restore action overwrites it.
+  // This is what makes undo/history work off a plain append-only log rather than a separate
+  // undo-stack concept.
+  const snapshotCurrentPlot = () => {
+    const current = setup.plot
+    if (!current.trim() || current === lastRecordedDraftRef.current) return
+    setPlotHistoryStack((prev) => [...prev, current])
+    recordPlotDraft(current, 'written')
+  }
+
   const generatePlotIdea = async () => {
     if (!setup.model) {
       setError('Pick a model first.')
       return
     }
+    snapshotCurrentPlot()
     setIsGeneratingPlot(true)
     setError(null)
     try {
       const { result } = await timeJob('generate-plot', (jobId) => generatePlot(jobId, setup.model))
       updateSetup({ plot: result.plot })
       setPlotCost(result.cost)
+      recordPlotDraft(result.plot, 'generated')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
@@ -62,41 +97,89 @@ export function useCampaignManager() {
     }
   }
 
-  const generateCampaignOutline = async () => {
-    setIsGeneratingOutline(true)
+  const improvePlotText = async () => {
+    if (!setup.model) {
+      setError('Pick a model first.')
+      return
+    }
+    snapshotCurrentPlot()
+    setIsImprovingPlot(true)
     setError(null)
     try {
-      const { result } = await timeJob('generate-outline', (jobId) => generateOutline(jobId, setup))
-      setOutline(result.outline)
-      setOutlineCost(result.cost)
-      setChapterCount(result.chapterCount)
-      setSessionsPerChapter(result.sessionsPerChapter)
-      setLocks(buildDefaultLocks(result.outline))
-      setStep('outline')
+      const { result } = await timeJob('improve-plot', (jobId) =>
+        improvePlot(jobId, setup.model, setup.plot),
+      )
+      updateSetup({ plot: result.plot })
+      setPlotCost(result.cost)
+      recordPlotDraft(result.plot, 'improved')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
-      setIsGeneratingOutline(false)
+      setIsImprovingPlot(false)
     }
   }
 
-  const regenerateUnlockedChapters = async () => {
-    if (!outline || !locks || chapterCount === null || sessionsPerChapter === null) return
+  const undoPlot = () => {
+    setPlotHistoryStack((prev) => {
+      if (prev.length === 0) return prev
+      updateSetup({ plot: prev[prev.length - 1] })
+      return prev.slice(0, -1)
+    })
+  }
+
+  const loadPlotHistory = async () => {
+    if (!userId) return
+    setIsLoadingHistory(true)
+    setError(null)
+    try {
+      const { result } = await timeJob('list-plot-drafts', (jobId) => listPlotDrafts(jobId, userId))
+      setPlotDrafts(result.drafts)
+      if (result.drafts.length > 0) lastRecordedDraftRef.current = result.drafts[0].content
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setIsLoadingHistory(false)
+    }
+  }
+
+  const restoreFromHistory = (draft: PlotDraft) => {
+    snapshotCurrentPlot()
+    updateSetup({ plot: draft.content })
+  }
+
+  const generateCampaignPlotPoints = async () => {
+    setIsGeneratingPlotPoints(true)
+    setError(null)
+    try {
+      const { result } = await timeJob('generate-plot-points', (jobId) =>
+        generatePlotPoints(jobId, setup),
+      )
+      setPlotPoints(result.plotPoints)
+      setGenerationCost(result.cost)
+      setLocks(buildDefaultLocks(result.plotPoints))
+      setStep('plot-points')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setIsGeneratingPlotPoints(false)
+    }
+  }
+
+  const regenerateUnlockedPlotPoints = async () => {
+    if (!plotPoints || !locks) return
     setIsRegenerating(true)
     setError(null)
     try {
-      const { result } = await timeJob('regenerate-outline', (jobId) =>
-        regenerateOutline(jobId, {
+      const { result } = await timeJob('regenerate-plot-points', (jobId) =>
+        regeneratePlotPoints(jobId, {
           model: setup.model,
           plot: setup.plot,
-          outline,
-          chapterCount,
-          sessionsPerChapter,
+          plotPoints,
           locks,
         }),
       )
-      setOutline(result.outline)
-      setOutlineCost((prev) => (prev ?? 0) + result.cost)
+      setPlotPoints(result.plotPoints)
+      setGenerationCost((prev) => (prev ?? 0) + result.cost)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
@@ -104,55 +187,22 @@ export function useCampaignManager() {
     }
   }
 
-  const updateChapter = (chapterIndex: number, patch: Partial<ChapterOutline>) => {
-    setOutline((prev) => {
+  const updatePlotPoint = (index: number, patch: Partial<PlotPoint>) => {
+    setPlotPoints((prev) => {
       if (!prev) return prev
-      const chapters = prev.chapters.map((chapter, i) =>
-        i === chapterIndex ? { ...chapter, ...patch } : chapter,
-      )
-      return { ...prev, chapters }
+      return prev.map((point, i) => (i === index ? { ...point, ...patch } : point))
     })
   }
 
-  const updateSession = (chapterIndex: number, sessionIndex: number, patch: Partial<SessionOutline>) => {
-    setOutline((prev) => {
-      if (!prev) return prev
-      const chapters = prev.chapters.map((chapter, i) => {
-        if (i !== chapterIndex) return chapter
-        const sessions = chapter.sessions.map((session, j) =>
-          j === sessionIndex ? { ...session, ...patch } : session,
-        )
-        return { ...chapter, sessions }
-      })
-      return { ...prev, chapters }
-    })
-  }
-
-  const toggleChapterLock = (chapterIndex: number) => {
+  const togglePlotPointLock = (index: number) => {
     setLocks((prev) => {
       if (!prev) return prev
-      const chapters = prev.chapters.map((chapterLock, i) =>
-        i === chapterIndex ? { ...chapterLock, locked: !chapterLock.locked } : chapterLock,
-      )
-      return { chapters }
-    })
-  }
-
-  const toggleSessionLock = (chapterIndex: number, sessionIndex: number) => {
-    setLocks((prev) => {
-      if (!prev) return prev
-      const chapters = prev.chapters.map((chapterLock, i) => {
-        if (i !== chapterIndex) return chapterLock
-        const sessions = chapterLock.sessions.map((locked, j) => (j === sessionIndex ? !locked : locked))
-        return { ...chapterLock, sessions }
-      })
-      return { chapters }
+      return prev.map((locked, i) => (i === index ? !locked : locked))
     })
   }
 
   const saveGeneratedCampaign = async () => {
-    if (!outline || !locks || chapterCount === null || sessionsPerChapter === null) return
-    const userId = session?.user.id
+    if (!plotPoints) return
     if (!userId) {
       setError('You must be signed in to save a campaign.')
       return
@@ -166,12 +216,9 @@ export function useCampaignManager() {
           model: setup.model,
           plot: setup.plot,
           campaignType: setup.campaignType,
-          chapterCount,
-          sessionsPerChapter,
-          outline,
+          plotPoints,
           plotCost: plotCost ?? 0,
-          outlineCost: outlineCost ?? 0,
-          locks,
+          generationCost: generationCost ?? 0,
         }),
       )
       setSavedCampaignId(result.campaignId)
@@ -193,24 +240,28 @@ export function useCampaignManager() {
     setup,
     updateSetup,
     plotCost,
-    outline,
-    outlineCost,
-    chapterCount,
-    sessionsPerChapter,
+    plotPoints,
+    generationCost,
     locks,
     savedCampaignId,
+    plotHistoryStack,
+    plotDrafts,
+    isLoadingHistory,
     isGeneratingPlot,
-    isGeneratingOutline,
+    isImprovingPlot,
+    isGeneratingPlotPoints,
     isRegenerating,
     isSaving,
     error,
     generatePlotIdea,
-    generateCampaignOutline,
-    regenerateUnlockedChapters,
-    updateChapter,
-    updateSession,
-    toggleChapterLock,
-    toggleSessionLock,
+    improvePlotText,
+    undoPlot,
+    loadPlotHistory,
+    restoreFromHistory,
+    generateCampaignPlotPoints,
+    regenerateUnlockedPlotPoints,
+    updatePlotPoint,
+    togglePlotPointLock,
     saveGeneratedCampaign,
     backToSetup,
   }

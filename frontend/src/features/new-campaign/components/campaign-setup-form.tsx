@@ -1,5 +1,6 @@
+import { History, Undo2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -11,6 +12,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import type { useCampaignManager } from '../hooks/use-campaign-manager'
 import type { useModelOptions } from '../hooks/use-model-options'
+import type { PlotDraft } from '../types'
 import { CostBadge } from './cost-badge'
 
 type Props = {
@@ -24,27 +26,31 @@ export function CampaignSetupForm({ manager, models }: Props) {
     updateSetup,
     plotCost,
     isGeneratingPlot,
-    isGeneratingOutline,
+    isImprovingPlot,
+    isGeneratingPlotPoints,
+    plotHistoryStack,
+    plotDrafts,
+    isLoadingHistory,
     generatePlotIdea,
-    generateCampaignOutline,
+    improvePlotText,
+    undoPlot,
+    loadPlotHistory,
+    restoreFromHistory,
+    generateCampaignPlotPoints,
   } = manager
 
-  const boundsValid =
-    setup.campaignType === 'one-shot' ||
-    (setup.minChapters <= setup.maxChapters &&
-      setup.minSessionsPerChapter <= setup.maxSessionsPerChapter &&
-      setup.minChapters >= 1 &&
-      setup.minSessionsPerChapter >= 1)
-
   const canGenerateOutline =
-    Boolean(setup.model) && setup.plot.trim().length > 0 && boundsValid && !isGeneratingOutline
+    Boolean(setup.model) && setup.plot.trim().length > 0 && !isGeneratingPlotPoints
+
+  const isPlotEmpty = setup.plot.trim().length === 0
+  const isBusyWithPlot = isGeneratingPlot || isImprovingPlot
 
   return (
     <form
       className="flex flex-col gap-6"
       onSubmit={(e) => {
         e.preventDefault()
-        if (canGenerateOutline) generateCampaignOutline()
+        if (canGenerateOutline) generateCampaignPlotPoints()
       }}
     >
       {/* Model picker */}
@@ -97,7 +103,7 @@ export function CampaignSetupForm({ manager, models }: Props) {
         <p className="text-sm text-muted-foreground">
           {setup.campaignType === 'one-shot'
             ? 'A single self-contained story, told in one session.'
-            : 'A full campaign spanning multiple chapters, each with multiple sessions.'}
+            : 'A full campaign guided by a handful of major story beats, spanning many sessions.'}
         </p>
       </div>
 
@@ -109,12 +115,49 @@ export function CampaignSetupForm({ manager, models }: Props) {
             {plotCost !== null && <CostBadge cost={plotCost} />}
             <Button
               type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Undo last plot change"
+              disabled={plotHistoryStack.length === 0}
+              onClick={undoPlot}
+            >
+              <Undo2 />
+            </Button>
+            <Popover onOpenChange={(open) => open && loadPlotHistory()}>
+              <PopoverTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Show plot history"
+                  />
+                }
+              >
+                <History />
+              </PopoverTrigger>
+              <PopoverContent>
+                <PlotHistoryList
+                  drafts={plotDrafts}
+                  isLoading={isLoadingHistory}
+                  onRestore={restoreFromHistory}
+                />
+              </PopoverContent>
+            </Popover>
+            <Button
+              type="button"
               variant="outline"
               size="sm"
-              disabled={!setup.model || isGeneratingPlot}
-              onClick={generatePlotIdea}
+              disabled={!setup.model || isBusyWithPlot}
+              onClick={isPlotEmpty ? generatePlotIdea : improvePlotText}
             >
-              {isGeneratingPlot ? 'Generating…' : 'Generate random plot'}
+              {isBusyWithPlot
+                ? isPlotEmpty
+                  ? 'Generating…'
+                  : 'Improving…'
+                : isPlotEmpty
+                  ? 'Generate Plot'
+                  : 'Improve Prompt'}
             </Button>
           </div>
         </div>
@@ -127,66 +170,63 @@ export function CampaignSetupForm({ manager, models }: Props) {
         />
       </div>
 
-      {/* Bounds — only meaningful for multi-chapter; the backend picks one exact count within
-          these bounds and tells the model that exact number rather than a range. */}
-      {setup.campaignType === 'multi-chapter' && (
-        <>
-          <div className="grid grid-cols-2 gap-4">
-            <NumberField
-              label="Min chapters"
-              value={setup.minChapters}
-              onChange={(v) => updateSetup({ minChapters: v })}
-            />
-            <NumberField
-              label="Max chapters"
-              value={setup.maxChapters}
-              onChange={(v) => updateSetup({ maxChapters: v })}
-            />
-            <NumberField
-              label="Min sessions / chapter"
-              value={setup.minSessionsPerChapter}
-              onChange={(v) => updateSetup({ minSessionsPerChapter: v })}
-            />
-            <NumberField
-              label="Max sessions / chapter"
-              value={setup.maxSessionsPerChapter}
-              onChange={(v) => updateSetup({ maxSessionsPerChapter: v })}
-            />
-          </div>
-
-          {!boundsValid && (
-            <p className="text-sm text-destructive">
-              Each min must be at least 1 and no greater than its matching max.
-            </p>
-          )}
-        </>
-      )}
-
       <Button type="submit" disabled={!canGenerateOutline}>
-        {isGeneratingOutline ? 'Generating outline…' : 'Generate campaign outline'}
+        {isGeneratingPlotPoints ? 'Generating…' : 'Generate story guide'}
       </Button>
     </form>
   )
 }
 
-function NumberField({
-  label,
-  value,
-  onChange,
+function PlotHistoryList({
+  drafts,
+  isLoading,
+  onRestore,
 }: {
-  label: string
-  value: number
-  onChange: (value: number) => void
+  drafts: PlotDraft[]
+  isLoading: boolean
+  onRestore: (draft: PlotDraft) => void
 }) {
+  if (isLoading) {
+    return <p className="text-sm text-muted-foreground">Loading history…</p>
+  }
+
+  if (drafts.length === 0) {
+    return <p className="text-sm text-muted-foreground">No previous drafts yet.</p>
+  }
+
   return (
-    <div className="flex flex-col gap-2">
-      <Label>{label}</Label>
-      <Input
-        type="number"
-        min={1}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-      />
+    <div className="flex flex-col gap-1">
+      <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">Your plot history</p>
+      <div className="flex max-h-80 flex-col gap-1 overflow-y-auto">
+        {drafts.map((draft) => (
+          <PopoverClose
+            key={draft.id}
+            render={
+              <button
+                type="button"
+                className="flex flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-muted"
+                onClick={() => onRestore(draft)}
+              />
+            }
+          >
+            <span className="line-clamp-2 text-sm">{draft.content}</span>
+            <span className="text-xs text-muted-foreground">
+              {sourceLabel(draft.source)} · {new Date(draft.createdAt).toLocaleString()}
+            </span>
+          </PopoverClose>
+        ))}
+      </div>
     </div>
   )
+}
+
+function sourceLabel(source: PlotDraft['source']): string {
+  switch (source) {
+    case 'generated':
+      return 'Generated'
+    case 'improved':
+      return 'Improved'
+    default:
+      return 'Written'
+  }
 }

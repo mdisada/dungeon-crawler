@@ -15,34 +15,71 @@ CREATE TABLE IF NOT EXISTS campaigns (
     plot                   TEXT    NOT NULL,
     model                  TEXT    NOT NULL,
     campaign_type          TEXT    NOT NULL,   -- 'one-shot' | 'multi-chapter'
-    chapter_count          INTEGER NOT NULL,   -- exact count actually generated
-    sessions_per_chapter   INTEGER NOT NULL,   -- exact count actually generated (uniform per chapter)
     plot_cost_usd          REAL    NOT NULL DEFAULT 0,
-    outline_cost_usd       REAL    NOT NULL DEFAULT 0,
-    locked                 INTEGER NOT NULL DEFAULT 0,
+    generation_cost_usd    REAL    NOT NULL DEFAULT 0,
     created_at             TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS chapters (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    campaign_id    INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
-    chapter_index  INTEGER NOT NULL,
-    title          TEXT    NOT NULL,
-    big_goal       TEXT    NOT NULL,
-    twists         TEXT    NOT NULL,
-    locked         INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (campaign_id, chapter_index)
+-- The rough, high-level story guide: a flat parent chain seeded at campaign creation (see
+-- save_campaign). Branching into multiple candidate next points via parent_plot_point_id, and
+-- transitioning status past 'upcoming', is live-play behavior with no writer yet in this pass.
+CREATE TABLE IF NOT EXISTS major_plot_points (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id           INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    parent_plot_point_id  INTEGER REFERENCES major_plot_points(id) ON DELETE SET NULL,
+    title                 TEXT    NOT NULL,
+    summary               TEXT    NOT NULL,
+    status                TEXT    NOT NULL DEFAULT 'upcoming',   -- upcoming | active | reached | abandoned
+    created_at            TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS sessions (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    chapter_id        INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
-    session_index     INTEGER NOT NULL,
-    hook              TEXT    NOT NULL,
-    conflict_climax   TEXT    NOT NULL,
-    cliffhanger       TEXT    NOT NULL,
-    locked            INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (chapter_id, session_index)
+CREATE TABLE IF NOT EXISTS turns (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id            INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    turn_index             INTEGER NOT NULL,
+    content                TEXT    NOT NULL,
+    author                 TEXT    NOT NULL DEFAULT 'dm',   -- 'dm' (narration, AI-drafted or hand-written) | 'player'
+    reached_plot_point_id  INTEGER REFERENCES major_plot_points(id) ON DELETE SET NULL,
+    created_at             TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (campaign_id, turn_index)
+);
+
+CREATE TABLE IF NOT EXISTS npcs (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id        INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    name               TEXT    NOT NULL,
+    personality        TEXT    NOT NULL DEFAULT '',
+    backstory          TEXT    NOT NULL DEFAULT '',
+    motivations        TEXT    NOT NULL DEFAULT '',
+    current_status     TEXT    NOT NULL DEFAULT '',   -- free text: alive/dead, location, mood
+    relationships      TEXT    NOT NULL DEFAULT '{}', -- JSON, keyed by npc/player name
+    secrets            TEXT    NOT NULL DEFAULT '',   -- hidden from players, informs AI reactions
+    source             TEXT    NOT NULL,              -- 'setup' | 'auto' | 'manual'
+    created_at         TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at         TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (campaign_id, name COLLATE NOCASE)
+);
+
+-- Per-campaign dynamic world knowledge, distinct from the static global world_knowledge/ files
+-- (campaign/world_knowledge.py), which stay app-wide shared lore and aren't changing.
+CREATE TABLE IF NOT EXISTS campaign_lore (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id    INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    category       TEXT    NOT NULL,   -- location | faction | item | history | rule
+    title          TEXT    NOT NULL,
+    content        TEXT    NOT NULL,
+    source         TEXT    NOT NULL,   -- 'setup' | 'auto' | 'manual'
+    created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Per-user plot-textarea history (new-campaign wizard "Generate Plot"/"Improve Prompt" undo).
+-- No campaign_id: this happens before a campaign exists.
+CREATE TABLE IF NOT EXISTS plot_drafts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       TEXT    NOT NULL,
+    content       TEXT    NOT NULL,
+    source        TEXT    NOT NULL,   -- 'written' | 'generated' | 'improved'
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -54,84 +91,349 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """CREATE TABLE IF NOT EXISTS won't add new columns/drop old tables for a DB that already
+    exists on disk from an earlier run — patch those in by hand.
+
+    NOTE: `campaigns.chapter_count`/`sessions_per_chapter` (dropped NOT NULL columns from the old
+    schema) have no migration path here — delete data/campaigns.db if upgrading from before this
+    change, there is no in-place column drop for that table.
+    """
+    conn.execute("DROP TABLE IF EXISTS chapters")
+    conn.execute("DROP TABLE IF EXISTS sessions")
+
+    turn_columns = [row[1] for row in conn.execute("PRAGMA table_info(turns)")]
+    if "author" not in turn_columns:
+        conn.execute("ALTER TABLE turns ADD COLUMN author TEXT NOT NULL DEFAULT 'dm'")
+    if "reached_plot_point_id" not in turn_columns:
+        conn.execute(
+            "ALTER TABLE turns ADD COLUMN reached_plot_point_id "
+            "INTEGER REFERENCES major_plot_points(id) ON DELETE SET NULL"
+        )
+
+
 def init_db() -> None:
     with _connect() as conn:
         conn.executescript(SCHEMA)
-
-
-def _chapter_lock(locks: dict | None, chapter_index: int) -> bool:
-    if not locks:
-        return False
-    chapters = locks.get("chapters", [])
-    if chapter_index >= len(chapters):
-        return False
-    return bool(chapters[chapter_index].get("locked", False))
-
-
-def _session_lock(locks: dict | None, chapter_index: int, session_index: int) -> bool:
-    if not locks:
-        return False
-    chapters = locks.get("chapters", [])
-    if chapter_index >= len(chapters):
-        return False
-    sessions = chapters[chapter_index].get("sessions", [])
-    if session_index >= len(sessions):
-        return False
-    return bool(sessions[session_index])
+        _migrate(conn)
 
 
 def save_campaign(
     user_id: str,
     model: str,
     plot: str,
-    outline: dict,
     campaign_type: str,
-    chapter_count: int,
-    sessions_per_chapter: int,
+    plot_points: list[dict],
     plot_cost: float,
-    outline_cost: float,
-    locks: dict | None = None,
+    generation_cost: float,
 ) -> int:
+    """Persists the campaign and seeds `major_plot_points` as a flat parent chain in the order
+    given — branching/regenerating that chain dynamically during play is a later, live-play
+    concern (see the plot_points table comment in SCHEMA above).
+    """
     with _connect() as conn:
         cursor = conn.execute(
             """
             INSERT INTO campaigns (
-                user_id, plot, model, campaign_type, chapter_count,
-                sessions_per_chapter, plot_cost_usd, outline_cost_usd
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                user_id, plot, model, campaign_type, plot_cost_usd, generation_cost_usd
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (
-                user_id, plot, model, campaign_type, chapter_count,
-                sessions_per_chapter, plot_cost, outline_cost,
-            ),
+            (user_id, plot, model, campaign_type, plot_cost, generation_cost),
         )
         campaign_id = cursor.lastrowid
 
-        for chapter_index, chapter in enumerate(outline.get("chapters", [])):
-            chapter_cursor = conn.execute(
+        parent_id = None
+        for point in plot_points:
+            point_cursor = conn.execute(
                 """
-                INSERT INTO chapters (campaign_id, chapter_index, title, big_goal, twists, locked)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO major_plot_points (campaign_id, parent_plot_point_id, title, summary)
+                VALUES (?, ?, ?, ?)
                 """,
-                (
-                    campaign_id, chapter_index, chapter["title"], chapter["bigGoal"],
-                    json.dumps(chapter.get("twists", [])),
-                    _chapter_lock(locks, chapter_index),
-                ),
+                (campaign_id, parent_id, point["title"], point["summary"]),
             )
-            chapter_id = chapter_cursor.lastrowid
-
-            for session_index, session in enumerate(chapter.get("sessions", [])):
-                conn.execute(
-                    """
-                    INSERT INTO sessions (chapter_id, session_index, hook, conflict_climax, cliffhanger, locked)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        chapter_id, session_index, session["hook"],
-                        session["conflictClimax"], session["cliffhanger"],
-                        _session_lock(locks, chapter_index, session_index),
-                    ),
-                )
+            parent_id = point_cursor.lastrowid
 
         return campaign_id
+
+
+def _row_to_campaign_summary(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "userId": row["user_id"],
+        "plot": row["plot"],
+        "model": row["model"],
+        "campaignType": row["campaign_type"],
+        "createdAt": row["created_at"],
+    }
+
+
+def list_campaigns_for_user(user_id: str) -> list[dict]:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM campaigns WHERE user_id = ? ORDER BY created_at DESC", (user_id,)
+        ).fetchall()
+        return [_row_to_campaign_summary(row) for row in rows]
+
+
+def get_campaign(campaign_id: int) -> dict | None:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
+        return _row_to_campaign_summary(row) if row else None
+
+
+def _row_to_plot_point(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "parentPlotPointId": row["parent_plot_point_id"],
+        "title": row["title"],
+        "summary": row["summary"],
+        "status": row["status"],
+        "createdAt": row["created_at"],
+    }
+
+
+def list_plot_points(campaign_id: int) -> list[dict]:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM major_plot_points WHERE campaign_id = ? ORDER BY id ASC", (campaign_id,)
+        ).fetchall()
+        return [_row_to_plot_point(row) for row in rows]
+
+
+def get_current_plot_point(campaign_id: int) -> dict | None:
+    """The plot point to steer narration/branch options toward: the earliest not-yet-reached
+    point in insertion order. Nothing transitions a point's status past 'upcoming' yet (that's a
+    live-play decision, not wired to any handler in this pass) — until it is, this is simply the
+    first plot point seeded for the campaign, which is still a reasonable steering target.
+    """
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT * FROM major_plot_points
+            WHERE campaign_id = ? AND status IN ('upcoming', 'active')
+            ORDER BY id ASC LIMIT 1
+            """,
+            (campaign_id,),
+        ).fetchone()
+        return _row_to_plot_point(row) if row else None
+
+
+def turns_since_last_plot_point(campaign_id: int) -> int:
+    """Pacing signal: how many turns have been published since the last one that resolved a
+    major plot point, computed on the fly rather than via a separate counter column. Until
+    something sets turns.reached_plot_point_id, this simply grows from the start of the
+    campaign — a reasonable default in the absence of that live-play trigger.
+    """
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT reached_plot_point_id FROM turns WHERE campaign_id = ? ORDER BY turn_index DESC",
+            (campaign_id,),
+        ).fetchall()
+
+    count = 0
+    for row in rows:
+        if row["reached_plot_point_id"] is not None:
+            break
+        count += 1
+    return count
+
+
+def _row_to_turn(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "turnIndex": row["turn_index"],
+        "content": row["content"],
+        "author": row["author"],
+        "reachedPlotPointId": row["reached_plot_point_id"],
+        "createdAt": row["created_at"],
+    }
+
+
+def list_turns(campaign_id: int) -> list[dict]:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM turns WHERE campaign_id = ? ORDER BY turn_index ASC", (campaign_id,)
+        ).fetchall()
+        return [_row_to_turn(row) for row in rows]
+
+
+def add_turn(
+    campaign_id: int,
+    content: str,
+    author: str = "dm",
+    reached_plot_point_id: int | None = None,
+) -> dict:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        next_index = conn.execute(
+            "SELECT COUNT(*) AS n FROM turns WHERE campaign_id = ?", (campaign_id,)
+        ).fetchone()["n"]
+        cursor = conn.execute(
+            """
+            INSERT INTO turns (campaign_id, turn_index, content, author, reached_plot_point_id)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (campaign_id, next_index, content, author, reached_plot_point_id),
+        )
+        row = conn.execute("SELECT * FROM turns WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return _row_to_turn(row)
+
+
+def _row_to_npc(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "personality": row["personality"],
+        "backstory": row["backstory"],
+        "motivations": row["motivations"],
+        "currentStatus": row["current_status"],
+        "relationships": json.loads(row["relationships"]),
+        "secrets": row["secrets"],
+        "source": row["source"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def list_npcs(campaign_id: int) -> list[dict]:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM npcs WHERE campaign_id = ? ORDER BY id ASC", (campaign_id,)
+        ).fetchall()
+        return [_row_to_npc(row) for row in rows]
+
+
+def add_npc(
+    campaign_id: int,
+    name: str,
+    source: str,
+    personality: str = "",
+    backstory: str = "",
+    motivations: str = "",
+    current_status: str = "",
+    relationships: dict | None = None,
+    secrets: str = "",
+) -> dict | None:
+    """Returns None instead of raising if `name` already exists for this campaign. The
+    campaign_id+name uniqueness constraint is a backstop against concurrent auto-extraction races
+    (see session_handlers._auto_extract_npcs_and_lore, which holds a per-campaign lock and
+    re-checks existing names before calling this) — a collision here means a race slipped past
+    that guard, not the normal path.
+    """
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO npcs (
+                    campaign_id, name, personality, backstory, motivations, current_status,
+                    relationships, secrets, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    campaign_id, name, personality, backstory, motivations, current_status,
+                    json.dumps(relationships or {}), secrets, source,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            return None
+        row = conn.execute("SELECT * FROM npcs WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return _row_to_npc(row)
+
+
+def update_npc(
+    npc_id: int,
+    personality: str | None = None,
+    backstory: str | None = None,
+    motivations: str | None = None,
+    current_status: str | None = None,
+    relationships: dict | None = None,
+    secrets: str | None = None,
+) -> None:
+    """Only columns passed a non-None value are updated — lets a caller patch e.g. just
+    current_status after a scene without clobbering the rest of the record."""
+    values = {
+        "personality": personality,
+        "backstory": backstory,
+        "motivations": motivations,
+        "current_status": current_status,
+        "relationships": json.dumps(relationships) if relationships is not None else None,
+        "secrets": secrets,
+    }
+    updates = {column: value for column, value in values.items() if value is not None}
+    if not updates:
+        return
+
+    set_clause = ", ".join(f"{column} = ?" for column in updates) + ", updated_at = datetime('now')"
+    with _connect() as conn:
+        conn.execute(f"UPDATE npcs SET {set_clause} WHERE id = ?", (*updates.values(), npc_id))
+
+
+def _row_to_lore(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "category": row["category"],
+        "title": row["title"],
+        "content": row["content"],
+        "source": row["source"],
+        "createdAt": row["created_at"],
+    }
+
+
+def list_lore(campaign_id: int) -> list[dict]:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM campaign_lore WHERE campaign_id = ? ORDER BY id ASC", (campaign_id,)
+        ).fetchall()
+        return [_row_to_lore(row) for row in rows]
+
+
+def add_lore(campaign_id: int, category: str, title: str, content: str, source: str) -> dict:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            """
+            INSERT INTO campaign_lore (campaign_id, category, title, content, source)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (campaign_id, category, title, content, source),
+        )
+        row = conn.execute("SELECT * FROM campaign_lore WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return _row_to_lore(row)
+
+
+def _row_to_plot_draft(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "content": row["content"],
+        "source": row["source"],
+        "createdAt": row["created_at"],
+    }
+
+
+def list_plot_drafts(user_id: str) -> list[dict]:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM plot_drafts WHERE user_id = ? ORDER BY created_at DESC", (user_id,)
+        ).fetchall()
+        return [_row_to_plot_draft(row) for row in rows]
+
+
+def add_plot_draft(user_id: str, content: str, source: str) -> dict:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "INSERT INTO plot_drafts (user_id, content, source) VALUES (?, ?, ?)",
+            (user_id, content, source),
+        )
+        row = conn.execute("SELECT * FROM plot_drafts WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return _row_to_plot_draft(row)

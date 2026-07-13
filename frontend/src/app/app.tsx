@@ -4,6 +4,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 
 import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { AuthScreen, SignOutButton, useSession } from '@/features/auth'
+import { CampaignPage, DmPage, PlayerPage } from '@/features/campaign-session'
 import { HomePage } from '@/features/home'
 import { NewCampaignPage } from '@/features/new-campaign'
 
@@ -26,6 +27,9 @@ function App() {
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/campaigns/new" element={<NewCampaignPage />} />
+              <Route path="/campaigns/:id" element={<CampaignPage />} />
+              <Route path="/campaigns/:id/dm" element={<DmPage />} />
+              <Route path="/campaigns/:id/player" element={<PlayerPage />} />
             </Routes>
           ) : (
             <AuthScreen />

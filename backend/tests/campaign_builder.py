@@ -1,8 +1,9 @@
 """Standalone entrypoint for the campaign-builder realtime channel.
 
 Run this, then open the frontend and go through the "New campaign" flow. Listens for
-list-models / generate-plot / generate-outline / regenerate-outline / save-campaign broadcasts
-and replies on the matching response event, timing each with `time_job`.
+list-models / generate-plot / improve-plot / generate-plot-points / regenerate-plot-points /
+save-campaign / save-plot-draft / list-plot-drafts broadcasts and replies on the matching
+response event, timing each with `time_job`.
 
     uv run tests/campaign_builder.py
 """
@@ -29,9 +30,12 @@ async def main() -> None:
 
     register_handler(channel, "list-models", "models-list", manager.handle_list_models)
     register_handler(channel, "generate-plot", "plot-generated", manager.handle_generate_plot)
-    register_handler(channel, "generate-outline", "outline-generated", manager.handle_generate_outline)
-    register_handler(channel, "regenerate-outline", "outline-regenerated", manager.handle_regenerate_outline)
+    register_handler(channel, "improve-plot", "plot-improved", manager.handle_improve_plot)
+    register_handler(channel, "generate-plot-points", "plot-points-generated", manager.handle_generate_plot_points)
+    register_handler(channel, "regenerate-plot-points", "plot-points-regenerated", manager.handle_regenerate_plot_points)
     register_handler(channel, "save-campaign", "campaign-saved", manager.handle_save_campaign)
+    register_handler(channel, "save-plot-draft", "plot-draft-saved", manager.handle_save_plot_draft)
+    register_handler(channel, "list-plot-drafts", "plot-drafts-listed", manager.handle_list_plot_drafts)
 
     def on_subscribe(state: RealtimeSubscribeStates, error: Optional[Exception]) -> None:
         if state == RealtimeSubscribeStates.SUBSCRIBED:

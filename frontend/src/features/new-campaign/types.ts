@@ -1,47 +1,32 @@
 export type CampaignType = 'one-shot' | 'multi-chapter'
 
-// Setup form state. minChapters/maxChapters/minSessionsPerChapter/maxSessionsPerChapter only
-// matter when campaignType is 'multi-chapter' — the backend picks one exact count within those
-// bounds and tells the model that exact number (models don't reliably honour a range). For
-// 'one-shot' the backend ignores these fields entirely and always generates 1 chapter, 1 session.
+// Setup form state.
 export type CampaignSetup = {
   model: string
   plot: string
   campaignType: CampaignType
-  minChapters: number
-  maxChapters: number
-  minSessionsPerChapter: number
-  maxSessionsPerChapter: number
 }
 
-// Outline shape (camelCase mirrors the backend JSON schema exactly)
-export type SessionOutline = {
-  hook: string
-  conflictClimax: string
-  cliffhanger: string
-}
-
-export type ChapterOutline = {
+// A rough, high-level story beat (camelCase mirrors the backend JSON schema exactly). No
+// exact-count requirement and no hook/climax/cliffhanger sub-structure — everything between
+// these points is generated dynamically during play, not pre-written here.
+export type PlotPoint = {
   title: string
-  bigGoal: string
-  twists: string[]
-  sessions: SessionOutline[]
+  summary: string
 }
 
-export type CampaignOutline = {
-  chapters: ChapterOutline[]
-}
+// Client-side lock state, kept separate from PlotPoint[] since that mirrors the backend/LLM
+// JSON schema exactly. A flat array parallel to the plot points array — locking freezes a plot
+// point so "regenerate unlocked" leaves it untouched.
+export type PlotPointLocks = boolean[]
 
-// Client-side lock state, kept separate from CampaignOutline since that type mirrors the
-// backend/LLM JSON schema exactly. Locking a chapter cascades to (freezes) all its sessions;
-// session-level locks stay independently toggleable underneath for when the chapter is unlocked.
-export type ChapterLocks = {
-  locked: boolean
-  sessions: boolean[]
-}
+export type PlotDraftSource = 'written' | 'generated' | 'improved'
 
-export type OutlineLocks = {
-  chapters: ChapterLocks[]
+export type PlotDraft = {
+  id: number
+  content: string
+  source: PlotDraftSource
+  createdAt: string
 }
 
 // Realtime response payloads (each carries jobId + optional error, added by the backend)
@@ -60,14 +45,22 @@ export type PlotGeneratedResponse = {
   cost: number
 }
 
-export type OutlineGeneratedResponse = {
+export type PlotImprovedResponse = {
   jobId: string
   error?: string
-  outline: CampaignOutline
+  plot: string
   cost: number
-  chapterCount: number
-  sessionsPerChapter: number
 }
+
+export type PlotPointsGeneratedResponse = {
+  jobId: string
+  error?: string
+  plotPoints: PlotPoint[]
+  cost: number
+}
+
+// Same response shape for a fresh generate and a partial regenerate.
+export type PlotPointsRegeneratedResponse = PlotPointsGeneratedResponse
 
 export type CampaignSavedResponse = {
   jobId: string
@@ -75,5 +68,14 @@ export type CampaignSavedResponse = {
   campaignId: number
 }
 
-// Same response shape for a fresh generate and a partial regenerate.
-export type OutlineRegeneratedResponse = OutlineGeneratedResponse
+export type PlotDraftSavedResponse = {
+  jobId: string
+  error?: string
+  draft: PlotDraft
+}
+
+export type PlotDraftsListedResponse = {
+  jobId: string
+  error?: string
+  drafts: PlotDraft[]
+}

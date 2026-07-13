@@ -1,22 +1,5 @@
 import { Link } from 'react-router-dom'
-
-const sections = [
-  {
-    title: 'New campaign',
-    description: 'Start a new AI-run session from scratch.',
-    to: '/campaigns/new',
-  },
-  {
-    title: 'Your campaigns',
-    description: 'Campaigns you have created or joined will show up here.',
-    to: null,
-  },
-  {
-    title: 'Your characters',
-    description: 'Characters you have created will show up here.',
-    to: null,
-  },
-]
+import { CampaignsList } from '@/features/campaign-session'
 
 export function HomePage() {
   return (
@@ -27,29 +10,25 @@ export function HomePage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 text-left sm:grid-cols-3">
-        {sections.map((section) => {
-          const cardClassName = 'rounded-lg border border-border bg-card p-4'
-          const content = (
-            <>
-              <h2 className="text-base">{section.title}</h2>
-              <p className="text-sm text-muted-foreground">{section.description}</p>
-            </>
-          )
+        <Link
+          to="/campaigns/new"
+          className="rounded-lg border border-border bg-card p-4 transition-colors hover:border-ring hover:bg-accent"
+        >
+          <h2 className="text-base">New campaign</h2>
+          <p className="text-sm text-muted-foreground">Start a new AI-run session from scratch.</p>
+        </Link>
 
-          return section.to ? (
-            <Link
-              key={section.title}
-              to={section.to}
-              className={`${cardClassName} transition-colors hover:border-ring hover:bg-accent`}
-            >
-              {content}
-            </Link>
-          ) : (
-            <div key={section.title} className={cardClassName}>
-              {content}
-            </div>
-          )
-        })}
+        <div className="rounded-lg border border-border bg-card p-4">
+          <h2 className="text-base">Your campaigns</h2>
+          <div className="mt-2">
+            <CampaignsList />
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-card p-4">
+          <h2 className="text-base">Your characters</h2>
+          <p className="text-sm text-muted-foreground">Characters you have created will show up here.</p>
+        </div>
       </div>
     </div>
   )

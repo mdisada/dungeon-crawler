@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom'
 import { useCampaignManager } from '../hooks/use-campaign-manager'
 import { useModelOptions } from '../hooks/use-model-options'
 import { CampaignSetupForm } from './campaign-setup-form'
-import { OutlineStep } from './outline-step'
+import { PlotPointsStep } from './plot-points-step'
 import { SaveStep } from './save-step'
 
 export function NewCampaignPage() {
@@ -29,8 +29,8 @@ export function NewCampaignPage() {
 
       {manager.step === 'setup' ? (
         <CampaignSetupForm manager={manager} models={models} />
-      ) : manager.step === 'outline' ? (
-        <OutlineStep manager={manager} />
+      ) : manager.step === 'plot-points' ? (
+        <PlotPointsStep manager={manager} />
       ) : (
         <SaveStep manager={manager} />
       )}
