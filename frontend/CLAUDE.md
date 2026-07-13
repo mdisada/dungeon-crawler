@@ -38,6 +38,9 @@ src/
   etc. once the feature actually needs them.
 - **Env vars**: add new `VITE_*` vars to `.env.local`, declare them in `src/vite-env.d.ts`
   (`ImportMetaEnv`), and expose them through `src/config/env.ts`.
+- **Job timing**: wrap any async call that talks to the backend (Supabase Realtime signals, and
+  later text/audio/image generation requests) in `timeJob` from `lib/job-timer.ts` so round-trip
+  duration is logged consistently — see root `CLAUDE.md` for the full convention.
 
 ## Commands
 
