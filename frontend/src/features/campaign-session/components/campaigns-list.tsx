@@ -4,9 +4,6 @@ import { DEBUG_PLAYER_EMAIL } from '../constants'
 import { useMyCampaigns } from '../hooks/use-my-campaigns'
 import type { CampaignSummary } from '../types'
 
-function plotTitle(plot: string): string {
-  return plot.length > 60 ? `${plot.slice(0, 60)}…` : plot
-}
 
 export function CampaignsList() {
   const { user } = useSession()
@@ -44,7 +41,7 @@ export function CampaignsList() {
               onClick={() => openCampaign(campaign)}
               className="flex flex-1 items-center justify-between gap-2 rounded-md border border-transparent px-2 py-1 text-left text-sm hover:border-border hover:bg-accent"
             >
-              <span>{plotTitle(campaign.plot)}</span>
+              <span>{campaign.title}</span>
               {isDm && (
                 <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">DM</span>
               )}

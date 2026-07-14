@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS turns (
     content                TEXT    NOT NULL,
     author                 TEXT    NOT NULL DEFAULT 'dm',   -- 'dm' (narration, AI-drafted or hand-written) | 'player'
     reached_plot_point_id  INTEGER REFERENCES major_plot_points(id) ON DELETE SET NULL,
+    audio_chunks           TEXT,                             -- JSON [{url, isNewParagraph}, ...], DM turns only
     created_at             TEXT    NOT NULL DEFAULT (datetime('now')),
     UNIQUE (campaign_id, turn_index)
 );
@@ -92,15 +93,21 @@ def _connect() -> sqlite3.Connection:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """CREATE TABLE IF NOT EXISTS won't add new columns/drop old tables for a DB that already
+    """CREATE TABLE IF NOT EXISTS won't add new columns/drop old columns for a DB that already
     exists on disk from an earlier run — patch those in by hand.
-
-    NOTE: `campaigns.chapter_count`/`sessions_per_chapter` (dropped NOT NULL columns from the old
-    schema) have no migration path here — delete data/campaigns.db if upgrading from before this
-    change, there is no in-place column drop for that table.
     """
     conn.execute("DROP TABLE IF EXISTS chapters")
     conn.execute("DROP TABLE IF EXISTS sessions")
+
+    campaign_columns = [row[1] for row in conn.execute("PRAGMA table_info(campaigns)")]
+    if "plot_cost_usd" not in campaign_columns:
+        conn.execute("ALTER TABLE campaigns ADD COLUMN plot_cost_usd REAL NOT NULL DEFAULT 0")
+    if "generation_cost_usd" not in campaign_columns:
+        conn.execute("ALTER TABLE campaigns ADD COLUMN generation_cost_usd REAL NOT NULL DEFAULT 0")
+    if "chapter_count" in campaign_columns:
+        conn.execute("ALTER TABLE campaigns DROP COLUMN chapter_count")
+    if "sessions_per_chapter" in campaign_columns:
+        conn.execute("ALTER TABLE campaigns DROP COLUMN sessions_per_chapter")
 
     turn_columns = [row[1] for row in conn.execute("PRAGMA table_info(turns)")]
     if "author" not in turn_columns:
@@ -110,6 +117,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE turns ADD COLUMN reached_plot_point_id "
             "INTEGER REFERENCES major_plot_points(id) ON DELETE SET NULL"
         )
+    if "audio_chunks" not in turn_columns:
+        conn.execute("ALTER TABLE turns ADD COLUMN audio_chunks TEXT")
 
 
 def init_db() -> None:
@@ -121,6 +130,7 @@ def init_db() -> None:
 def save_campaign(
     user_id: str,
     model: str,
+    title: str,
     plot: str,
     campaign_type: str,
     plot_points: list[dict],
@@ -135,10 +145,10 @@ def save_campaign(
         cursor = conn.execute(
             """
             INSERT INTO campaigns (
-                user_id, plot, model, campaign_type, plot_cost_usd, generation_cost_usd
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                user_id, title, plot, model, campaign_type, plot_cost_usd, generation_cost_usd
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, plot, model, campaign_type, plot_cost, generation_cost),
+            (user_id, title, plot, model, campaign_type, plot_cost, generation_cost),
         )
         campaign_id = cursor.lastrowid
 
@@ -160,6 +170,7 @@ def _row_to_campaign_summary(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
         "userId": row["user_id"],
+        "title": row["title"],
         "plot": row["plot"],
         "model": row["model"],
         "campaignType": row["campaign_type"],
@@ -250,6 +261,7 @@ def _row_to_turn(row: sqlite3.Row) -> dict:
         "content": row["content"],
         "author": row["author"],
         "reachedPlotPointId": row["reached_plot_point_id"],
+        "audioChunks": json.loads(row["audio_chunks"]) if row["audio_chunks"] else None,
         "createdAt": row["created_at"],
     }
 
@@ -283,6 +295,13 @@ def add_turn(
         )
         row = conn.execute("SELECT * FROM turns WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return _row_to_turn(row)
+
+
+def set_turn_audio_chunks(turn_id: int, chunks: list[dict]) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE turns SET audio_chunks = ? WHERE id = ?", (json.dumps(chunks), turn_id)
+        )
 
 
 def _row_to_npc(row: sqlite3.Row) -> dict:

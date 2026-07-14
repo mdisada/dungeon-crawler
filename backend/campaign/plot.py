@@ -19,6 +19,15 @@ def build_plot_system_prompt() -> str:
     )
 
 
+def build_title_system_prompt(plot: str) -> str:
+    return (
+        "You are a creative writing assistant naming a tabletop RPG campaign.\n\n"
+        f"### PLOT\n{plot}\n### END PLOT\n\n"
+        "Write a short, evocative campaign title (2-6 words). Respond with plain text only, "
+        "no quotation marks, no punctuation at the end, no commentary."
+    )
+
+
 def build_improve_plot_system_prompt(current_plot: str) -> str:
     return (
         "You are a creative writing assistant improving a dungeon master's draft campaign plot "

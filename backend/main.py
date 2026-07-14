@@ -14,6 +14,9 @@ from typing import Optional
 
 from realtime.types import RealtimeSubscribeStates
 
+import supabase_storage
+import tts
+from config.tts import audio_bucket_name
 from job_queue import JobQueue
 from supabase_realtime import get_realtime_client
 from campaign import manager as campaign_manager, session_handlers, storage
@@ -40,6 +43,8 @@ def _on_subscribe(topic: str):
 
 async def main() -> None:
     storage.init_db()
+    supabase_storage.ensure_bucket(audio_bucket_name)
+    await asyncio.to_thread(tts.warm_up)
 
     client = get_realtime_client()
     queue = JobQueue(num_workers=NUM_WORKERS)
@@ -80,7 +85,10 @@ async def main() -> None:
         generate_branch_options_channel, "generate-branch-options", "branch-options-generated",
         session_handlers.handle_generate_branch_options,
     )
-    queue.register(generate_turn_channel, "generate-turn", "turn-drafted", session_handlers.handle_generate_turn)
+    queue.register(
+        generate_turn_channel, "generate-turn", "turn-drafted",
+        session_handlers.make_handle_generate_turn(live_channel),
+    )
     queue.register(
         publish_turn_channel, "publish-turn", "turn-published-ack",
         session_handlers.make_handle_publish_turn(live_channel),

@@ -3,6 +3,7 @@ export type CampaignType = 'one-shot' | 'multi-chapter'
 export type CampaignSummary = {
   id: number
   userId: string
+  title: string | null
   plot: string
   model: string
   campaignType: CampaignType
@@ -11,11 +12,17 @@ export type CampaignSummary = {
 
 export type TurnAuthor = 'dm' | 'player'
 
+export type AudioChunk = {
+  url: string
+  isNewParagraph: boolean
+}
+
 export type Turn = {
   id: number
   turnIndex: number
   content: string
   author: TurnAuthor
+  audioChunks: AudioChunk[] | null
   createdAt: string
 }
 
@@ -48,6 +55,13 @@ export type TurnDraftedResponse = {
   content: string
 }
 
+export type BranchOptionsResponse = {
+  jobId: string
+  error?: string
+  campaignId: number
+  options: string[]
+}
+
 export type TurnPublishedAckResponse = {
   jobId: string
   error?: string
@@ -67,11 +81,28 @@ export type TurnPublishedEvent = {
   turn: Turn
 }
 
-// Pushed after a player's turn auto-triggers the next AI draft on the backend (see
-// make_handle_publish_turn) — distinct from TurnDraftedResponse, which is the ack for the DM's
-// own manual generate-turn request.
-export type TurnDraftedEvent = {
+// Pushed after a player's turn auto-triggers a fresh batch of branch-option suggestions on the
+// backend (see make_handle_publish_turn) — distinct from BranchOptionsResponse, which is the ack
+// for the DM's own manual generate-branch-options request.
+export type BranchOptionsEvent = {
   campaignId: number
-  content?: string
+  options?: string[]
   error?: string
+}
+
+// Live narration audio, pushed while the DM is generating/deciding on the next turn (not tied to
+// publish-turn's ack) — see use-live-narration-audio.ts. jobId scopes chunks to one generation
+// request; narration-generation-started resets any in-progress playback before chunks arrive.
+export type NarrationGenerationStartedEvent = {
+  campaignId: number
+  jobId: string
+}
+
+export type NarrationAudioChunkEvent = {
+  campaignId: number
+  jobId: string
+  kind: 'transition' | 'narration'
+  sentenceIndex: number
+  isNewParagraph: boolean
+  audioUrl: string
 }

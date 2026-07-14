@@ -16,7 +16,6 @@ Nothing here is implemented yet.
 - The "Your campaigns" home page card is still a static placeholder — needs a real campaign list
   backed by the `campaigns` table.
 - Campaign detail/view page for a saved campaign.
-- Campaign title (generation or manual entry) — the `campaigns.title` column exists but is unused.
 
 ## Discord bot integration
 

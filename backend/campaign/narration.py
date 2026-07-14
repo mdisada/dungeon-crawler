@@ -114,6 +114,33 @@ def build_narration_user_prompt(turns: list[dict], feedback: str | None = None) 
     return base
 
 
+def build_transition_narration_prompt(
+    campaign: dict,
+    turns: list[dict],
+    npcs: list[dict] | None = None,
+    lore: list[dict] | None = None,
+) -> str:
+    """A few sentences of pure scene-continuing ambience — no plot progression, no new events or
+    characters — spoken while the real next narration beat is still being drafted, so the player
+    isn't sitting in silence. See session_handlers.make_handle_generate_turn.
+    """
+    return (
+        "You are the Dungeon Master narrating a live tabletop RPG session for a group of "
+        "players. The real next story beat is still being written — for now, fill the moment "
+        "with pure atmosphere.\n\n"
+        f"{_world_knowledge_block()}"
+        f"{_npc_block(npcs or [])}"
+        f"{_lore_block(lore or [])}"
+        f"Campaign premise:\n{campaign['plot']}\n\n"
+        f"{_story_so_far_block(turns)}\n\n"
+        "Write 2-3 short sentences of pure ambient description of the current scene — sounds, "
+        "light, weather, small background movement, the party's immediate surroundings. Do NOT "
+        "advance the plot, introduce new events, new characters, or dialogue, or resolve "
+        "anything. Second person ('you'), vivid but brief. Respond with plain text only, no "
+        "headings, no JSON."
+    )
+
+
 def build_branch_options_prompt(
     campaign: dict,
     turns: list[dict],

@@ -6,6 +6,7 @@ export const TOPICS = {
   listCampaigns: 'campaign-session-list-campaigns',
   getCampaign: 'campaign-session-get-campaign',
   listTurns: 'campaign-session-list-turns',
+  generateBranchOptions: 'campaign-session-generate-branch-options',
   generateTurn: 'campaign-session-generate-turn',
   publishTurn: 'campaign-session-publish-turn',
 } as const
@@ -16,6 +17,7 @@ export const TIMEOUTS = {
   listCampaigns: 10_000,
   getCampaign: 10_000,
   listTurns: 10_000,
+  generateBranchOptions: 30_000,
   generateTurn: 60_000,
   publishTurn: 10_000,
 } as const

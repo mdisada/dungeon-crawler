@@ -1,8 +1,31 @@
+import { useAudioChunkPlayer } from '../hooks/use-audio-chunk-player'
 import type { Turn } from '../types'
 
 type Props = {
   turns: Turn[]
   isLoading: boolean
+}
+
+function NarrationReplayButton({ turn }: { turn: Turn }) {
+  const { audioRef, enqueue, reset } = useAudioChunkPlayer()
+
+  const play = () => {
+    reset()
+    turn.audioChunks?.forEach(enqueue)
+  }
+
+  return (
+    <>
+      <audio ref={audioRef} className="hidden" />
+      <button
+        type="button"
+        onClick={play}
+        className="mt-2 text-xs text-muted-foreground underline hover:text-foreground"
+      >
+        ▶ Play narration
+      </button>
+    </>
+  )
 }
 
 export function TurnFeed({ turns, isLoading }: Props) {
@@ -23,9 +46,10 @@ export function TurnFeed({ turns, isLoading }: Props) {
             {turn.content}
           </p>
         ) : (
-          <p key={turn.id} className="whitespace-pre-wrap rounded-lg border border-border bg-card p-4 text-left">
+          <div key={turn.id} className="whitespace-pre-wrap rounded-lg border border-border bg-card p-4 text-left">
             {turn.content}
-          </p>
+            {turn.audioChunks?.length ? <NarrationReplayButton turn={turn} /> : null}
+          </div>
         ),
       )}
     </div>

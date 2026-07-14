@@ -9,7 +9,11 @@ from campaign.extraction import (
     build_lore_extraction_prompt,
     build_npc_extraction_prompt,
 )
-from campaign.plot import build_improve_plot_system_prompt, build_plot_system_prompt
+from campaign.plot import (
+    build_improve_plot_system_prompt,
+    build_plot_system_prompt,
+    build_title_system_prompt,
+)
 from campaign.plot_points import (
     PLOT_POINTS_JSON_SCHEMA,
     build_plot_points_system_prompt,
@@ -157,17 +161,25 @@ async def _seed_npcs_and_lore(campaign_id: int, model: str, plot: str) -> None:
 
 
 async def handle_save_campaign(data: dict) -> dict:
+    model = data["model"]
+    plot = data["plot"]
+
+    title, title_cost = await asyncio.to_thread(
+        ask, model, "Write the campaign title now.", "campaign-title", build_title_system_prompt(plot),
+    )
+
     campaign_id = await asyncio.to_thread(
         storage.save_campaign,
         data["userId"],
-        data["model"],
-        data["plot"],
+        model,
+        title.strip(),
+        plot,
         data["campaignType"],
         data["plotPoints"],
-        data.get("plotCost", 0.0),
+        data.get("plotCost", 0.0) + title_cost,
         data.get("generationCost", 0.0),
     )
-    await _seed_npcs_and_lore(campaign_id, data["model"], data["plot"])
+    await _seed_npcs_and_lore(campaign_id, model, plot)
     return {"campaignId": campaign_id}
 
 
