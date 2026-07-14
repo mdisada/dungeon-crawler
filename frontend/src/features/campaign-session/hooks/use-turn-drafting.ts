@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { timeJob } from '@/lib/job-timer'
 import { subscribeToBroadcast } from '@/lib/realtime-channel'
 import { generateBranchOptions } from '../api/generate-branch-options'
+import { generatePuzzleStart } from '../api/generate-puzzle-start'
 import { generateTurn } from '../api/generate-turn'
 import { publishTurn } from '../api/publish-turn'
 import { CAMPAIGN_LIVE_TOPIC } from '../constants'
@@ -27,6 +28,10 @@ export function useTurnDrafting(campaignId: number) {
   const [error, setError] = useState<string | null>(null)
   const [autoPublishSecondsLeft, setAutoPublishSecondsLeft] = useState<number | null>(null)
   const autoPublishTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Set while the current draft came from startPuzzle — tells publish to flip that puzzle to
+  // 'published' instead of just publishing plain narration. Cleared by any other draft source
+  // (generate) so a leftover puzzle draft can't tag an unrelated turn.
+  const [pendingPuzzleId, setPendingPuzzleId] = useState<number | null>(null)
 
   useEffect(() => {
     return subscribeToBroadcast<BranchOptionsEvent>(CAMPAIGN_LIVE_TOPIC, 'branch-options-generated', (event) => {
@@ -66,8 +71,11 @@ export function useTurnDrafting(campaignId: number) {
     setStatus('publishing')
     setError(null)
     try {
-      await timeJob('publish-turn', (jobId) => publishTurn(jobId, campaignId, content, 'dm'))
+      await timeJob('publish-turn', (jobId) =>
+        publishTurn(jobId, campaignId, content, 'dm', pendingPuzzleId ?? undefined),
+      )
       setDraft('')
+      setPendingPuzzleId(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
@@ -94,12 +102,34 @@ export function useTurnDrafting(campaignId: number) {
   const generate = async (withFeedback?: string, opts?: { autoPublish?: boolean }) => {
     setStatus('generating')
     setError(null)
+    setPendingPuzzleId(null)
     try {
       const { result } = await timeJob('generate-turn', (jobId) => generateTurn(jobId, campaignId, withFeedback))
       setDraft(result.content)
       setFeedback('')
       setOptions([])
       if (opts?.autoPublish) scheduleAutoPublish(result.content)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setStatus('idle')
+    }
+  }
+
+  // DM-triggered: drafts the transition narration into a puzzle picked from the available list.
+  // Feeds the same review/edit/publish UI as a normal turn draft — publishContent is what
+  // actually marks the puzzle started, once the DM sends this draft out.
+  const startPuzzle = async (puzzleId: number) => {
+    setStatus('generating')
+    setError(null)
+    try {
+      const { result } = await timeJob('generate-puzzle-start', (jobId) =>
+        generatePuzzleStart(jobId, campaignId, puzzleId),
+      )
+      setDraft(result.content)
+      setFeedback('')
+      setOptions([])
+      setPendingPuzzleId(puzzleId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
@@ -127,6 +157,7 @@ export function useTurnDrafting(campaignId: number) {
     cancelAutoPublish,
     generateOptions,
     generate,
+    startPuzzle,
     publish,
   }
 }

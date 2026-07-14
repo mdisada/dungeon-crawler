@@ -9,4 +9,5 @@ export const TIMEOUTS = {
   saveCampaign: 15_000,
   savePlotDraft: 10_000,
   listPlotDrafts: 10_000,
+  detectPuzzles: 90_000,
 } as const

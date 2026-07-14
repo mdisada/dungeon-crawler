@@ -73,6 +73,22 @@ CREATE TABLE IF NOT EXISTS campaign_lore (
     created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Structured puzzle definitions (see campaign/puzzles.py), authored only in the new-campaign
+-- wizard and seeded at campaign save. Mid-session play creates puzzle_sessions (later phase),
+-- never new puzzles.
+CREATE TABLE IF NOT EXISTS puzzles (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id    INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    plot_point_id  INTEGER REFERENCES major_plot_points(id) ON DELETE SET NULL,
+    title          TEXT    NOT NULL,
+    archetype      TEXT    NOT NULL,
+    presentation   TEXT    NOT NULL,   -- 'map' | 'text'
+    definition     TEXT    NOT NULL,   -- JSON PuzzleDefinition
+    source         TEXT    NOT NULL,   -- 'detected' | 'template' | 'custom'
+    status         TEXT    NOT NULL DEFAULT 'ready',   -- 'ready' | 'published' | 'retired'
+    created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Per-user plot-textarea history (new-campaign wizard "Generate Plot"/"Improve Prompt" undo).
 -- No campaign_id: this happens before a campaign exists.
 CREATE TABLE IF NOT EXISTS plot_drafts (
@@ -136,10 +152,14 @@ def save_campaign(
     plot_points: list[dict],
     plot_cost: float,
     generation_cost: float,
+    puzzles: list[dict] | None = None,
 ) -> int:
     """Persists the campaign and seeds `major_plot_points` as a flat parent chain in the order
     given — branching/regenerating that chain dynamically during play is a later, live-play
     concern (see the plot_points table comment in SCHEMA above).
+
+    `puzzles` entries are {"plotPointIndex": int|None, "source": str, "definition": dict};
+    plotPointIndex resolves against the plot points seeded in this same transaction.
     """
     with _connect() as conn:
         cursor = conn.execute(
@@ -153,6 +173,7 @@ def save_campaign(
         campaign_id = cursor.lastrowid
 
         parent_id = None
+        plot_point_ids = []
         for point in plot_points:
             point_cursor = conn.execute(
                 """
@@ -162,8 +183,65 @@ def save_campaign(
                 (campaign_id, parent_id, point["title"], point["summary"]),
             )
             parent_id = point_cursor.lastrowid
+            plot_point_ids.append(parent_id)
+
+        for puzzle in puzzles or []:
+            definition = puzzle["definition"]
+            index = puzzle.get("plotPointIndex")
+            plot_point_id = (
+                plot_point_ids[index]
+                if index is not None and 0 <= index < len(plot_point_ids)
+                else None
+            )
+            conn.execute(
+                """
+                INSERT INTO puzzles (
+                    campaign_id, plot_point_id, title, archetype, presentation, definition, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    campaign_id, plot_point_id, definition["title"], definition["archetype"],
+                    definition["presentation"], json.dumps(definition), puzzle["source"],
+                ),
+            )
 
         return campaign_id
+
+
+def _row_to_puzzle(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "campaignId": row["campaign_id"],
+        "plotPointId": row["plot_point_id"],
+        "title": row["title"],
+        "archetype": row["archetype"],
+        "presentation": row["presentation"],
+        "definition": json.loads(row["definition"]),
+        "source": row["source"],
+        "status": row["status"],
+        "createdAt": row["created_at"],
+    }
+
+
+def list_puzzles(campaign_id: int) -> list[dict]:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM puzzles WHERE campaign_id = ? ORDER BY id ASC", (campaign_id,)
+        ).fetchall()
+        return [_row_to_puzzle(row) for row in rows]
+
+
+def get_puzzle(puzzle_id: int) -> dict | None:
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM puzzles WHERE id = ?", (puzzle_id,)).fetchone()
+        return _row_to_puzzle(row) if row else None
+
+
+def set_puzzle_status(puzzle_id: int, status: str) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE puzzles SET status = ? WHERE id = ?", (status, puzzle_id))
 
 
 def _row_to_campaign_summary(row: sqlite3.Row) -> dict:

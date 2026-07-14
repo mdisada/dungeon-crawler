@@ -5,6 +5,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useSession } from '@/features/auth'
 import { useCampaign } from '../hooks/use-campaign'
 import { useTurnDrafting } from '../hooks/use-turn-drafting'
+import { EventTriggerPanel } from './event-trigger-panel'
 
 // Full drafts run ~5 sentences — show only the first as a preview until the DM expands it.
 function firstSentence(text: string): string {
@@ -29,6 +30,7 @@ export function DmPage() {
     cancelAutoPublish,
     generateOptions,
     generate,
+    startPuzzle,
     publish,
   } = useTurnDrafting(campaignId)
   const [isExpanded, setIsExpanded] = useState(false)
@@ -43,6 +45,11 @@ export function DmPage() {
     setIsExpanded(false)
   }
 
+  const runStartPuzzle = async (puzzleId: number) => {
+    await startPuzzle(puzzleId)
+    setIsExpanded(false)
+  }
+
   return (
     <div className="flex w-full max-w-3xl flex-col gap-8 text-left">
       <div className="flex items-center justify-between">
@@ -54,6 +61,8 @@ export function DmPage() {
           ← Home
         </Link>
       </div>
+
+      <EventTriggerPanel campaignId={campaignId} busy={status !== 'idle'} onStartPuzzle={runStartPuzzle} />
 
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
         <h2 className="text-base">Next turn</h2>
