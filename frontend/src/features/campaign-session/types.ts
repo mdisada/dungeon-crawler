@@ -101,10 +101,18 @@ export type NarrationGenerationStartedEvent = {
 export type NarrationAudioChunkEvent = {
   campaignId: number
   jobId: string
-  kind: 'transition' | 'narration'
+  kind: 'transition' | 'narration' | 'plot'
   sentenceIndex: number
   isNewParagraph: boolean
   audioUrl: string
+}
+
+// Ack for narrate-plot — only confirms the plot read-through started; the audio itself arrives
+// as kind "plot" narration-audio-chunk broadcasts on campaign-live.
+export type PlotNarrationStartedResponse = {
+  jobId: string
+  error?: string
+  campaignId: number
 }
 
 // Pushed once a published turn's replayable audio finishes generating in the background (see

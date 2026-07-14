@@ -9,6 +9,7 @@ export const TOPICS = {
   generateBranchOptions: 'campaign-session-generate-branch-options',
   generateTurn: 'campaign-session-generate-turn',
   publishTurn: 'campaign-session-publish-turn',
+  narratePlot: 'campaign-session-narrate-plot',
 } as const
 
 export const CAMPAIGN_LIVE_TOPIC = 'campaign-live'
@@ -20,6 +21,8 @@ export const TIMEOUTS = {
   generateBranchOptions: 30_000,
   generateTurn: 60_000,
   publishTurn: 10_000,
+  // Ack only confirms the read-through started — the audio itself streams over campaign-live.
+  narratePlot: 10_000,
 } as const
 
 // Only this account may open the debug player page, and only for campaigns it created itself —

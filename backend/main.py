@@ -76,6 +76,7 @@ async def main() -> None:
     generate_branch_options_channel = client.channel("campaign-session-generate-branch-options")
     generate_turn_channel = client.channel("campaign-session-generate-turn")
     publish_turn_channel = client.channel("campaign-session-publish-turn")
+    narrate_plot_channel = client.channel("campaign-session-narrate-plot")
     live_channel = client.channel("campaign-live")
 
     queue.register(list_campaigns_channel, "list-campaigns", "campaigns-listed", session_handlers.handle_list_campaigns)
@@ -93,6 +94,10 @@ async def main() -> None:
         publish_turn_channel, "publish-turn", "turn-published-ack",
         session_handlers.make_handle_publish_turn(live_channel),
     )
+    queue.register(
+        narrate_plot_channel, "narrate-plot", "plot-narration-started",
+        session_handlers.make_handle_narrate_plot(live_channel),
+    )
 
     queue.start()
 
@@ -104,6 +109,7 @@ async def main() -> None:
     await generate_branch_options_channel.subscribe(_on_subscribe("campaign-session-generate-branch-options"))
     await generate_turn_channel.subscribe(_on_subscribe("campaign-session-generate-turn"))
     await publish_turn_channel.subscribe(_on_subscribe("campaign-session-publish-turn"))
+    await narrate_plot_channel.subscribe(_on_subscribe("campaign-session-narrate-plot"))
     await live_channel.subscribe(_on_subscribe("campaign-live"))
 
 

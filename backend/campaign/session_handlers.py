@@ -178,23 +178,54 @@ async def _stream_transition_narration(live_channel, campaign_id: int, job_id: s
         print(f"Transition narration failed for campaign {campaign_id}: {e}")
 
 
-async def _stream_narration_audio(live_channel, campaign_id: int, job_id: str, content: str) -> None:
+async def _stream_narration_audio(
+    live_channel, campaign_id: int, job_id: str, content: str, kind: str = "narration"
+) -> None:
     """Fire-and-forget: streams the real narration draft's sentence audio to campaign-live as
     each one is ready. The first sentence is always flagged isNewParagraph so the
     transition -> narration handoff on the frontend reads as a deliberate beat, not a splice.
+    `kind` distinguishes the payload for the frontend (and namespaces the uploaded files) — also
+    used with "plot" to read the campaign premise aloud (see make_handle_narrate_plot).
     """
     try:
         async def broadcast_chunk(i: int, chunk: dict) -> None:
             await live_channel.send_broadcast("narration-audio-chunk", {
-                "campaignId": campaign_id, "jobId": job_id, "kind": "narration",
+                "campaignId": campaign_id, "jobId": job_id, "kind": kind,
                 "sentenceIndex": i, "isNewParagraph": chunk["isNewParagraph"] or i == 0,
                 "audioUrl": chunk["url"],
             })
 
-        with time_job(f"generate-narration-audio {job_id}"):
-            await _tts_chunks(content, f"drafts/{job_id}/narration", on_chunk=broadcast_chunk)
+        with time_job(f"generate-{kind}-audio {job_id}"):
+            await _tts_chunks(content, f"drafts/{job_id}/{kind}", on_chunk=broadcast_chunk)
     except Exception as e:
         print(f"Narration audio streaming failed for campaign {campaign_id}: {e}")
+
+
+def make_handle_narrate_plot(live_channel):
+    """narrate-plot: reads the campaign's plot premise aloud, streaming its sentence audio over
+    campaign-live exactly like a narration draft (kind "plot") — the campaign page requests this
+    the first time a campaign is opened, before any turns exist, so the session starts with the
+    premise being narrated instead of silence. The TTS work is backgrounded so the ack returns
+    immediately rather than holding a job-queue worker for the whole read-through.
+    """
+    async def handle_narrate_plot(data: dict) -> dict:
+        campaign_id = data["campaignId"]
+        job_id = data.get("jobId")
+
+        campaign = await asyncio.to_thread(storage.get_campaign, campaign_id)
+        if campaign is None:
+            raise ValueError(f"Campaign {campaign_id} not found")
+
+        await live_channel.send_broadcast(
+            "narration-generation-started", {"campaignId": campaign_id, "jobId": job_id}
+        )
+        asyncio.create_task(
+            _stream_narration_audio(live_channel, campaign_id, job_id, campaign["plot"], kind="plot")
+        )
+
+        return {"campaignId": campaign_id}
+
+    return handle_narrate_plot
 
 
 def make_handle_generate_turn(live_channel):

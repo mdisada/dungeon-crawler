@@ -1,5 +1,6 @@
 import { Link, Navigate, useParams } from 'react-router-dom'
 import { useSession } from '@/features/auth'
+import { useAutoPlotNarration } from '../hooks/use-auto-plot-narration'
 import { useCampaign } from '../hooks/use-campaign'
 import { useCampaignTurns } from '../hooks/use-campaign-turns'
 import { useLiveNarrationAudio } from '../hooks/use-live-narration-audio'
@@ -12,6 +13,10 @@ export function CampaignPage() {
   const { campaign, isLoading: isCampaignLoading, error: campaignError } = useCampaign(campaignId)
   const { turns, isLoading: areTurnsLoading } = useCampaignTurns(campaignId)
   const { audioRef } = useLiveNarrationAudio(campaignId)
+  // First time the campaign is played (no turns yet): read the plot premise aloud. Gated on the
+  // ownership check below so it can't fire for a campaign this page is about to redirect off of.
+  const isOwnCampaign = !!campaign && campaign.userId === user?.id
+  useAutoPlotNarration(campaignId, isOwnCampaign && !areTurnsLoading && turns.length === 0)
 
   if (isCampaignLoading) return null
   if (campaignError || !campaign) return <Navigate to="/" replace />
