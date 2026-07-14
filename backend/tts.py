@@ -1,8 +1,8 @@
-"""Narration text-to-speech: one narrator voice, one sentence at a time.
+"""Narration text-to-speech: one narrator voice, one chunk at a time.
 
-Sentence-level generation (rather than one file per turn) is what makes narration audio start
-playing almost immediately instead of waiting for the whole turn to finish — see
-campaign/session_handlers.py's _tts_sentences.
+Chunked generation (rather than one file per turn) is what makes narration audio start playing
+almost immediately instead of waiting for the whole turn to finish — see
+campaign/session_handlers.py's _tts_chunks.
 
 Two interchangeable backends, picked by _backend() based on GPU availability:
   - Chatterbox (CUDA only): clones the narrator voice from narrator_voice_path. Much slower than
@@ -79,9 +79,10 @@ def warm_up() -> None:
         print(f"Narrator voice model failed to load, narration audio will be unavailable: {e}")
 
 
-def generate_sentence_audio(text: str) -> bytes:
-    """Synthesizes one sentence in the narrator voice and returns Opus-encoded (ogg container)
-    bytes. Blocking GPU/CPU inference — callers must run this via asyncio.to_thread.
+def generate_chunk_audio(text: str) -> bytes:
+    """Synthesizes one narration chunk (one or more grouped sentences, see split_into_chunks) in
+    the narrator voice and returns Opus-encoded (ogg container) bytes. Blocking GPU/CPU inference
+    — callers must run this via asyncio.to_thread.
     """
     wav_buffer = _generate_chatterbox(text) if _backend() == "chatterbox" else _generate_kokoro(text)
 
@@ -124,10 +125,42 @@ def _generate_kokoro(text: str) -> io.BytesIO:
     return wav_buffer
 
 
-def split_into_sentences(text: str) -> list[tuple[str, bool]]:
-    """Splits narration text into (sentence, is_new_paragraph) pairs, on blank-line paragraph
-    boundaries then sentence-ending punctuation. is_new_paragraph is True for each paragraph's
-    first sentence, except the very first sentence overall.
+# Target length (characters) for each generated audio chunk. Sentences shorter than this get
+# grouped with their paragraph-neighbors so playback doesn't sound choppy and so Chatterbox's
+# per-call reference-conditioning cost (see _generate_chatterbox) isn't paid once per short
+# sentence -- but a single sentence longer than this is still its own chunk; sentences are never
+# split apart to fit.
+_IDEAL_CHUNK_CHARS = 200
+
+_QUOTE_CHARS = '"“”'  # straight " plus curly opening/closing double quotes
+
+
+def _merge_unclosed_quotes(sentences: list[str]) -> list[str]:
+    """nltk's sent_tokenize has no notion of quotation -- dialogue like 'she whispered, "Don't!
+    They'll hear you!"' gets split at every internal '!', mid-quote. Re-merge any run of
+    consecutive sentences that leaves a double quote open, so a quoted line (how ever many
+    sentence-ending marks it has inside it) stays attached to the sentence that introduces it.
+    """
+    merged: list[str] = []
+    buffer = ""
+    for sentence in sentences:
+        buffer = f"{buffer} {sentence}" if buffer else sentence
+        if sum(buffer.count(c) for c in _QUOTE_CHARS) % 2 == 1:
+            continue
+        merged.append(buffer)
+        buffer = ""
+    if buffer:  # unbalanced all the way to the end (e.g. a stray/typo'd quote) -- keep it, not lost
+        merged.append(buffer)
+    return merged
+
+
+def split_into_chunks(text: str) -> list[tuple[str, bool]]:
+    """Splits narration text into (chunk, is_new_paragraph) pairs for TTS: text is split into
+    paragraphs on blank lines, each paragraph is sentence-tokenized with nltk (with unclosed
+    quotes re-merged, see _merge_unclosed_quotes), and consecutive sentences within the same
+    paragraph are then grouped into chunks of roughly _IDEAL_CHUNK_CHARS -- never across a
+    paragraph boundary, and never splitting a sentence.
+    is_new_paragraph is True for each paragraph's first chunk, except the very first chunk overall.
     """
     _ensure_nltk_punkt()
     paragraphs = [p.strip() for p in _PARAGRAPH_SPLIT_RE.split(text) if p.strip()]
@@ -135,7 +168,22 @@ def split_into_sentences(text: str) -> list[tuple[str, bool]]:
     result: list[tuple[str, bool]] = []
     for paragraph_index, paragraph in enumerate(paragraphs):
         sentences = [s.strip() for s in nltk.sent_tokenize(paragraph) if s.strip()]
-        for sentence_index, sentence in enumerate(sentences):
-            is_new_paragraph = sentence_index == 0 and paragraph_index > 0
-            result.append((sentence, is_new_paragraph))
+        sentences = _merge_unclosed_quotes(sentences)
+
+        paragraph_chunks: list[str] = []
+        current_sentences: list[str] = []
+        current_len = 0
+        for sentence in sentences:
+            if current_sentences and current_len + 1 + len(sentence) > _IDEAL_CHUNK_CHARS:
+                paragraph_chunks.append(" ".join(current_sentences))
+                current_sentences = []
+                current_len = 0
+            current_sentences.append(sentence)
+            current_len += len(sentence) + 1
+        if current_sentences:
+            paragraph_chunks.append(" ".join(current_sentences))
+
+        for chunk_index, chunk in enumerate(paragraph_chunks):
+            is_new_paragraph = chunk_index == 0 and paragraph_index > 0
+            result.append((chunk, is_new_paragraph))
     return result

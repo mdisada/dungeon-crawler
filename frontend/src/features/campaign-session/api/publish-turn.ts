@@ -7,14 +7,13 @@ export function publishTurn(
   campaignId: number,
   content: string,
   author: TurnAuthor,
-  puzzleId?: number,
 ): Promise<TurnPublishedAckResponse> {
   return sendRealtimeRequest<PublishTurnPayload, TurnPublishedAckResponse>({
     channelTopic: TOPICS.publishTurn,
     requestEvent: 'publish-turn',
     responseEvent: 'turn-published-ack',
     jobId,
-    payload: puzzleId !== undefined ? { campaignId, content, author, puzzleId } : { campaignId, content, author },
+    payload: { campaignId, content, author },
     timeoutMs: TIMEOUTS.publishTurn,
   })
 }

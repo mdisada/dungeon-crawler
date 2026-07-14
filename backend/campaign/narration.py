@@ -141,37 +141,6 @@ def build_transition_narration_prompt(
     )
 
 
-def build_puzzle_start_narration_prompt(
-    campaign: dict,
-    turns: list[dict],
-    puzzle: dict,
-    npcs: list[dict] | None = None,
-    lore: list[dict] | None = None,
-) -> str:
-    """The transition beat the DM reviews/publishes to bring the party into a puzzle the DM
-    triggered manually (see session_handlers.handle_generate_puzzle_start). Only the puzzle's
-    title/description are read aloud to players (per campaign/puzzles.py) — dmNotes and
-    solutionText never enter this prompt.
-    """
-    definition = puzzle["definition"]
-    return (
-        "You are the Dungeon Master narrating a live tabletop RPG session for a group of "
-        "players. The party is about to encounter a puzzle — narrate the transition into it.\n\n"
-        f"{_world_knowledge_block()}"
-        f"{_npc_block(npcs or [])}"
-        f"{_lore_block(lore or [])}"
-        f"Campaign premise:\n{campaign['plot']}\n\n"
-        f"{_story_so_far_block(turns)}\n\n"
-        f"Puzzle the party is about to encounter — \"{definition['title']}\":\n"
-        f"{definition['description']}\n\n"
-        "Write 1-2 short paragraphs, no more than about 5 sentences total, second person "
-        "('you'), that bring the party to this puzzle and present it vividly. Stop right as the "
-        "puzzle presents itself — do NOT solve it, hint at the solution, or reveal anything "
-        "beyond what its description implies. Respond with plain text only, no headings, no "
-        "JSON."
-    )
-
-
 def build_branch_options_prompt(
     campaign: dict,
     turns: list[dict],

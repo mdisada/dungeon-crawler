@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useRef } from 'react'
 import type { AudioChunk } from '../types'
 
 // Gap between consecutive sentences, and the longer gap at a paragraph boundary — keeps
@@ -12,13 +12,13 @@ const LONG_PAUSE_MS = 600
  * and the turn-history replay button (the full chunk list is already known up front).
  */
 export function useAudioChunkPlayer() {
-  const audioRef = useRef<HTMLAudioElement>(null)
+  const audioElRef = useRef<HTMLAudioElement | null>(null)
   const queueRef = useRef<AudioChunk[]>([])
   const isPlayingRef = useRef(false)
   const hasPlayedFirstRef = useRef(false)
 
   const playNext = useCallback(() => {
-    const audio = audioRef.current
+    const audio = audioElRef.current
     const next = queueRef.current.shift()
     if (!audio || !next) {
       isPlayingRef.current = false
@@ -41,12 +41,19 @@ export function useAudioChunkPlayer() {
     }
   }, [])
 
-  useEffect(() => {
-    const audio = audioRef.current
-    if (!audio) return
-    audio.addEventListener('ended', playNext)
-    return () => audio.removeEventListener('ended', playNext)
-  }, [playNext])
+  // A callback ref rather than a plain useRef: the <audio> element isn't always mounted on the
+  // very first render (e.g. it's behind a loading gate in the consuming component), and a plain
+  // ref's attachment doesn't retrigger effects — a useEffect that attaches the 'ended' listener
+  // could run once while the ref is still null and then never run again. A callback ref instead
+  // fires exactly when the node mounts/unmounts, whenever that happens.
+  const audioRef = useCallback(
+    (node: HTMLAudioElement | null) => {
+      audioElRef.current?.removeEventListener('ended', playNext)
+      audioElRef.current = node
+      node?.addEventListener('ended', playNext)
+    },
+    [playNext],
+  )
 
   const enqueue = useCallback(
     (chunk: AudioChunk) => {
@@ -60,8 +67,8 @@ export function useAudioChunkPlayer() {
     queueRef.current = []
     isPlayingRef.current = false
     hasPlayedFirstRef.current = false
-    audioRef.current?.pause()
-    audioRef.current?.removeAttribute('src')
+    audioElRef.current?.pause()
+    audioElRef.current?.removeAttribute('src')
   }, [])
 
   return { audioRef, enqueue, reset }

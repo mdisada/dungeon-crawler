@@ -19,15 +19,6 @@ from campaign.plot_points import (
     build_plot_points_system_prompt,
     build_regenerate_plot_points_system_prompt,
 )
-from campaign.puzzle_engine import validate_definition
-from campaign.puzzles import (
-    PUZZLE_DEFINITION_JSON_SCHEMA,
-    PUZZLE_DETECTION_JSON_SCHEMA,
-    build_compile_puzzle_system_prompt,
-    build_compile_puzzle_user_prompt,
-    build_detect_puzzles_system_prompt,
-    build_detect_puzzles_user_prompt,
-)
 from config.llm_models import ollama_models, openrouter_models
 from llm import ollama
 from llm.manager import ask
@@ -133,89 +124,6 @@ async def handle_regenerate_plot_points(data: dict) -> dict:
     return {"plotPoints": merged, "cost": cost}
 
 
-async def handle_compile_puzzle(data: dict) -> dict:
-    """Text-to-puzzle compiler for the new-campaign wizard: compiles a fresh description, or
-    revises an existing definition when the payload carries existingDefinition (+ optional
-    feedback — this powers both the recompile loop and templates' 'Adapt to my campaign').
-    Stateless: the wizard runs before a campaign exists.
-    """
-    model = data["model"]
-    system_prompt = build_compile_puzzle_system_prompt(
-        data.get("archetype", "custom"), data.get("presentation")
-    )
-    existing = data.get("existingDefinition")
-    base_prompt = build_compile_puzzle_user_prompt(
-        data.get("description", ""),
-        json.dumps(existing) if existing else None,
-        data.get("feedback"),
-        data.get("plot"),
-    )
-
-    total_cost = 0.0
-    last_error = "puzzle compilation failed"
-    for attempt in range(_MAX_PLOT_POINTS_ATTEMPTS):
-        user_prompt = base_prompt
-        if attempt > 0:
-            user_prompt += f"\n\nYour previous attempt was rejected: {last_error} Try again."
-
-        result, cost = await asyncio.to_thread(
-            ask, model, user_prompt, "puzzle-compile", system_prompt, PUZZLE_DEFINITION_JSON_SCHEMA
-        )
-        total_cost += cost
-
-        try:
-            definition = json.loads(result)
-        except json.JSONDecodeError as e:
-            last_error = f"the response was not valid JSON ({e})."
-            continue
-
-        problems = validate_definition(definition)
-        if not problems:
-            return {"definition": definition, "cost": total_cost}
-        last_error = "the definition had problems: " + "; ".join(problems) + "."
-
-    raise RuntimeError(f"{last_error} (after {_MAX_PLOT_POINTS_ATTEMPTS} attempts)")
-
-
-async def handle_detect_puzzles(data: dict) -> dict:
-    """Scans the plot + plot points for puzzles the author already implied and compiles them.
-    Invalid detections are dropped rather than retried — detection is a suggestion pass, and an
-    empty result is a valid outcome.
-    """
-    model = data["model"]
-    system_prompt = build_detect_puzzles_system_prompt()
-    base_prompt = build_detect_puzzles_user_prompt(data["plot"], data["plotPoints"])
-
-    total_cost = 0.0
-    last_error = "puzzle detection failed"
-    for attempt in range(_MAX_PLOT_POINTS_ATTEMPTS):
-        user_prompt = base_prompt
-        if attempt > 0:
-            user_prompt += f"\n\nYour previous attempt was rejected: {last_error} Try again."
-
-        result, cost = await asyncio.to_thread(
-            ask, model, user_prompt, "puzzle-detect", system_prompt, PUZZLE_DETECTION_JSON_SCHEMA
-        )
-        total_cost += cost
-
-        try:
-            detected = json.loads(result)["puzzles"]
-        except (json.JSONDecodeError, KeyError) as e:
-            last_error = f"the response was not valid JSON ({e})."
-            continue
-
-        valid = []
-        for entry in detected:
-            problems = validate_definition(entry["puzzle"])
-            if problems:
-                print(f"Dropping invalid detected puzzle '{entry['puzzle'].get('title')}': {problems}")
-                continue
-            valid.append({"plotPointIndex": entry["plotPointIndex"], "definition": entry["puzzle"]})
-        return {"puzzles": valid, "cost": total_cost}
-
-    raise RuntimeError(f"{last_error} (after {_MAX_PLOT_POINTS_ATTEMPTS} attempts)")
-
-
 async def _seed_npcs_and_lore(campaign_id: int, model: str, plot: str) -> None:
     """Best-effort: pregenerates NPCs/lore explicitly mentioned in the initial plot text so they
     exist before play starts. Extraction failures shouldn't block campaign creation — this is an
@@ -270,7 +178,6 @@ async def handle_save_campaign(data: dict) -> dict:
         data["plotPoints"],
         data.get("plotCost", 0.0) + title_cost,
         data.get("generationCost", 0.0),
-        data.get("puzzles", []),
     )
     await _seed_npcs_and_lore(campaign_id, model, plot)
     return {"campaignId": campaign_id}

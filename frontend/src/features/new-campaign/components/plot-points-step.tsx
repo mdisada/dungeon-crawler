@@ -4,7 +4,6 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import type { useCampaignManager } from '../hooks/use-campaign-manager'
 import { CostBadge } from './cost-badge'
-import { PuzzlesSection } from './puzzles-section'
 
 type Props = {
   manager: ReturnType<typeof useCampaignManager>
@@ -78,8 +77,6 @@ export function PlotPointsStep({ manager }: Props) {
           )
         })}
       </div>
-
-      <PuzzlesSection manager={manager} busy={busy} />
 
       <div className="flex items-center gap-3">
         <Button

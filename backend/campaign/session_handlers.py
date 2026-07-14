@@ -21,7 +21,6 @@ from campaign.narration import (
     build_branch_options_prompt,
     build_narration_system_prompt,
     build_narration_user_prompt,
-    build_puzzle_start_narration_prompt,
     build_transition_narration_prompt,
 )
 from config.tts import audio_bucket_name
@@ -54,15 +53,6 @@ async def handle_list_turns(data: dict) -> dict:
     campaign_id = data["campaignId"]
     turns = await asyncio.to_thread(storage.list_turns, campaign_id)
     return {"campaignId": campaign_id, "turns": turns}
-
-
-async def handle_list_puzzles(data: dict) -> dict:
-    """The DM's puzzle picker only offers puzzles not yet triggered this campaign — 'ready' ones,
-    per campaign/storage.py's puzzles.status lifecycle."""
-    campaign_id = data["campaignId"]
-    puzzles = await asyncio.to_thread(storage.list_puzzles, campaign_id)
-    available = [p for p in puzzles if p["status"] == "ready"]
-    return {"campaignId": campaign_id, "puzzles": available}
 
 
 async def _load_narration_context(campaign_id: int) -> dict:
@@ -136,20 +126,20 @@ async def _generate_narration(
     return content.strip()
 
 
-async def _tts_sentences(text: str, path_prefix: str, on_chunk=None) -> list[dict]:
-    """Splits `text` into sentences, TTS+uploads each one in order (Opus, one file per sentence
-    — this is what lets playback start almost immediately instead of waiting for the whole turn),
-    and returns the resulting chunk list (`{url, isNewParagraph}`). If `on_chunk` is given, it's
-    called with `(index, chunk)` as soon as each chunk is ready (draft-time live streaming — see
-    make_handle_generate_turn); if omitted, chunks are just collected silently (publish-time
-    persistence — see _persist_narration_audio).
+async def _tts_chunks(text: str, path_prefix: str, on_chunk=None) -> list[dict]:
+    """Splits `text` into narration chunks (see tts.split_into_chunks), TTS+uploads each one in
+    order (Opus, one file per chunk — this is what lets playback start almost immediately instead
+    of waiting for the whole turn), and returns the resulting chunk list (`{url, isNewParagraph}`).
+    If `on_chunk` is given, it's called with `(index, chunk)` as soon as each chunk is ready
+    (draft-time live streaming — see make_handle_generate_turn); if omitted, chunks are just
+    collected silently (publish-time persistence — see _persist_narration_audio).
     """
     if not tts.tts_enabled:
         return []
 
     chunks = []
-    for i, (sentence, is_new_paragraph) in enumerate(tts.split_into_sentences(text)):
-        audio = await asyncio.to_thread(tts.generate_sentence_audio, sentence)
+    for i, (chunk_text, is_new_paragraph) in enumerate(tts.split_into_chunks(text)):
+        audio = await asyncio.to_thread(tts.generate_chunk_audio, chunk_text)
         url = await asyncio.to_thread(
             supabase_storage.upload_audio, audio_bucket_name, f"{path_prefix}/{i}.opus", audio
         )
@@ -183,7 +173,7 @@ async def _stream_transition_narration(live_channel, campaign_id: int, job_id: s
             })
 
         with time_job(f"generate-transition-audio {job_id}"):
-            await _tts_sentences(text.strip(), f"drafts/{job_id}/transition", on_chunk=broadcast_chunk)
+            await _tts_chunks(text.strip(), f"drafts/{job_id}/transition", on_chunk=broadcast_chunk)
     except Exception as e:
         print(f"Transition narration failed for campaign {campaign_id}: {e}")
 
@@ -202,33 +192,9 @@ async def _stream_narration_audio(live_channel, campaign_id: int, job_id: str, c
             })
 
         with time_job(f"generate-narration-audio {job_id}"):
-            await _tts_sentences(content, f"drafts/{job_id}/narration", on_chunk=broadcast_chunk)
+            await _tts_chunks(content, f"drafts/{job_id}/narration", on_chunk=broadcast_chunk)
     except Exception as e:
         print(f"Narration audio streaming failed for campaign {campaign_id}: {e}")
-
-
-async def handle_generate_puzzle_start(data: dict) -> dict:
-    """DM-triggered: drafts the transition narration into a puzzle the DM picked from the
-    available list (see handle_list_puzzles). Feeds the same draft/review/publish UI as a normal
-    turn — the puzzle is only marked started once the DM actually publishes it (see
-    make_handle_publish_turn).
-    """
-    campaign_id = data["campaignId"]
-    puzzle_id = data["puzzleId"]
-
-    puzzle = await asyncio.to_thread(storage.get_puzzle, puzzle_id)
-    if puzzle is None or puzzle["campaignId"] != campaign_id:
-        raise ValueError(f"Puzzle {puzzle_id} not found for campaign {campaign_id}")
-
-    ctx = await _load_narration_context(campaign_id)
-    system_prompt = build_puzzle_start_narration_prompt(
-        ctx["campaign"], ctx["turns"], puzzle, ctx["npcs"], ctx["lore"]
-    )
-    content, _ = await asyncio.to_thread(
-        ask, ctx["campaign"]["model"], "Narrate the puzzle's opening now.",
-        "campaign-puzzle-start", system_prompt,
-    )
-    return {"campaignId": campaign_id, "puzzleId": puzzle_id, "content": content.strip()}
 
 
 def make_handle_generate_turn(live_channel):
@@ -283,43 +249,38 @@ def make_handle_publish_turn(live_channel):
     since the DM may have edited the draft before publishing; it also deliberately doesn't
     rebroadcast narration-audio-chunk, since the player already heard the live draft-time pass —
     this pass is only so the turn has replayable audio in history afterward.
-
-    A puzzle-start draft (see handle_generate_puzzle_start) carries the triggering puzzleId along
-    for publish — only here, once the DM has actually sent it to players, does the puzzle flip
-    from 'ready' to 'published' and a puzzle-started event go out, so a discarded/regenerated
-    draft never uses up the puzzle.
     """
     async def handle_publish_turn(data: dict) -> dict:
         campaign_id = data["campaignId"]
         content = data["content"]
         author = data.get("author", "dm")
-        puzzle_id = data.get("puzzleId")
 
         turn = await asyncio.to_thread(storage.add_turn, campaign_id, content, author)
         await live_channel.send_broadcast("turn-published", {"campaignId": campaign_id, "turn": turn})
-
-        if puzzle_id is not None:
-            await asyncio.to_thread(storage.set_puzzle_status, puzzle_id, "published")
-            await live_channel.send_broadcast(
-                "puzzle-started", {"campaignId": campaign_id, "puzzleId": puzzle_id, "turn": turn}
-            )
 
         asyncio.create_task(_auto_extract_npcs_and_lore(campaign_id))
         if author == "player":
             asyncio.create_task(_auto_suggest_branch_options(live_channel, campaign_id))
         if author == "dm":
-            asyncio.create_task(_persist_narration_audio(campaign_id, turn))
+            asyncio.create_task(_persist_narration_audio(live_channel, campaign_id, turn))
 
         return {"campaignId": campaign_id, "turn": turn}
 
     return handle_publish_turn
 
 
-async def _persist_narration_audio(campaign_id: int, turn: dict) -> None:
+async def _persist_narration_audio(live_channel, campaign_id: int, turn: dict) -> None:
+    """Generates and uploads the turn's replayable audio, then broadcasts turn-audio-ready so
+    clients that already have this turn (from the turn-published broadcast, which fires before
+    this background task finishes) can pick up its chunks instead of never learning they exist.
+    """
     try:
         with time_job(f"persist-narration-audio {turn['id']}"):
-            chunks = await _tts_sentences(turn["content"], f"{campaign_id}/{turn['id']}")
+            chunks = await _tts_chunks(turn["content"], f"{campaign_id}/{turn['id']}")
         await asyncio.to_thread(storage.set_turn_audio_chunks, turn["id"], chunks)
+        await live_channel.send_broadcast(
+            "turn-audio-ready", {"campaignId": campaign_id, "turnId": turn["id"], "audioChunks": chunks}
+        )
     except Exception as e:
         print(f"Narration audio persistence failed for turn {turn['id']}: {e}")
 

@@ -1,8 +1,6 @@
 import { useRef, useState } from 'react'
 import { useSession } from '@/features/auth'
-import type { DraftPuzzle } from '@/features/puzzles'
 import { timeJob } from '@/lib/job-timer'
-import { detectPuzzles } from '../api/detect-puzzles'
 import { generatePlot } from '../api/generate-plot'
 import { generatePlotPoints } from '../api/generate-plot-points'
 import { improvePlot } from '../api/improve-plot'
@@ -39,10 +37,6 @@ export function useCampaignManager() {
   const [generationCost, setGenerationCost] = useState<number | null>(null)
   const [locks, setLocks] = useState<PlotPointLocks | null>(null)
   const [savedCampaignId, setSavedCampaignId] = useState<number | null>(null)
-
-  const [puzzles, setPuzzles] = useState<DraftPuzzle[]>([])
-  const [isDetectingPuzzles, setIsDetectingPuzzles] = useState(false)
-  const [puzzleDetectionCost, setPuzzleDetectionCost] = useState(0)
 
   // Instant, in-memory undo — no round trip needed to step backward through what's been typed
   // or generated in this session.
@@ -164,45 +158,11 @@ export function useCampaignManager() {
       setGenerationCost(result.cost)
       setLocks(buildDefaultLocks(result.plotPoints))
       setStep('plot-points')
-      void detectSuggestedPuzzles(result.plotPoints)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
       setIsGeneratingPlotPoints(false)
     }
-  }
-
-  // Auto-run once on entering the plot-points step; also exposed for a manual re-run button.
-  const detectSuggestedPuzzles = async (points?: PlotPoint[]) => {
-    const targetPoints = points ?? plotPoints
-    if (!targetPoints || !setup.model) return
-    setIsDetectingPuzzles(true)
-    try {
-      const { result } = await timeJob('detect-puzzles', (jobId) =>
-        detectPuzzles(jobId, { model: setup.model, plot: setup.plot, plotPoints: targetPoints }),
-      )
-      const detected: DraftPuzzle[] = result.puzzles.map((p) => ({
-        localId: `detected-${crypto.randomUUID()}`,
-        definition: p.definition,
-        source: 'detected',
-        plotPointIndex: p.plotPointIndex,
-      }))
-      setPuzzles((prev) => [...prev, ...detected])
-      setPuzzleDetectionCost((prev) => prev + result.cost)
-    } catch (err) {
-      // Detection is a suggestion pass — a failure shouldn't block the plot-points step.
-      console.error('Puzzle detection failed:', err)
-    } finally {
-      setIsDetectingPuzzles(false)
-    }
-  }
-
-  const addPuzzle = (puzzle: DraftPuzzle) => {
-    setPuzzles((prev) => [...prev, puzzle])
-  }
-
-  const removePuzzle = (localId: string) => {
-    setPuzzles((prev) => prev.filter((p) => p.localId !== localId))
   }
 
   const regenerateUnlockedPlotPoints = async () => {
@@ -259,11 +219,6 @@ export function useCampaignManager() {
           plotPoints,
           plotCost: plotCost ?? 0,
           generationCost: generationCost ?? 0,
-          puzzles: puzzles.map((p) => ({
-            plotPointIndex: p.plotPointIndex,
-            source: p.source,
-            definition: p.definition,
-          })),
         }),
       )
       setSavedCampaignId(result.campaignId)
@@ -298,9 +253,6 @@ export function useCampaignManager() {
     isRegenerating,
     isSaving,
     error,
-    puzzles,
-    isDetectingPuzzles,
-    puzzleDetectionCost,
     generatePlotIdea,
     improvePlotText,
     undoPlot,
@@ -312,8 +264,5 @@ export function useCampaignManager() {
     togglePlotPointLock,
     saveGeneratedCampaign,
     backToSetup,
-    detectSuggestedPuzzles,
-    addPuzzle,
-    removePuzzle,
   }
 }

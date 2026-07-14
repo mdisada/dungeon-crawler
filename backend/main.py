@@ -63,12 +63,6 @@ async def main() -> None:
     queue.register(campaign_channel, "save-campaign", "campaign-saved", campaign_manager.handle_save_campaign)
     queue.register(campaign_channel, "save-plot-draft", "plot-draft-saved", campaign_manager.handle_save_plot_draft)
     queue.register(campaign_channel, "list-plot-drafts", "plot-drafts-listed", campaign_manager.handle_list_plot_drafts)
-    queue.register(campaign_channel, "detect-puzzles", "puzzles-detected", campaign_manager.handle_detect_puzzles)
-
-    # puzzle-compile channel — wizard text-to-puzzle compiler; its own topic (not campaign-builder)
-    # so a slow compile can't race the wizard's other requests on a shared topic.
-    puzzle_compile_channel = client.channel("puzzle-compile")
-    queue.register(puzzle_compile_channel, "compile-puzzle", "puzzle-compiled", campaign_manager.handle_compile_puzzle)
 
     # campaign-session-* channels — request/response actions for the "open campaign" DM/player
     # loop, one topic per action (not one shared topic) since campaign/DM pages fire get-campaign
@@ -79,17 +73,14 @@ async def main() -> None:
     list_campaigns_channel = client.channel("campaign-session-list-campaigns")
     get_campaign_channel = client.channel("campaign-session-get-campaign")
     list_turns_channel = client.channel("campaign-session-list-turns")
-    list_puzzles_channel = client.channel("campaign-session-list-puzzles")
     generate_branch_options_channel = client.channel("campaign-session-generate-branch-options")
     generate_turn_channel = client.channel("campaign-session-generate-turn")
-    generate_puzzle_start_channel = client.channel("campaign-session-generate-puzzle-start")
     publish_turn_channel = client.channel("campaign-session-publish-turn")
     live_channel = client.channel("campaign-live")
 
     queue.register(list_campaigns_channel, "list-campaigns", "campaigns-listed", session_handlers.handle_list_campaigns)
     queue.register(get_campaign_channel, "get-campaign", "campaign-fetched", session_handlers.handle_get_campaign)
     queue.register(list_turns_channel, "list-turns", "turns-listed", session_handlers.handle_list_turns)
-    queue.register(list_puzzles_channel, "list-puzzles", "puzzles-listed", session_handlers.handle_list_puzzles)
     queue.register(
         generate_branch_options_channel, "generate-branch-options", "branch-options-generated",
         session_handlers.handle_generate_branch_options,
@@ -97,10 +88,6 @@ async def main() -> None:
     queue.register(
         generate_turn_channel, "generate-turn", "turn-drafted",
         session_handlers.make_handle_generate_turn(live_channel),
-    )
-    queue.register(
-        generate_puzzle_start_channel, "generate-puzzle-start", "puzzle-start-drafted",
-        session_handlers.handle_generate_puzzle_start,
     )
     queue.register(
         publish_turn_channel, "publish-turn", "turn-published-ack",
@@ -111,14 +98,11 @@ async def main() -> None:
 
     await signal_channel.subscribe(_on_subscribe("signal-test"))
     await campaign_channel.subscribe(_on_subscribe("campaign-builder"))
-    await puzzle_compile_channel.subscribe(_on_subscribe("puzzle-compile"))
     await list_campaigns_channel.subscribe(_on_subscribe("campaign-session-list-campaigns"))
     await get_campaign_channel.subscribe(_on_subscribe("campaign-session-get-campaign"))
     await list_turns_channel.subscribe(_on_subscribe("campaign-session-list-turns"))
-    await list_puzzles_channel.subscribe(_on_subscribe("campaign-session-list-puzzles"))
     await generate_branch_options_channel.subscribe(_on_subscribe("campaign-session-generate-branch-options"))
     await generate_turn_channel.subscribe(_on_subscribe("campaign-session-generate-turn"))
-    await generate_puzzle_start_channel.subscribe(_on_subscribe("campaign-session-generate-puzzle-start"))
     await publish_turn_channel.subscribe(_on_subscribe("campaign-session-publish-turn"))
     await live_channel.subscribe(_on_subscribe("campaign-live"))
 

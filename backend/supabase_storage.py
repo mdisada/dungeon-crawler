@@ -1,6 +1,6 @@
 """Thin wrapper for Supabase Storage, configured for this app.
 
-Mirrors supabase_realtime.py, but uses the service role key (not the anon key) since this runs
+Mirrors supabase_realtime.py, but uses the secret key (not the publishable key) since this runs
 server-side only and needs to bypass RLS to write narration audio files.
 """
 
@@ -18,8 +18,8 @@ def get_storage_client() -> Client:
     global _client
     if _client is None:
         url = os.environ["SUPABASE_URL"].rstrip("/")
-        service_role_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-        _client = create_client(url, service_role_key)
+        secret_key = os.environ["SUPABASE_SECRET_KEY"]
+        _client = create_client(url, secret_key)
     return _client
 
 

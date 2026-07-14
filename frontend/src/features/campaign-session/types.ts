@@ -1,5 +1,3 @@
-import type { SavedPuzzle } from '@/features/puzzles'
-
 export type CampaignType = 'one-shot' | 'multi-chapter'
 
 export type CampaignSummary = {
@@ -50,25 +48,10 @@ export type TurnsListedResponse = {
   turns: Turn[]
 }
 
-export type PuzzlesListedResponse = {
-  jobId: string
-  error?: string
-  campaignId: number
-  puzzles: SavedPuzzle[]
-}
-
 export type TurnDraftedResponse = {
   jobId: string
   error?: string
   campaignId: number
-  content: string
-}
-
-export type PuzzleStartDraftedResponse = {
-  jobId: string
-  error?: string
-  campaignId: number
-  puzzleId: number
   content: string
 }
 
@@ -90,22 +73,11 @@ export type PublishTurnPayload = {
   campaignId: number
   content: string
   author: TurnAuthor
-  // Set when this content was drafted from generate-puzzle-start — tells the backend to flip
-  // the puzzle from 'ready' to 'published' and broadcast puzzle-started once this actually goes
-  // out to players (not on generation, which the DM might discard or regenerate).
-  puzzleId?: number
 }
 
 // Broadcasts on the campaign-live topic (no jobId — every subscriber receives them, not just a requester)
 export type TurnPublishedEvent = {
   campaignId: number
-  turn: Turn
-}
-
-// Pushed when a DM-triggered puzzle-start draft is actually published — see PublishTurnPayload.puzzleId.
-export type PuzzleStartedEvent = {
-  campaignId: number
-  puzzleId: number
   turn: Turn
 }
 
@@ -133,4 +105,13 @@ export type NarrationAudioChunkEvent = {
   sentenceIndex: number
   isNewParagraph: boolean
   audioUrl: string
+}
+
+// Pushed once a published turn's replayable audio finishes generating in the background (see
+// backend/campaign/session_handlers.py's _persist_narration_audio) — turn-published fires before
+// this is ready, so clients update the matching turn in place when this arrives.
+export type TurnAudioReadyEvent = {
+  campaignId: number
+  turnId: number
+  audioChunks: AudioChunk[]
 }
