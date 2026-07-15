@@ -16,6 +16,10 @@ export function useAudioChunkPlayer() {
   const queueRef = useRef<AudioChunk[]>([])
   const isPlayingRef = useRef(false)
   const hasPlayedFirstRef = useRef(false)
+  // The pause before a chunk is a setTimeout, not an immediate play — reset() must be able to
+  // cancel it, otherwise a reset mid-pause (e.g. a fresh generation starting) doesn't stop the
+  // previous, now-superseded chunk from playing once the timeout fires anyway.
+  const pauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const playNext = useCallback(() => {
     const audio = audioElRef.current
@@ -27,6 +31,7 @@ export function useAudioChunkPlayer() {
     isPlayingRef.current = true
 
     const start = () => {
+      pauseTimeoutRef.current = null
       audio.src = next.url
       audio.play().catch(() => {
         isPlayingRef.current = false
@@ -37,7 +42,7 @@ export function useAudioChunkPlayer() {
       hasPlayedFirstRef.current = true
       start()
     } else {
-      setTimeout(start, next.isNewParagraph ? LONG_PAUSE_MS : SHORT_PAUSE_MS)
+      pauseTimeoutRef.current = setTimeout(start, next.isNewParagraph ? LONG_PAUSE_MS : SHORT_PAUSE_MS)
     }
   }, [])
 
@@ -64,6 +69,10 @@ export function useAudioChunkPlayer() {
   )
 
   const reset = useCallback(() => {
+    if (pauseTimeoutRef.current !== null) {
+      clearTimeout(pauseTimeoutRef.current)
+      pauseTimeoutRef.current = null
+    }
     queueRef.current = []
     isPlayingRef.current = false
     hasPlayedFirstRef.current = false

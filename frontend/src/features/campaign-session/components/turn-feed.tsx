@@ -4,6 +4,7 @@ import type { Turn } from '../types'
 type Props = {
   turns: Turn[]
   isLoading: boolean
+  transitionText?: string | null
 }
 
 function NarrationReplayButton({ turn }: { turn: Turn }) {
@@ -28,10 +29,10 @@ function NarrationReplayButton({ turn }: { turn: Turn }) {
   )
 }
 
-export function TurnFeed({ turns, isLoading }: Props) {
+export function TurnFeed({ turns, isLoading, transitionText }: Props) {
   if (isLoading) return <p className="text-sm text-muted-foreground">Loading story so far…</p>
 
-  if (turns.length === 0) {
+  if (turns.length === 0 && !transitionText) {
     return <p className="text-sm text-muted-foreground">The story hasn't started yet.</p>
   }
 
@@ -51,6 +52,12 @@ export function TurnFeed({ turns, isLoading }: Props) {
             {turn.audioChunks?.length ? <NarrationReplayButton turn={turn} /> : null}
           </div>
         ),
+      )}
+      {transitionText && (
+        <div className="whitespace-pre-wrap rounded-lg border border-border bg-card p-4 text-left">
+          <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Narrating…</p>
+          {transitionText}
+        </div>
       )}
     </div>
   )

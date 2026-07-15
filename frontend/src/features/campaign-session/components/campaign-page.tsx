@@ -12,7 +12,7 @@ export function CampaignPage() {
   const { user } = useSession()
   const { campaign, isLoading: isCampaignLoading, error: campaignError } = useCampaign(campaignId)
   const { turns, isLoading: areTurnsLoading } = useCampaignTurns(campaignId)
-  const { audioRef } = useLiveNarrationAudio(campaignId)
+  const { audioRef, transitionText } = useLiveNarrationAudio(campaignId)
   // First time the campaign is played (no turns yet): read the plot premise aloud. Gated on the
   // ownership check below so it can't fire for a campaign this page is about to redirect off of.
   const isOwnCampaign = !!campaign && campaign.userId === user?.id
@@ -36,7 +36,7 @@ export function CampaignPage() {
       </div>
 
       <audio ref={audioRef} className="hidden" />
-      <TurnFeed turns={turns} isLoading={areTurnsLoading} />
+      <TurnFeed turns={turns} isLoading={areTurnsLoading} transitionText={transitionText} />
     </div>
   )
 }

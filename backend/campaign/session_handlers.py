@@ -155,6 +155,16 @@ async def _stream_transition_narration(live_channel, campaign_id: int, job_id: s
     to campaign-live while the real narration draft is still being written (see
     make_handle_generate_turn), so the player isn't sitting in silence. Never persisted — this
     isn't canon content, just filler for the wait.
+
+    The text — plus the total number of audio chunks it will produce — is broadcast up front
+    (before TTS even starts), so the frontend can (a) show the text in the turn feed immediately
+    rather than waiting on audio, and (b) know exactly how many transition chunks to wait for
+    before it's safe to start playing the main narration's chunks. The main narration stream runs
+    as a separate concurrent task (see make_handle_generate_turn), so its chunk broadcasts can
+    arrive interleaved with these; a plain arrival-order queue can't tell "transition chunk still
+    coming" apart from "main narration just arrived first" without knowing the expected count.
+    `narration-transition-ended` still fires in a finally block as a fallback completion signal,
+    for the case where an error cuts the stream short before the promised count is reached.
     """
     try:
         system_prompt = build_transition_narration_prompt(
@@ -164,6 +174,12 @@ async def _stream_transition_narration(live_channel, campaign_id: int, job_id: s
             ask, ctx["campaign"]["model"], "Describe the moment.",
             "campaign-transition-narration", system_prompt,
         )
+        text = text.strip()
+        total_chunks = len(tts.split_into_chunks(text)) if tts.tts_enabled and text else 0
+
+        await live_channel.send_broadcast("transition-narration-text", {
+            "campaignId": campaign_id, "jobId": job_id, "text": text, "totalChunks": total_chunks,
+        })
 
         async def broadcast_chunk(i: int, chunk: dict) -> None:
             await live_channel.send_broadcast("narration-audio-chunk", {
@@ -173,9 +189,13 @@ async def _stream_transition_narration(live_channel, campaign_id: int, job_id: s
             })
 
         with time_job(f"generate-transition-audio {job_id}"):
-            await _tts_chunks(text.strip(), f"drafts/{job_id}/transition", on_chunk=broadcast_chunk)
+            await _tts_chunks(text, f"drafts/{job_id}/transition", on_chunk=broadcast_chunk)
     except Exception as e:
         print(f"Transition narration failed for campaign {campaign_id}: {e}")
+    finally:
+        await live_channel.send_broadcast(
+            "narration-transition-ended", {"campaignId": campaign_id, "jobId": job_id}
+        )
 
 
 async def _stream_narration_audio(
@@ -217,7 +237,8 @@ def make_handle_narrate_plot(live_channel):
             raise ValueError(f"Campaign {campaign_id} not found")
 
         await live_channel.send_broadcast(
-            "narration-generation-started", {"campaignId": campaign_id, "jobId": job_id}
+            "narration-generation-started",
+            {"campaignId": campaign_id, "jobId": job_id, "hasTransition": False},
         )
         asyncio.create_task(
             _stream_narration_audio(live_channel, campaign_id, job_id, campaign["plot"], kind="plot")
@@ -241,7 +262,8 @@ def make_handle_generate_turn(live_channel):
         job_id = data.get("jobId")
 
         await live_channel.send_broadcast(
-            "narration-generation-started", {"campaignId": campaign_id, "jobId": job_id}
+            "narration-generation-started",
+            {"campaignId": campaign_id, "jobId": job_id, "hasTransition": True},
         )
 
         ctx = await _load_narration_context(campaign_id)
