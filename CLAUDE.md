@@ -518,26 +518,40 @@ Before declaring work complete, verify:
 
 ## Project-Specific Overrides
 
-<!--
-Customize this section for your specific project. Examples:
+### State Management & Data Fetching
 
-### State Management
-- This project uses Zustand for global state (not Redux)
-- Server state uses TanStack Query with 10-minute staleTime
+(overrides the "State Management Rules" and "Data Fetching Rules" sections above for this project)
 
-### Styling
-- This project uses CSS Modules, not Tailwind
-- Class names follow BEM convention
+- **Do not use SWR, TanStack Query, or Zustand.** Decided 2026-07-16 — see `docs/DECISIONS.md`.
+  Data fetching uses plain `useState`/`useEffect` hooks in each feature's `hooks/` folder, wrapping
+  `api/` functions. See `frontend/CLAUDE.md` for the exact convention (feature vertical-slice
+  shape: `api/` / `hooks/` / `components/` / `index.ts`).
+- Shared state stays lifted to the closest common parent or passed via narrowly-scoped Context per
+  the general Context Rules above. Do not introduce Zustand (or Redux) unless a specific case of
+  prop-drilling/cross-tree state genuinely can't be solved that way — ask before adding it.
+- If fetch needs grow (caching, retries, dedup, mutations) to the point plain hooks become painful,
+  raise it explicitly rather than silently reaching for TanStack Query — this is a deliberate,
+  revisitable tradeoff, not an oversight.
 
-### API
-- All API calls go through src/api/client.ts
-- Use the createDataHook factory for new endpoints
+### Backend Architecture
 
-### Testing
-- Minimum 80% coverage on new code
-- E2E tests required for all user-facing flows
+- Supabase Edge Functions are the sole AI gateway; Postgres (RLS + single-writer `apply_diff` +
+  `state_version`) is the sole state authority — per `MAIN-SPEC.md`. The prototype
+  `backend/main.py` standalone Python process + SQLite (`backend/data/campaigns.db`) is being
+  replaced, not repointed. See `TASK.md` §3-4 for what prototype code is worth reusing as reference.
+- **No Docker on the dev machine.** Do not suggest or rely on `supabase start` / `supabase db
+  reset` for local dev — apply migrations with `supabase db push --db-url
+  <POSTGRES_URL_NON_POOLING>` and seed data with `node supabase/seed/apply-seed.mjs
+  "$POSTGRES_URL_NON_POOLING"` (Docker-free; both verified working against the real linked
+  project). Do NOT use `db push --include-seed` — verified it only runs the seed file once and
+  silently no-ops on later changes. Verify via the hosted Supabase Studio, not a local one. See
+  `docs/DECISIONS.md` (2026-07-17) and
+  `supabase/README.md`. CI (`.github/workflows/ci.yml`) still uses Docker via GitHub Actions'
+  hosted runners — that's unaffected and remains the from-scratch migrations check.
 
-### Deployment
-- Do not modify CI/CD pipeline files without approval
-- All PRs require passing checks before merge
--->
+### Auth
+
+- v1 ships Supabase email/password only. Google/Discord OAuth (called for in F01) is deferred to
+  backlog. Because there's no OAuth identity layer as a second factor, protected-route/page guards
+  (lobby membership, DM-only views, session access) need explicit test coverage — don't assume
+  "logged in" is equivalent to "authorized for this resource."

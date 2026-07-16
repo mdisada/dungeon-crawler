@@ -222,3 +222,5 @@ backend/recordings/
 
 # Local data (usage log, campaigns database)
 backend/data/
+
+.sql

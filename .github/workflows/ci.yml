@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+
+  # Runs on GitHub's hosted runner, which has Docker regardless of the dev machine (which has
+  # none - see docs/DECISIONS.md 2026-07-17). This is the "migrations apply cleanly from an
+  # empty database" check; day-to-day schema changes go to the real project via
+  # `supabase db push --include-seed` (see supabase/README.md), not this local stack.
+  supabase-migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Start local stack and apply migrations
+        run: supabase db start
+      - name: Reset (re-applies all migrations from scratch)
+        run: supabase db reset
+      - name: Stop local stack
+        if: always()
+        run: supabase stop

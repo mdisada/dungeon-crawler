@@ -18,6 +18,7 @@ A web-based multiplayer D&D-style tabletop simulator (1–8 players) where the D
 4. **Structured state over prose.** Loops, beats, objectives, ingredients, NPCs, and world facts are first-class database entities. Agents read condensed structured context, never raw transcripts.
 5. **Single writer.** Exactly one authority (the Adventure Manager service) mutates game state. All clients submit intents; state diffs broadcast via Supabase Realtime.
 6. **Log everything.** Every AI proposal + human decision (accept/edit diff/reject) is logged from day one. This log is the dataset that proves when Full-AI mode is trustworthy.
+7. **Cooperative by design.** When `min_players > 1`, content and mechanics actively create interdependence: split knowledge (`reveals_to` clue affinities), complementary-skill obstacles, combo-rewarding combat with a shared Momentum pool, group/assisted checks, braided simultaneous intents, differential NPC engagement, backstory interlocks, and shared-stakes party resources. Cooperation density is tracked by the Variety Manager — some beats demand teamwork, most merely reward it, so cooperation never degrades into arbitrary padlocks.
 
 ### 1.2 Explicitly out of scope (v1)
 
@@ -155,11 +156,11 @@ Pure, deterministic, unit-tested, SRD-data-driven.
 ## 6. Managers
 
 | Manager | Responsibility |
-|---|---|
+| --- | --- |
 | **Adventure Manager** | *The single writer.* Owns authoritative game state; applies committed proposals and engine results as state diffs; broadcasts via Realtime. Tracks in-game day/date, objective status, accomplishments, current adventure position. Persists after every encounter (and every roleplay scene in Full-AI) |
 | **Action Router** | Classifies player input: mechanical fast-path → Engines; ambiguous → Adjudicator. Flags loop mismatches to Loop Classifier |
 | **Turn Manager** | Initiative (players + allied/enemy NPCs uniformly), action economy, reaction windows, round advancement, effect-expiry triggers. Each combatant has `allegiance` (party/enemy/neutral) and `controller` (player/dm/ai) — controller determines whether the turn waits for client input, DM console input, or invokes the NPC Tactician |
-| **Scene Manager** | Explicit state machine over scene modes: `narration | roleplay | battle | puzzle | downtime`. Broadcast as `scene.mode`; all main-window rendering (map vs. panning background vs. VN layout; background XOR map) derives from it |
+| **Scene Manager** | Explicit state machine over scene modes: `narration|roleplay|battle|puzzle|downtime`. Broadcast as `scene.mode`; all main-window rendering (map vs. panning background vs. VN layout; background XOR map) derives from it |
 | **Session Manager** | Lobby/waiting area, character selection, session start (load state + Summarizer recap), checkpoints, session end (summarize + persist) |
 | **Loop Stack Manager** | Holds nested loop state: meta loop (arc, antagonist progress, committed BBEG), progression loops, and the **core-loop stack** (loops suspend/resume, not replace) |
 | **Variety Manager** | Counters over loop-type frequency and per-player pillar usage; flags Beat Planner when backbone loop repeats N times or a player's pillar is starved. Pure counting |
