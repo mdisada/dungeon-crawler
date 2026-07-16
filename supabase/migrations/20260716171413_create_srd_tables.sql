@@ -50,8 +50,10 @@ create table if not exists srd_class_features (
   source text not null default 'srd-5.2.1'
 );
 
--- Covers general equipment, weapons, and armor (Open5e's items/weapons/armor endpoints);
--- `category` distinguishes which source endpoint a row came from.
+-- Full item catalog (Open5e's /items/ endpoint covers general equipment, weapons, and armor in
+-- one dataset - see supabase/seed/ingest-srd.mjs); `category` is Open5e's own taxonomy (Weapon,
+-- Armor, Adventuring Gear, Tools, ...). Weapon/armor-specific stats are further normalized into
+-- srd_weapons / srd_armor (see 20260717120000_split_srd_weapons_armor.sql).
 create table if not exists srd_items (
   key text primary key,
   name text not null,

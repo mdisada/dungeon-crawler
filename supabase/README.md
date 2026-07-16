@@ -46,7 +46,9 @@ See `docs/DECISIONS.md` (2026-07-17) for why.
 
 ## Layout
 
-- `migrations/` — hand-written SQL migrations, applied in filename (timestamp) order.
+- `migrations/` — hand-written SQL migrations, applied in filename (timestamp) order. srd_items
+  holds the full item catalog; srd_weapons / srd_armor normalize the weapon- and armor-specific
+  stats out of it (`20260717120000_split_srd_weapons_armor.sql`), keyed 1:1 to `srd_items.key`.
 - `seed/ingest-srd.mjs` — fetches SRD 5.2.1 content from the Open5e API and generates `seed.sql`.
   Re-run it (`node supabase/seed/ingest-srd.mjs`) to refresh from upstream, then run
   `seed/apply-seed.mjs` (see above) to push the refreshed data.

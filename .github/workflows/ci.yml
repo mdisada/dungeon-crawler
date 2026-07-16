@@ -24,6 +24,26 @@ jobs:
       - run: npm run test
       - run: npm run build
 
+  # Placeholder until the first engine lands (Phase 5 Dice/Check or Phase 7 Combat/Effects/
+  # Budget/Progression - see DEVELOPMENT-PLAN.md). packages/rules is deliberately source-empty
+  # (see its README) - `tsc --noEmit` errors on an empty `src` (no inputs) and `vitest run` fails
+  # outright on zero test files, so both are intentionally omitted rather than faked with a
+  # placeholder source file or masked with passWithNoTests (the red flag root CLAUDE.md warns
+  # about). This job only verifies deps install cleanly; add typecheck + test once src/ exists.
+  rules:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/rules
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/rules/package-lock.json
+      - run: npm ci
+
   # Runs on GitHub's hosted runner, which has Docker regardless of the dev machine (which has
   # none - see docs/DECISIONS.md 2026-07-17). This is the "migrations apply cleanly from an
   # empty database" check; day-to-day schema changes go to the real project via

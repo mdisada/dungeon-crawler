@@ -100,30 +100,39 @@ bug in the SRD items ingestion (see BUILT/AI TESTS below and `docs/DECISIONS.md`
 - [x] SQL editor: `select category, count(*) from srd_items group by category order by 2 desc;` — confirm a real category breakdown (Weapon, Armor, Adventuring Gear, ...), not one giant 'gear'.
 - [x] In frontend/: `npm run dev`, confirm the app still loads (sign-in screen / existing shell).
 - [x] In frontend/: `npm run test`, confirm it passes on your machine too.
-- [ ] Push this branch / open a PR and watch the new GitHub Actions "CI" workflow - confirm both
+- [x] Push this branch / open a PR and watch the new GitHub Actions "CI" workflow - confirm both
       the `frontend` and `supabase-migrations` jobs go green (this one still uses Docker, but on
       GitHub's runner, not yours).
-- [ ] Skim NOTICE.md - is the wording fine as a starting point?
+- [x] Skim NOTICE.md - is the wording fine as a starting point?
 
 **YOUR TASKS:**
 
-- [ ] Double check the OpenRouter spend limit is really set (a 30-second dashboard glance),
+- [x] Double check the OpenRouter spend limit is really set (a 30-second dashboard glance),
       since Phase 1 (F1) depends on it. (Migrations + seed are already live in your project with
       your go-ahead, and pgvector was independently confirmed - neither needs a task from you.)
 
 **DESIGN REVIEW:**
 
-- [ ] NOTICE.md attribution - is repo-root NOTICE.md + a future in-app Credits page enough, or
+- [x] NOTICE.md attribution - is repo-root NOTICE.md + a future in-app Credits page enough, or
       should it be more prominent (e.g. footer link) from the start?
-- [ ] OK to leave packages/rules out of CI until it has real engines (Phase 5/7), or do you want
-      a placeholder job now?
-- [ ] srd_items now comes from a single Open5e endpoint (not three) with its own category
+- [x] OK to leave packages/rules out of CI until it has real engines (Phase 5/7), or do you want
+      a placeholder job now?: NOTES: PUT PLACEHOLDERS PLEASE. Done: added a `rules` job to
+      ci.yml (checkout + `npm ci` only). Both `tsc --noEmit` (errors on empty `src`, "no inputs
+      were found") and `npm run test` (vitest run fails outright with zero test files) were tried
+      and intentionally left out rather than faked with a placeholder source file - add both once
+      the first engine lands (Phase 5/7) and packages/rules/src actually exists.
+- [x] srd_items now comes from a single Open5e endpoint (not three) with its own category
       taxonomy (Weapon/Armor/Adventuring Gear/Tools/...) folded into one table with a jsonb
-      payload - fine for now, or split into normalized weapon/armor tables before F2/F9 need it?
-- [ ] packages/rules is fully standalone (own package.json, no workspace link to frontend) per
+      payload - fine for now, or split into normalized weapon/armor tables before F2/F9 need it?:
+      NOTES: SPLIT NOW. Done: `20260717120000_split_srd_weapons_armor.sql` adds srd_weapons (77
+      rows) and srd_armor (25 rows), each keyed 1:1 to srd_items.key via FK, populated from the
+      same /items/ payload's nested `weapon`/`armor` objects. srd_items itself is unchanged (still
+      the full 440-row catalog). ingest-srd.mjs updated to emit both new insert blocks;
+      seed.sql regenerated locally. **Not yet applied to the live project** - needs
+      `supabase db push` + `apply-seed.mjs` per supabase/README.md; ask before running.
+- [x] packages/rules is fully standalone (own package.json, no workspace link to frontend) per
       your call - when Edge Functions need to import engine logic from it later, that wiring
       (npm publish / vendoring / Deno npm: specifier) gets figured out then, not now. Flagging so
       it's not a surprise.
 
-**GATE:** reply PASS / PASS WITH NOTES / CHANGES — all boxes above must be checked, or checked
-off with a `— SKIPPED (date): reason` note, for PASS to be valid (see `docs/CHECKPOINTS/README.md`).
+**GATE:** PASS WITH NOTES
