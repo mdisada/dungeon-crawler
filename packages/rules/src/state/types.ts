@@ -38,6 +38,36 @@ export interface SpeakerSlot {
   imageUrl: string | null
 }
 
+/**
+ * Live table prompt (F07 SS3.4): solo check waiting on its actor, group check collecting
+ * rolls, or an open assist slot. Shape defined in ../play/types.ts; carried in GameState as
+ * plain data. One at a time - rulings block the pipeline.
+ */
+export interface PendingPromptState {
+  kind: 'check' | 'group' | 'assist'
+  id: string
+  skill: string
+  reason: string
+  deadline: string
+  actorCharacterId?: string
+  advDis?: 'none' | 'advantage' | 'disadvantage'
+  memberCharacterIds?: string[]
+  rolled?: { characterId: string; total: number; success: boolean }[]
+  primaryCharacterId?: string
+  primarySkill?: string
+  effect?: 'enable' | 'bonus'
+}
+
+/** Social opening chip (F10 SS3.7) - consumable by any PC except the one who unlocked it. */
+export interface OpeningState {
+  id: string
+  unlockedBy: string
+  npcId: string
+  skill: string
+  dcMod: number
+  hint: string
+}
+
 export interface DialogueState {
   /** Bounded history, newest last (scroll-up history in the renderers). */
   lines: DialogueLine[]
@@ -45,6 +75,14 @@ export interface DialogueState {
   activeLineId: string | null
   /** Half-body portraits on stage in roleplay mode. */
   speakers: SpeakerSlot[]
+  /** "DM is thinking" indicator while a blocking agent call runs (F07 SS4). */
+  typing: boolean
+  /** The one live check/assist prompt, or null. */
+  pending: PendingPromptState | null
+  /** Scene-scoped social openings; cleared when the encounter ends. */
+  openings: OpeningState[]
+  /** PC the current speaker is addressing directly (F10 SS3.7 thumbnail highlight). */
+  addressedCharacterId: string | null
 }
 
 export interface HpState {
@@ -124,12 +162,102 @@ export interface SessionState {
   recap: string | null
 }
 
+/** Proposal audit entry surfaced in the DM tray (F07 SS4; read-only until Phase 10). */
+export interface ProposalEntry {
+  id: string
+  type: string
+  status: string
+  summary: string
+  createdAt: string
+}
+
+/** Standing automation policy for assist mode (Slice 2): what the AI may send unreviewed. */
+export interface DmSettingsState {
+  /** true = NPC replies/narration auto-send; false = gist review console gates them. */
+  autoDialogue: boolean
+  /** true = check outcomes stand; false = the DM confirms/flips each result (Slice 4). */
+  autoChecks: boolean
+}
+
+export interface ReviewCandidate {
+  id: string
+  /** One-sentence direction for the reply, not the full line. */
+  gist: string
+}
+
+export interface NpcReplyReview {
+  id: string
+  kind: 'npc_reply'
+  npcId: string
+  npcName: string
+  utterance: { actorCharacterId: string; actorName: string; text: string }
+  checkResult: { skill: string; success: boolean; margin: number } | null
+  candidates: ReviewCandidate[]
+  createdAt: string
+}
+
+/** Slice 3: gated narration beat (do-outcomes, fail-forwards, narrate-next). */
+export interface NarrationReview {
+  id: string
+  kind: 'narration'
+  /** Console heading, e.g. "Action outcome" or "Story narration". */
+  label: string
+  /** Narrator base prompt; the chosen gist is prepended as the direction on expansion. */
+  prompt: string
+  candidates: ReviewCandidate[]
+  createdAt: string
+}
+
+/**
+ * Slice 4: a rolled check outcome awaiting the DM's ruling (assist + autoChecks off). The
+ * check stash stays in dm.conversation.pendingContext until accept/flip resumes the flow.
+ */
+export interface CheckRulingReview {
+  id: string
+  kind: 'check_ruling'
+  actorName: string
+  skill: string
+  total: number
+  dc: number
+  success: boolean
+  margin: number
+  /** Human summary, e.g. "14 vs DC 15" or "group: 2/3 passed, needed 2". */
+  detail: string
+  createdAt: string
+}
+
+/**
+ * Pending review (assist mode): gist reviews propose 3 directions the DM picks/steers from;
+ * check rulings ask accept/flip. Player intents 409 while this is set - one review at a
+ * time, cleared on send/dismiss/ruling.
+ */
+export type PendingReviewState = NpcReplyReview | NarrationReview | CheckRulingReview
+
+/** Conversation State (F10 SS3): server-side scene memory, DM-visible only. */
+export interface ConversationState {
+  topicStack: string[]
+  /** Ingredient ids revealed this scene. */
+  revealedThisScene: string[]
+  /** Stashed context for the in-flight check prompt (what to do once it resolves). */
+  pendingContext: Json | null
+}
+
 /** DM-only domains, stripped from player resyncs and broadcast on dm:{id} only. */
 export interface DmState {
   /** Full objective checklist incl. hidden ones (DM overview tab). */
   objectives: { id: string; title: string; hidden: boolean; state: string }[]
-  /** F07 proposal tray arrives in Phase 5; typed as an empty list until then. */
-  proposals: Json[]
+  /** Proposal audit trail, newest first (bounded). */
+  proposals: ProposalEntry[]
+  /**
+   * Consistency fact base (F07 SS6): deterministic world facts the checker validates drafts
+   * against, e.g. npcStates: { [npcId]: 'dead' | 'alive' | 'absent' }. Set via dm_command
+   * overrides now; F8/F9 write these mechanically in later phases.
+   */
+  facts: { npcStates: { [npcId: string]: string } }
+  conversation: ConversationState
+  /** Optional: absent in states persisted before Slice 2 - read via dmSettings()/pendingReview helpers. */
+  settings?: DmSettingsState
+  pendingReview?: PendingReviewState | null
 }
 
 export interface GameState {
@@ -173,11 +301,26 @@ export function initialGameState(): GameState {
       musicTrack: null,
       day: 1,
     },
-    dialogue: { lines: [], activeLineId: null, speakers: [] },
+    dialogue: {
+      lines: [],
+      activeLineId: null,
+      speakers: [],
+      typing: false,
+      pending: null,
+      openings: [],
+      addressedCharacterId: null,
+    },
     combat: null,
     players: { list: [] },
     objectives: { currentId: null, list: [] },
     session: { id: null, index: 0, status: 'lobby', recap: null },
-    dm: { objectives: [], proposals: [] },
+    dm: {
+      objectives: [],
+      proposals: [],
+      facts: { npcStates: {} },
+      conversation: { topicStack: [], revealedThisScene: [], pendingContext: null },
+      settings: { autoDialogue: false, autoChecks: false },
+      pendingReview: null,
+    },
   }
 }

@@ -267,12 +267,12 @@ Proposal log analytics (accept/edit/reject rates per agent → Full-AI readiness
 1. **F1 + F2 + schema foundations** (characters, adventures, objectives, ingredients, event log, proposal log)
 2. **F3 + F4** — content generation exercised offline where latency and mistakes are cheap
 3. **F5 + F6 shell + Scene Manager + Realtime sync** with dummy content
-4. **F7 + F10** — AI-Assist live play; human console catches AI mistakes while prompts mature
+4. **F7 + F10** — live play with proposals auto-approved (full-AI behavior, every proposal still logged); the human DM console / AI-Assist UX is deferred to step 9 (decided 2026-07-18 — the creator is not a DM; see `docs/DECISIONS.md`)
 5. **F8** — loop system layered onto live play
 6. **F9 + F11** — combat, map, progression
 7. **F12 + F13 hardening** — streaming TTS, image pipeline, RAG tuning
-8. **F14** — Full-AI mode, gated on F15 telemetry
-9. **F15** — built incrementally from step 1 (logging is day-one; dashboards last)
+8. **F14** — Full-AI mode hardening (policy table, degradation ladder, safety tools), gated on F15 telemetry from the auto-approve play in steps 4–7
+9. **F15 dashboards + AI-Assist mode** — F15 built incrementally from step 1 (logging is day-one; dashboards last); the DM console / proposal tray UX lands here
 
 ---
 

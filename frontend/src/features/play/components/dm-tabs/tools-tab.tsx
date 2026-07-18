@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { supabase } from '@/lib/supabase'
-import { cn } from '@/lib/utils'
 
-import { admitMember, createCheckpoint, demoStep, endSession, restoreCheckpoint } from '../../api/session'
-import { listLobbyMembers } from '../../api/lobby'
-import type { LobbyMember } from '../../types'
+import { createCheckpoint, createGenericNpc, demoStep, endSession, restoreCheckpoint } from '../../api/session'
+import { fetchGuideNpcs } from '../../api/story'
+import type { GuideNpc } from '../../api/story'
 import { usePlay } from '../../hooks/use-play-context'
+import { DmDiceTab } from './dice-tab'
+import { NpcStateControl } from './npc-state-control'
 
 interface CheckpointRow {
   id: string
@@ -23,12 +25,13 @@ interface EventRow {
   created_at: string
 }
 
-/** F06 SS5 Overview: objectives checklist, players/NPC status, session log, checkpoints, demo. */
-export function DmOverviewTab() {
+/** DM Tools tab: session controls, dice, checkpoints, world facts, generic NPC, session log. */
+export function DmToolsTab() {
   const { adventure, state, version } = usePlay()
-  const [members, setMembers] = useState<LobbyMember[]>([])
   const [checkpoints, setCheckpoints] = useState<CheckpointRow[]>([])
   const [events, setEvents] = useState<EventRow[]>([])
+  const [npcs, setNpcs] = useState<GuideNpc[]>([])
+  const [roleHint, setRoleHint] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null)
@@ -36,7 +39,6 @@ export function DmOverviewTab() {
   useEffect(() => {
     let cancelled = false
     const load = () => {
-      void listLobbyMembers(adventure.id).then((rows) => !cancelled && setMembers(rows))
       void supabase
         .from('checkpoints')
         .select('id, label, kind, created_at')
@@ -51,6 +53,9 @@ export function DmOverviewTab() {
         .order('id', { ascending: false })
         .limit(25)
         .then(({ data }) => !cancelled && setEvents((data ?? []) as EventRow[]))
+      void fetchGuideNpcs(adventure.id)
+        .then((rows) => !cancelled && setNpcs(rows))
+        .catch(() => undefined)
     }
     load()
     const timer = setInterval(load, 15_000)
@@ -72,54 +77,9 @@ export function DmOverviewTab() {
     }
   }
 
-  const spectators = members.filter((m) => m.spectator)
-
   return (
     <div className="flex flex-col gap-4 text-sm">
       {error && <p className="text-destructive">{error}</p>}
-
-      <section aria-label="Objectives">
-        <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Objectives</h3>
-        <ul className="flex flex-col gap-1">
-          {(state.dm?.objectives ?? []).map((o) => (
-            <li key={o.id} className="flex items-center gap-2">
-              {/* Manual completion override lands with F07's override events (Phase 5). */}
-              <input type="checkbox" checked={o.state === 'completed'} readOnly aria-label={o.title} />
-              <span className={cn(o.hidden && 'italic text-muted-foreground')}>
-                {o.title}
-                {o.hidden && ' (hidden)'}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section aria-label="Players">
-        <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Players</h3>
-        <ul className="flex flex-col gap-1">
-          {state.players.list.map((p) => (
-            <li key={p.characterId} className="flex items-center justify-between">
-              <span>{p.name}</span>
-              <span className="text-xs text-muted-foreground">
-                {p.hp.current}/{p.hp.max} HP{p.conditions.length > 0 ? ` · ${p.conditions.join(', ')}` : ''}
-              </span>
-            </li>
-          ))}
-        </ul>
-        {spectators.length > 0 && (
-          <div className="mt-2">
-            <p className="text-xs text-muted-foreground">Waiting to be admitted:</p>
-            {spectators.map((m) => (
-              <div key={m.id} className="mt-1 flex items-center justify-between">
-                <span>{m.characterName ?? 'New player'}</span>
-                <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void run('admit', () => admitMember(adventure.id, m.id))}>
-                  Admit
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
 
       <section aria-label="Session controls" className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void run('checkpoint', () => createCheckpoint(adventure.id))}>
@@ -135,6 +95,43 @@ export function DmOverviewTab() {
             End session
           </Button>
         )}
+      </section>
+
+      <section aria-label="Dice">
+        <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Dice</h3>
+        <DmDiceTab />
+      </section>
+
+      <section aria-label="World facts">
+        <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">World facts</h3>
+        <p className="mb-1 text-xs text-muted-foreground">
+          Mark an NPC dead/absent - the consistency pass blocks drafts that contradict it.
+        </p>
+        <NpcStateControl adventureId={adventure.id} npcs={npcs} busy={busy !== null} onError={setError} />
+      </section>
+
+      <section aria-label="Generic NPC">
+        <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Generic NPC</h3>
+        <div className="flex gap-2">
+          <Input
+            value={roleHint}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRoleHint(e.target.value)}
+            placeholder="shopkeeper, guard, barmaid…"
+            aria-label="Generic NPC role"
+          />
+          <Button
+            size="sm"
+            disabled={state.session.status !== 'active' || busy !== null || !roleHint.trim()}
+            onClick={() =>
+              void run('generic', async () => {
+                await createGenericNpc(adventure.id, roleHint.trim())
+                setRoleHint('')
+              })
+            }
+          >
+            {busy === 'generic' ? 'Creating…' : 'Create'}
+          </Button>
+        </div>
       </section>
 
       <section aria-label="Checkpoints">

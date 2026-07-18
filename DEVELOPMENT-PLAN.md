@@ -140,12 +140,23 @@ Two sub-checkpoints; F4 is the highest content-risk feature in the project.
 **Design review — the big visual one:** VN layout (portrait positions, text box) approved? Map usability (pan/zoom/drag) approved? Sidebar information density? **Changes to these layouts are last-cheap here.**
 **Gate:** two real clients stay in sync through all scene modes with dummy content; you sign off the three renderers.
 
----### PHASE 5 — F7 + F10 Live Orchestration & Social Encounters (AI-Assist)
+---
+
+### PHASE 5 — F7 + F10 Live Orchestration & Social Encounters (Full-AI-first)
+
 The first phase where the game is actually played with AI.
-**AI-test:** router classification fixture suite (fast-path never hits LLM — usage_log assertion); state_version race test; DC clamping; proposal lifecycle; reveal-gating adversarial test; consistency-block seeded test; cooperation resolution fixtures (group check with idle auto-roll, assisted check both variants + timeouts, assist-skill-exists property test, social-opening emit/consume/expiry with self-consume blocked).
-**Could not verify:** dialogue quality, latency feel, whether the proposal tray workflow is comfortable at the table; whether cooperation prompts read as invitations or nagging.
-**Your tasks:** run a 30–60 min solo AI-assist roleplay session on your generated adventure (~$1–3, authorized): free-text actions, influence checks, "Narrate the next story" options flow, one generic on-the-fly NPC, at least one override and one proposal edit; listen to streaming TTS with your cloned voices; note every moment the AI felt slow or wrong. Then bring a second account or a friend for ~15 min of two-player testing: one group check, one assisted check (both enable and bonus if possible), one insight→opening handoff (PC A's Insight success eases PC B's Persuasion), and confirm the NPC directs at least one question at the quieter player.
-**Design review:** latency verdict vs the 4s target (merge Adjudicator+Narrator? — F7 open question); proposal tray ergonomics (auto-apply timers right?); NPC dialogue tone per model — is MiMo the right narrator or reroute?
+
+**Resequencing note (2026-07-18, Phase 4 gate — see `docs/DECISIONS.md`):** the user is not a
+DM, so the human-DM experience is on hold and **AI-Assist mode moves to Phase 10**. The F07
+proposal pipeline is still built in full here (it is the architecture — one codebase, one flag),
+but the tested default is `approval_mode: auto`: proposals auto-apply with full `proposal_log`
+audit rows, exactly as F14 §"auto_applied" describes. The DM console / proposal tray UX (F07 §5)
+and human accept/edit/reject flows are deferred to Phase 10; the Phase 4 docked-tray scaffold
+stays dormant.
+**AI-test:** router classification fixture suite (fast-path never hits LLM — usage_log assertion); state_version race test; DC clamping; proposal lifecycle incl. auto-apply + `proposal_log` audit rows; reveal-gating adversarial test; consistency-block seeded test; cooperation resolution fixtures (group check with idle auto-roll, assisted check both variants + timeouts, assist-skill-exists property test, social-opening emit/consume/expiry with self-consume blocked).
+**Could not verify:** dialogue quality, latency feel, whether auto-applied AI calls feel right without a human backstop; whether cooperation prompts read as invitations or nagging.
+**Your tasks:** run a 30–60 min solo roleplay session on your generated adventure with proposals auto-applied (~$1–3, authorized): free-text actions, influence checks, "Narrate the next story" options flow, one generic on-the-fly NPC; listen to streaming TTS with your cloned voices; note every moment the AI felt slow or wrong, then skim the session's `proposal_log` for calls you'd have rejected. Then bring a second account or a friend for ~15 min of two-player testing: one group check, one assisted check (both enable and bonus if possible), one insight→opening handoff (PC A's Insight success eases PC B's Persuasion), and confirm the NPC directs at least one question at the quieter player.
+**Design review:** latency verdict vs the 4s target (merge Adjudicator+Narrator? — F7 open question); NPC dialogue tone per model — is MiMo the right narrator or reroute?
 **Gate:** you complete a social scene you'd describe as "actually fun," and the model-map decisions are recorded.
 
 ---
@@ -179,9 +190,12 @@ The first phase where the game is actually played with AI.
 
 ---
 
-### PHASE 9 — F14 Full-AI Mode (gated by F15 data)
+### PHASE 9 — F14 Full-AI Mode hardening (gated by F15 data)
 
-**Pre-gate (before building):** Claude Code presents the F15 trust report from all your assist-mode play (acceptance rates per agent vs the F14 §7 thresholds). **If thresholds aren't met, the correct move is more assist-mode play and prompt tuning, not building Full-AI anyway** — Claude Code must say so.
+*(Resequenced 2026-07-18: auto-approve behavior runs from Phase 5 onward, so this phase is
+hardening — policy table, degradation ladder, X-card, wipe paths — not first contact with
+Full-AI.)*
+**Pre-gate (before building):** Claude Code presents the F15 trust report from all your auto-approve play in Phases 5–8. With no human accept/edit/reject decisions, F14 §7's acceptance-rate thresholds can't be computed as written — the report instead uses incident-log rates, consistency-block frequency, and your flagged "the AI got this wrong" moments, and Claude Code proposes a reworked F14 §7 threshold set at this pre-gate for your approval. **If the data says the agents aren't trustworthy, the correct move is more play and prompt tuning, not hardening Full-AI anyway** — Claude Code must say so.
 **AI-test:** policy-table resolution tests; conservative-objective fixture; degradation-ladder fault injection; X-card broadcast timing; wipe-path fixtures.
 **Your tasks:** run one complete full-AI one-shot solo, then one with 2–3 friends (the real readiness test); deliberately try to break it: claim false completions ("we already killed Volgarth"), go wildly off-plot, disconnect mid-combat; press the X-card once. During the friends run, watch the cooperation systems operate unattended: a group check auto-rolling for an idle player, an assist prompt resolving on timeout, a split-clue set pooling, and the F15 cooperation telemetry (consumed/offered ratios, spotlight distribution) populating afterward — this data is your evidence the full-AI DM runs a *party*, not four parallel solo games.
 **Design review:** the per-type policy table — anything you'd move from auto back to never? Defeat-consequence vs Hardcore default?
@@ -189,11 +203,18 @@ The first phase where the game is actually played with AI.
 
 ---
 
-### PHASE 10 — F15 dashboards (final polish; logging existed since Phase 1)
+### PHASE 10 — F15 dashboards + AI-Assist mode (moved here 2026-07-18)
 
-**AI-test:** metric computation fixtures; replay byte-identity; trace reconstruction.
-**Your tasks:** review the creator-facing panels — is the cost breakdown what you want to see? Run one replay of a Phase 7 combat.
-**Design review:** what to expose to other DMs eventually (encounter difficulty report — v1.1?).
+F15 final polish (logging existed since Phase 1) plus the human-DM experience deferred at the
+Phase 4 gate: the DM console / proposal tray UX (F07 §5), accept/edit/reject flows, and
+assist-mode-specific behaviors (proposal expiry, F09's 8s fast-proposal, F04/F08 batch-approve
+UIs). The backend proposal pipeline already exists from Phase 5 — this phase builds the human
+surface on it. How a human-DM game should flow is an open design question (the user is not a
+DM); expect a dedicated design pass, possibly with an outside DM's input, before building.
+
+**AI-test:** metric computation fixtures; replay byte-identity; trace reconstruction; proposal tray lifecycle (surface → accept/edit/reject → decision recorded → committed via `apply_diff`; expiry on supersession).
+**Your tasks:** review the creator-facing panels — is the cost breakdown what you want to see? Run one replay of a Phase 7 combat. Run (or recruit a DM friend to run) one short assist-mode session exercising at least one override and one proposal edit.
+**Design review:** the assist-mode DM flow itself (held since Phase 4 — first-class review here); what to expose to other DMs eventually (encounter difficulty report — v1.1?).
 **Gate:** you can answer "what did last session cost and which agent do I trust least" from the UI in under a minute. Ship it.
 
 ---

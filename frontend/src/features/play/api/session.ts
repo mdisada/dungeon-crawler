@@ -93,3 +93,90 @@ export function demoStep(
 ): Promise<{ done: boolean; step: number; total: number; label?: string }> {
   return callSession({ action: 'demo_step', adventure_id: adventureId })
 }
+
+// --- Phase 5 (F07 + F10): live intents -------------------------------------------------------
+
+export interface IntentPayload {
+  kind: 'say' | 'do' | 'roll'
+  text?: string
+  skill?: string
+  target_id?: string
+}
+
+export function sendPlayerIntent(
+  adventureId: string,
+  intent: IntentPayload,
+): Promise<{ resolved: string; total?: number; d20?: number; modifier?: number }> {
+  return callSession({ action: 'player_intent', adventure_id: adventureId, ...intent })
+}
+
+export function rollPendingPrompt(
+  adventureId: string,
+  promptId: string,
+): Promise<{ total: number; success?: boolean; waiting?: boolean }> {
+  return callSession({ action: 'roll_pending', adventure_id: adventureId, prompt_id: promptId })
+}
+
+export function claimAssistSlot(
+  adventureId: string,
+  promptId: string,
+): Promise<{ assist_success: boolean; resolved: string }> {
+  return callSession({ action: 'claim_assist', adventure_id: adventureId, prompt_id: promptId })
+}
+
+export function resolveExpiredPrompt(adventureId: string, promptId: string): Promise<{ resolved: string }> {
+  return callSession({ action: 'resolve_pending', adventure_id: adventureId, prompt_id: promptId })
+}
+
+/** Gated (assist + auto-dialogue off): resolved 'review_staged', no text - the console takes over. */
+export function narrateNextStory(
+  adventureId: string,
+  prompt?: string,
+): Promise<{ options: string[]; chosen?: number; text?: string; resolved?: string }> {
+  return callSession({ action: 'narrate_next', adventure_id: adventureId, prompt })
+}
+
+export function startSocialScene(adventureId: string, npcIds: string[]): Promise<{ staged: string[] }> {
+  return callSession({ action: 'start_social', adventure_id: adventureId, npc_ids: npcIds })
+}
+
+export function endSocialEncounter(adventureId: string): Promise<unknown> {
+  return callSession({ action: 'end_encounter', adventure_id: adventureId })
+}
+
+export function createGenericNpc(adventureId: string, roleHint: string): Promise<{ npc_id: string; name: string }> {
+  return callSession({ action: 'generic_npc', adventure_id: adventureId, role_hint: roleHint })
+}
+
+// --- Slice 2: DM review console ---------------------------------------------------------------
+
+export type ReviewDecision =
+  | { choice: 'pick'; candidate_id: string }
+  | { choice: 'steer'; gist: string }
+  | { choice: 'regenerate' }
+  | { choice: 'auto' }
+  | { choice: 'dismiss' }
+  | { choice: 'accept' }
+  | { choice: 'flip' }
+
+export function decideReview(
+  adventureId: string,
+  reviewId: string,
+  decision: ReviewDecision,
+): Promise<{ resolved: string }> {
+  return callSession({ action: 'review_decide', adventure_id: adventureId, review_id: reviewId, ...decision })
+}
+
+export function setAutoSettings(
+  adventureId: string,
+  patch: { autoDialogue?: boolean; autoChecks?: boolean },
+): Promise<{ settings: { autoDialogue: boolean; autoChecks: boolean } }> {
+  return callSession({
+    action: 'player_intent',
+    adventure_id: adventureId,
+    kind: 'dm_command',
+    command: 'set_auto',
+    ...(patch.autoDialogue !== undefined ? { auto_dialogue: patch.autoDialogue } : {}),
+    ...(patch.autoChecks !== undefined ? { auto_checks: patch.autoChecks } : {}),
+  })
+}

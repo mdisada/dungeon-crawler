@@ -61,7 +61,7 @@ export function NarrationView({ scene, dialogue }: NarrationViewProps) {
 
       <div
         ref={scrollRef}
-        className="absolute inset-x-0 bottom-0 max-h-[38%] overflow-y-auto px-6 pb-6 pt-2 sm:px-16"
+        className="absolute inset-x-0 bottom-0 max-h-[38%] overflow-y-auto px-6 pb-20 pt-2 sm:px-16"
       >
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
           {history.map((line) => (

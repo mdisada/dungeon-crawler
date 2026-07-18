@@ -174,6 +174,31 @@ export async function applyAndBroadcast(
   return { state: nextState, state_version: nextVersion }
 }
 
+/**
+ * Commit wrapper for the intent pipeline (F07 SS2): rebuilds diffs from the freshest state and
+ * retries on optimistic-lock conflicts, so slow agent calls can't strand a write behind a
+ * faster concurrent intent. The builder must be pure in the state it receives.
+ */
+export async function commitDiffs(
+  service: SupabaseClient,
+  adventureId: string,
+  build: (state: GameState) => StateDiff[],
+  fx?: FxEvent[],
+  attempts = 3,
+): Promise<StateRow> {
+  let lastError: unknown
+  for (let i = 0; i < attempts; i++) {
+    const row = await loadState(service, adventureId)
+    try {
+      return await applyAndBroadcast(service, adventureId, row, build(row.state), fx)
+    } catch (err) {
+      lastError = err
+      if (!(err instanceof Error) || !err.message.includes('stale state_version')) throw err
+    }
+  }
+  throw lastError
+}
+
 export async function logEvent(
   service: SupabaseClient,
   adventureId: string,

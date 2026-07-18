@@ -131,43 +131,43 @@ COULD NOT VERIFY:
 
 YOUR TESTS:
 
-- [ ] Home shows "Demo: The Hollowbrook Vanishings" — open it, hit **Start Adventure** (guide
+- [x] Home shows "Demo: The Hollowbrook Vanishings" — open it, hit **Start Adventure** (guide
       page) and confirm the lobby modal appears over the dimmed table.
-- [ ] Pick a demo character, toggle **Ready**, hit **Start Session** — recap narration renders
+- [x] Pick a demo character, toggle **Ready**, hit **Start Session** — recap narration renders
       over the background with the timed subtitle reveal.
-- [ ] **Two-browser test (task 1):** join from a second account via the invite link, watch the
+- [x] **Two-browser test (task 1):** join from a second account via the invite link, watch the
       presence dot go green in the first browser (< 2s?), pick + ready, and confirm Start
       only unblocks at min players.
-- [ ] Walk the demo with **Demo: next step** (DM sidebar, Overview) through all 9 steps:
+- [x] Walk the demo with **Demo: next step** (DM sidebar, Overview) through all 9 steps:
       narration → roleplay (portraits swap sides, speaker dims) → battle (map + tokens +
       initiative + turn banner + "Roll initiative!" banner) → victory → downtime. Both
       browsers should track every step without refreshing.
-- [ ] In battle: drag your own token inside the highlighted range (it commits), then onto a
+- [x] In battle: drag your own token inside the highlighted range (it commits), then onto a
       red obstacle square or past your movement (snap-back + reason toast). As DM, drag any
       token. Try arrow keys on a focused token.
-- [ ] DM Overview: objectives list shows the hidden one in italics (and the player's sidebar
+- [x] DM Overview: objectives list shows the hidden one in italics (and the player's sidebar
       does NOT); create a **Checkpoint**, advance a demo step, **Restore** it — confirm the
       confirm-step, and that the player view snaps back too.
-- [ ] Player sidebar: tabs auto-switch to Combat when battle starts and back after; check the
+- [x] Player sidebar: tabs auto-switch to Combat when battle starts and back after; check the
       derived sheet numbers (saves/skills/mods) against the demo character; HP strip renders.
-- [ ] Dice tab: roll `2d6+3`, flip advantage/disadvantage, confirm bounds and history.
+- [x] Dice tab: roll `2d6+3`, flip advantage/disadvantage, confirm bounds and history.
 - [ ] Immersion tab: flip background ↔ map (both clients follow); upload an mp3 to Storage
       `music/{adventure-id}/` in Studio, hit Play, test the volume popover + mute and the
       "Enable audio" unlock if it appears.
-- [ ] End the session — the summary card shows on both clients (XP 0, cost only for you);
+- [x] End the session — the summary card shows on both clients (XP 0, cost only for you);
       dismissing lands back in the lobby.
-- [ ] Try picking the same character in a second active adventure (create/activate another,
+- [x] Try picking the same character in a second active adventure (create/activate another,
       or trust the red error) — expect the "locked to another adventure" rejection. Then
       leave with the second account and confirm its character unlocks.
-- [ ] **Phone test (task 2):** open the play page on your phone — renderers, the sidebar
+- [x] **Phone test (task 2):** open the play page on your phone — renderers, the sidebar
       drawer button, and the audio unlock gesture.
-- [ ] DM: regenerate the invite link ("New link") and confirm the old URL now fails.
+- [x] DM: regenerate the invite link ("New link") and confirm the old URL now fails.
 
 YOUR TASKS:
 
-- [ ] A second account (or a friend) for the two-browser lobby/sync test — multi-device
+- [x] A second account (or a friend) for the two-browser lobby/sync test — multi-device
       testing is on the standing "only you can do this" list.
-- [ ] Phone testing (iOS Safari especially, if available).
+- [x] Phone testing (iOS Safari especially, if available).
 - [ ] Optional: drop 1-2 CC0/licensed music files into Storage `music/{demo-adventure-id}/`
       so the music layer test is real.
 
@@ -175,14 +175,25 @@ DESIGN REVIEW:
 
 - [ ] **VN layout (last-cheap here):** portrait staging left/right with active-speaker
       scale+dim, name plate on the text box, PC thumbnails along the bottom — approved, or
-      reposition before Phase 5 builds dialogue on top of it?
+      reposition before Phase 5 builds dialogue on top of it? — SKIPPED (2026-07-18):
+      provisionally accepted ("not breaking yet"); user will add design inputs in later phases.
 - [ ] **Map usability:** wheel-zoom centered on cursor + drag-pan + drag-to-move tokens with
       snap-back — right feel? Token size (1 cell) and range highlight readable at your
-      resolution?
+      resolution? — SKIPPED (2026-07-18): provisionally accepted ("not breaking yet"); user
+      will add design inputs in later phases.
 - [ ] **Sidebar density:** player tabs and DM Overview both pack a lot — anything the header
       should surface instead (e.g. current objective on the DM side), anything to drop?
+      — SKIPPED (2026-07-18): human-DM flow design on hold — user is not a DM; AI-Assist
+      mode (DM console UX) moved to Phase 10. Player-side feedback to come in later phases.
 - [ ] **Full-screen play:** the play page covers the navbar entirely (immersive fixed layout;
       leaving is via Home links in error states / ending the session). OK, or do you want a
-      persistent exit affordance in the header?
+      persistent exit affordance in the header? — SKIPPED (2026-07-18): provisionally
+      accepted ("not breaking yet"); user will add design inputs in later phases.
 
-GATE: reply PASS / PASS WITH NOTES / CHANGES
+GATE: PASS WITH NOTES (2026-07-18)
+
+User's notes: not a dungeon master, so the human-DM flow design is on hold — AI-Assist mode
+moves to Phase 10 (see `docs/DECISIONS.md` 2026-07-18 and the resequenced `DEVELOPMENT-PLAN.md`
+phases 5/9/10). The design choices above are not breaking yet; more inputs will come during the
+next phases. Open at gate with no stated reason (carried forward, re-tested with F12 in Phase 8):
+the Immersion-tab music test and the optional CC0 music upload task.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { validateAbilityBonusAssignment } from './abilities'
-import { validatePointBuy, validateStandardArrayAssignment } from './ability-generation'
+import { validateAbilityBonusAssignment } from './abilities.ts'
+import { validatePointBuy, validateStandardArrayAssignment } from './ability-generation.ts'
 
 describe('validateStandardArrayAssignment', () => {
   it('accepts any permutation of the standard array', () => {

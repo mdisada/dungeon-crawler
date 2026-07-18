@@ -1,12 +1,18 @@
-// Phase 4 (F05 + F06 SS6): the Session Manager. Lobby membership, character locking, session
-// lifecycle, checkpoints, role-filtered resync, move intents, and the scripted demo driver.
-// Every state mutation is service-role and server-validated - RLS gives clients read access
-// only, so this function is the one writer (F07's Adventure Manager inherits the seat).
+// Phase 4 (F05 + F06 SS6) + Phase 5 (F07 + F10): the Session Manager and Adventure Manager in
+// one seat. Lobby membership, character locking, session lifecycle, checkpoints, role-filtered
+// resync, move intents, the scripted demo driver, and - since Phase 5 - the live intent
+// pipeline (router, Adjudicator, NPC dialogue, proposals, pending-check lifecycle). Every
+// state mutation is service-role and server-validated; this function is the one writer.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import { corsHeaders } from '../_shared/cors.ts'
+import { playerIntent } from './intent.ts'
 import { endSession, manualCheckpoint, restoreCheckpoint, startSession } from './lifecycle.ts'
 import { activate, admit, join, leave, pickCharacter, regenInvite, setReady } from './membership.ts'
+import { narrateNext } from './narration.ts'
+import { createGenericNpc, endEncounter, reviewDecide, startSocial } from './npc-dialogue.ts'
+import { decideProposal } from './proposals.ts'
+import { claimAssist, resolvePending, rollPending } from './prompts.ts'
 import { demoStep, moveIntent, resync, setScene } from './state.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
@@ -114,6 +120,61 @@ Deno.serve(async (req) => {
         break
       case 'demo_step':
         result = requireAdventure() ?? (await demoStep(service, adventureId, userId))
+        break
+      case 'player_intent':
+        result = requireAdventure() ?? (await playerIntent(service, adventureId, userId, body))
+        break
+      case 'roll_pending':
+        result =
+          requireAdventure() ??
+          (body.prompt_id
+            ? await rollPending(service, adventureId, userId, String(body.prompt_id))
+            : { status: 400, body: { error: 'prompt_id required' } })
+        break
+      case 'claim_assist':
+        result =
+          requireAdventure() ??
+          (body.prompt_id
+            ? await claimAssist(service, adventureId, userId, String(body.prompt_id))
+            : { status: 400, body: { error: 'prompt_id required' } })
+        break
+      case 'resolve_pending':
+        result =
+          requireAdventure() ??
+          (body.prompt_id
+            ? await resolvePending(service, adventureId, userId, String(body.prompt_id))
+            : { status: 400, body: { error: 'prompt_id required' } })
+        break
+      case 'narrate_next':
+        result =
+          requireAdventure() ??
+          (await narrateNext(service, adventureId, userId, body.prompt ? String(body.prompt) : undefined))
+        break
+      case 'start_social':
+        result =
+          requireAdventure() ??
+          (await startSocial(service, adventureId, userId, Array.isArray(body.npc_ids) ? body.npc_ids.map(String) : []))
+        break
+      case 'end_encounter':
+        result = requireAdventure() ?? (await endEncounter(service, adventureId, userId))
+        break
+      case 'review_decide':
+        result = requireAdventure() ?? (await reviewDecide(service, adventureId, userId, body))
+        break
+      case 'generic_npc':
+        result =
+          requireAdventure() ?? (await createGenericNpc(service, adventureId, userId, String(body.role_hint ?? '')))
+        break
+      case 'decide_proposal':
+        result =
+          requireAdventure() ??
+          (body.proposal_id && ['accepted', 'rejected', 'edited'].includes(String(body.verdict))
+            ? await decideProposal(
+                service, adventureId, userId, String(body.proposal_id),
+                String(body.verdict) as 'accepted' | 'rejected' | 'edited',
+                (body.edit_diff ?? null) as never,
+              )
+            : { status: 400, body: { error: 'proposal_id and verdict (accepted|rejected|edited) required' } })
         break
       default:
         result = { status: 400, body: { error: `Unknown action: ${action}` } }

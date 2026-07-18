@@ -41,18 +41,24 @@ Feature doc index:
 
 **Phase:** Phase 0 gated PASS WITH NOTES, Phase 1 gated PASS, Phase 2 gated PASS, Phase 3a gated
 PASS (all 2026-07-17), Phase 3b gated PASS (2026-07-18 — incl. mid-checkpoint amendments 1
-[multiple fluid endings] and 2 [entity registry + closed-vocabulary ending signals]; see the
-checkpoint and `docs/DECISIONS.md` addenda). See `docs/CHECKPOINTS/` for archived checkpoints.
+[multiple fluid endings] and 2 [entity registry + closed-vocabulary ending signals]), Phase 4
+gated PASS WITH NOTES (2026-07-18 — AI-Assist mode moved to Phase 10, human-DM flow design on
+hold, design-review answers provisional; see `docs/DECISIONS.md`). See `docs/CHECKPOINTS/` for
+archived checkpoints. Carried over from Phase 4: the Immersion-tab music test + CC0 music upload
+— user handles music later (see §3 item 5: planned settings-page upload for music/voice); re-test
+with F12 in Phase 8.
 
-**Now working on:** `DEVELOPMENT-PLAN.md` PHASE 4 — F05 Lobby & Session Lifecycle + F06 Adventure
-Page (Live Play Frontend) with dummy content. BUILD + AI-TEST done: migrations applied live,
-`session` function deployed, 43-check live integration suite PASS, demo adventure + characters
-seeded for the main account. At CHECKPOINT (see `docs/CHECKPOINTS/PHASE4.md`), awaiting the
-user's gate verdict — the two-browser lobby test, phone test, and renderer sign-off are user
-tasks.
+**Now working on:** `DEVELOPMENT-PLAN.md` PHASE 5 — F07 Live Orchestration + F10 Social
+Encounters, Full-AI-first. BUILD + AI-TEST done: migration `20260718130000` applied live,
+`session` function redeployed with the full intent pipeline (router → Adjudicator/NPC dialogue →
+consistency → auto-applied proposals → single-writer commit), rules `play/` module (179 rules
+tests), frontend input row/check prompts/openings/DM Story tab (46 frontend tests), and the
+68-check zero-spend live integration suite PASS (plus Phase 4's 43 checks re-run green). At
+CHECKPOINT (see `docs/CHECKPOINTS/PHASE5.md`) — the real-LLM solo session and the two-player
+cooperation test are user tasks (paid, needs authorization).
 
-**Next up:** On Phase 4 PASS, PHASE 5 (F7 + F10 Live Orchestration & Social Encounters — the
-first phase where the game is actually played with AI).
+**Next up:** On Phase 5 PASS, PHASE 6 (F8 Story & Loop System). TTS moved to Phase 8 (see
+`docs/DECISIONS.md` 2026-07-18 Phase 5 BUILD entry).
 
 ---
 
@@ -74,7 +80,18 @@ first phase where the game is actually played with AI).
    protected-page guards (F05 lobby membership, F06 adventure page, any DM-only views) since
    there's no OAuth-provider identity layer to lean on — session/auth-guard correctness carries
    more weight than it would with OAuth as a second factor of "is this really the user."
-4. **No Docker locally (resolved 2026-07-17).** The user cannot install Docker, so `supabase
+4. **AI-Assist mode moved to Phase 10 (2026-07-18, Phase 4 gate).** The user is not a DM;
+   human-DM flow design is on hold. Phases 5–8 build and test with `approval_mode: auto`
+   (full-AI behavior, every proposal logged); Phase 9 is F14 hardening; the DM console /
+   proposal tray UX (F07 §5) and assist-specific behaviors land in Phase 10 with their own
+   design pass. Architecture unchanged — one pipeline, one flag.
+5. **Planned (user, 2026-07-18): music + voice-sample uploads move to the Settings page.** The
+   user will handle all music-related testing later and wants Settings to host an upload option
+   for music tracks and voice samples (a personal media library), rather than only per-adventure
+   flows (F04 narrator voice, Storage `music/{adventure_id}/`). Design/build this with F12 in
+   Phase 8; touches the F01 settings layout. Until then the music bucket + Immersion tab stay
+   untested.
+6. **No Docker locally (resolved 2026-07-17).** The user cannot install Docker, so `supabase
    start`/`db reset` (the CLI's local emulation stack) is not the dev workflow. Migrations +
    `supabase/seed.sql` are applied directly to the real, already-linked Supabase project with
    `supabase db push --include-seed --db-url <POSTGRES_URL_NON_POOLING>` — Docker-free, verified
@@ -116,17 +133,17 @@ checkpoint — the only status that means "done" per `DEVELOPMENT-PLAN.md` rule 
 | F02 | Character Page & Creator | gated | `supabase/migrations/20260717150000_create_srd_races_backgrounds.sql`, `..._create_characters.sql`, `packages/rules/src/character/`, `frontend/src/features/characters/` | Backlog (non-blocking): Cleric skill/equipment data gap in SRD source; real image-gen quality + crop-tool feel unjudged (placeholder-mode only); no RTL tests for wizard/crop tool |
 | F03 | Adventure Creation Wizard | gated | `supabase/migrations/20260717180000_create_adventures.sql`, `frontend/src/features/adventures/` (old prototype `frontend/src/features/new-campaign/` kept as F04 reference) | Backlog (non-blocking): genre/tone preset chips deferred (F03 §7 nice-to-have) |
 | F04 | Adventure Guide Pipeline & Editor | gated | `packages/rules/src/guide/` (canonical stage contracts, mirrored to `supabase/functions/_shared/guide/` via `scripts/sync-guide-shared.mjs` — CI now runs `--check`), `supabase/functions/guide-pipeline/`, `frontend/src/features/guide/`, migrations `20260717190000-200000` + `20260718090000` | Backlog (non-blocking): scenes have no editor surface (hidden scaffolding, per spec); no RTL tests for the editor; live ending scoring (Ending Steward) is F08/Phase 6 |
-| F05 | Lobby & Session Lifecycle | built, ungated | migrations `20260718110000-110200`, `supabase/functions/session/`, `frontend/src/features/play/` (lobby modal, join page), `supabase/seed/seed-demo-adventure.mjs`, `tests/integration/session-live.mjs` | Awaiting Phase 4 gate; disconnect/auto-delay combat turns + adventure-completion unlock are Phase 5/7 work |
-| F06 | Adventure Page (Live Play Frontend) | built, ungated | `frontend/src/features/play/` (3 renderers + battle map, DM/Player sidebars, `@rules/state` contract mirrored to `_shared/state`) | Awaiting Phase 4 gate; input row / proposals / TTS-synced subtitles wired to F07/F12 in later phases |
-| F07 | Live Orchestration Core | early scaffold | `backend/campaign/session_handlers.py`, `narration.py` | Needs Action Router, Adjudicator, single-writer Adventure Manager + `state_version`, proposal lifecycle, Consistency pass |
+| F05 | Lobby & Session Lifecycle | gated | migrations `20260718110000-110200`, `supabase/functions/session/`, `frontend/src/features/play/` (lobby modal, join page), `supabase/seed/seed-demo-adventure.mjs`, `tests/integration/session-live.mjs` | Disconnect/auto-delay combat turns + adventure-completion unlock are Phase 5/7 work; music playback test carried to Phase 8 |
+| F06 | Adventure Page (Live Play Frontend) | gated | `frontend/src/features/play/` (3 renderers + battle map, DM/Player sidebars, `@rules/state` contract mirrored to `_shared/state`) | Input row / TTS-synced subtitles wired to F07/F12 in later phases; proposal tray scaffold dormant until Phase 10 (AI-Assist deferral) |
+| F07 | Live Orchestration Core | built, ungated | `supabase/functions/session/` (intent/prompts/npc-dialogue/narration/proposals/agents), `packages/rules/src/play/`, migration `20260718130000`, `tests/integration/orchestration-live.mjs` | Awaiting Phase 5 gate. Braided intents + loop-mismatch flag need F8 (Phase 6); DM console/proposal tray UX is Phase 10; combat verbs 409 until F09 |
 | F08 | Story & Loop System | not started | one pacing counter (`storage.py: turns_since_last_plot_point`) | Everything: Loop Stack Manager, Loop Classifier, Beat Planner, Ingredient Pool, Hook Weaver, Meta Loop Steward |
 | F09 | Combat Engine & Tactical Map | not started | none | Everything; depends on SRD data (Phase 0) |
-| F10 | Social Encounter System | not started | flat `npcs` table re-injected into narration prompts — a seed for future NPC Agent context | Everything: VN dialogue mode, NPC Agent, disposition, influence checks |
+| F10 | Social Encounter System | built, ungated | `supabase/functions/session/npc-dialogue.ts`, `npc_dispositions`/`npc_interactions` tables, `frontend/src/features/play/` (input row, check prompts, openings, Story tab) | Awaiting Phase 5 gate. TTS deferred to Phase 8 (no provider-side voice cloning yet); multi-NPC crosstalk v1.1; interaction-memory embeddings arrive with F13 |
 | F11 | Progression System | not started | none | Everything; depends on SRD data (Phase 0) |
-| F12 | Asset & Immersion Pipeline | partial | `backend/job_queue.py`, `backend/tts.py`, audio chunk player (see §4) | Image gen (none exists), voice profile upload/cloning, music/ambience; migrate TTS to spec's gateway model if §3 item 1 requires it |
+| F12 | Asset & Immersion Pipeline | partial | `backend/job_queue.py`, `backend/tts.py`, audio chunk player (see §4) | Image gen (none exists), voice profile upload/cloning, music/ambience; settings-page music/voice-sample upload library (§3 item 5); migrate TTS to spec's gateway model if §3 item 1 requires it |
 | F13 | Memory & RAG | early scaffold | `backend/campaign/extraction.py` (flat NPC/lore extraction, no embeddings) | Embedding pipeline (Qwen3 -> pgvector), `query_lore`, Summarizer, spoiler gating |
-| F14 | Full-AI DM Mode | not started | none | Gated on F15 trust data per `DEVELOPMENT-PLAN.md` PHASE 9 — do not start early |
-| F15 | Observability & Telemetry | early scaffold | `backend/timing.py`, `frontend/src/lib/job-timer.ts`, `backend/data/usage.json` (flat, not per-trace) | Needs persisted per-trace logging (`proposal_log`, `incidents`), dashboards |
+| F14 | Full-AI DM Mode | not started | none | Auto-approve behavior arrives with F07 in Phase 5; PHASE 9 is the hardening pass (policy table, degradation, X-card), gated on F15 trust data — do not start early |
+| F15 | Observability & Telemetry | partial | `usage_log` (Phase 1), `proposals` table + cooperation/incident/consistency events in `event_log` (Phase 5), `frontend/src/lib/job-timer.ts` | Needs structured incidents table + per-trace reconstruction + dashboards (Phase 10) |
 
 ---
 

@@ -3,7 +3,7 @@ export {
   applyAbilityBonuses,
   validateAbilityBonusAssignment,
   type AbilityBonusValidation,
-} from './abilities'
+} from './abilities.ts'
 export {
   POINT_BUY_BUDGET,
   POINT_BUY_MAX_SCORE,
@@ -12,7 +12,7 @@ export {
   validatePointBuy,
   validateStandardArrayAssignment,
   type PointBuyValidation,
-} from './ability-generation'
+} from './ability-generation.ts'
 export {
   armorClass,
   hitPointsMaxAtLevelOne,
@@ -20,5 +20,5 @@ export {
   savingThrowModifier,
   skillModifier,
   type ArmorClassInput,
-} from './character-math'
-export { ABILITY_KEYS, SKILL_ABILITY, type AbilityKey, type AbilityScores, type Ruleset, type SkillName } from './types'
+} from './character-math.ts'
+export { ABILITY_KEYS, SKILL_ABILITY, type AbilityKey, type AbilityScores, type Ruleset, type SkillName } from './types.ts'

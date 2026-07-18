@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import { CHARACTER_FIXTURES } from './__fixtures__/characters'
-import { abilityModifier, applyAbilityBonuses, validateAbilityBonusAssignment } from './abilities'
+import { CHARACTER_FIXTURES } from './__fixtures__/characters.ts'
+import { abilityModifier, applyAbilityBonuses, validateAbilityBonusAssignment } from './abilities.ts'
 import {
   armorClass,
   hitPointsMaxAtLevelOne,
   proficiencyBonus,
   savingThrowModifier,
   skillModifier,
-} from './character-math'
-import { ABILITY_KEYS } from './types'
+} from './character-math.ts'
+import { ABILITY_KEYS } from './types.ts'
 
 describe('character-math golden fixtures (SRD 5.2.1 hand-calculated)', () => {
   for (const fixture of CHARACTER_FIXTURES) {

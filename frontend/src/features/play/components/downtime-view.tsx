@@ -4,10 +4,10 @@ interface DowntimeViewProps {
   dialogue: DialogueState
 }
 
-/** F06 SS3.4: parchment-style log. Input row joins the roleplay one in Phase 5 (F07 intents). */
+/** F06 SS3.4: parchment-style log; the shared IntentInputRow overlays the bottom. */
 export function DowntimeView({ dialogue }: DowntimeViewProps) {
   return (
-    <div className="flex h-full w-full justify-center overflow-y-auto bg-amber-50/95 px-4 py-8 dark:bg-stone-900">
+    <div className="flex h-full w-full justify-center overflow-y-auto bg-amber-50/95 px-4 pb-24 pt-8 dark:bg-stone-900">
       <div className="w-full max-w-2xl font-serif">
         <h2 className="mb-4 text-lg font-semibold text-stone-700 dark:text-amber-100/80">Downtime</h2>
         <div className="flex flex-col gap-3">

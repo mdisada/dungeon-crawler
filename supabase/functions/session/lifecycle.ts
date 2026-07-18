@@ -184,6 +184,10 @@ async function buildStartDiffs(
         lines: [{ id: `recap-${sessionId}`, speaker: null, npcId: null, text: recap }],
         activeLineId: `recap-${sessionId}`,
         speakers: [],
+        typing: false,
+        pending: null,
+        openings: [],
+        addressedCharacterId: null,
       }),
     },
     {
@@ -329,8 +333,29 @@ export async function endSession(service: SupabaseClient, adventureId: string, u
     .eq('id', session.id)
   assertOk(closeError, 'session close failed')
 
+  // Tear down any live scene too - a session ended mid-roleplay must not leave the stale
+  // speaker portraits/dialogue box rendering behind the ended card (lines stay as history).
   await applyAndBroadcast(service, adventureId, stateRow, [
     { domain: 'session', patch: asPatch({ status: 'ended', recap: null }) },
+    { domain: 'scene', patch: asPatch({ mode: 'narration' }) },
+    {
+      domain: 'dialogue',
+      patch: asPatch({
+        typing: false,
+        pending: null,
+        openings: [],
+        speakers: [],
+        activeLineId: null,
+        addressedCharacterId: null,
+      }),
+    },
+    {
+      domain: 'dm',
+      patch: asPatch({
+        conversation: { topicStack: [], revealedThisScene: [], pendingContext: null },
+        pendingReview: null,
+      }),
+    },
   ])
   await logEvent(service, adventureId, session.id, 'session_ended', { index: session.index })
 

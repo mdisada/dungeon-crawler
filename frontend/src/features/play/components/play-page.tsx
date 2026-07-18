@@ -10,6 +10,7 @@ import { useGameState } from '../hooks/use-game-state'
 import { useMusic } from '../hooks/use-music'
 import type { MemberAdventure } from '../types'
 import { BattleMap } from './battle-map'
+import { IntentInputRow } from './intent-input-row'
 import { DmSidebar } from './dm-sidebar'
 import { DowntimeView } from './downtime-view'
 import { FxLayer } from './fx-layer'
@@ -125,7 +126,7 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
       return <BattleMap combat={state.combat} />
     }
     if (state.scene.mode === 'roleplay') {
-      return <RoleplayView scene={state.scene} dialogue={state.dialogue} players={state.players} isSpectator={game.spectator} />
+      return <RoleplayView scene={state.scene} dialogue={state.dialogue} players={state.players} />
     }
     if (state.scene.mode === 'downtime') return <DowntimeView dialogue={state.dialogue} />
     return <NarrationView scene={state.scene} dialogue={state.dialogue} />
@@ -152,6 +153,8 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
         <div className="relative flex min-h-0 flex-1">
           <main className="relative min-w-0 flex-1">
             {renderer()}
+            {/* Live input overlay (Phase 5); battle keeps token-drag as its input until F09. */}
+            {state.scene.mode !== 'battle' && !inLobby && <IntentInputRow />}
             <FxLayer fx={game.fx} />
             {inLobby && !game.endedCard && (
               <LobbyModal adventure={adventure} userId={userId} role={game.role} isSpectator={game.spectator} />

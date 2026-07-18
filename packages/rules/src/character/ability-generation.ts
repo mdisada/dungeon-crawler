@@ -1,4 +1,4 @@
-import { ABILITY_KEYS, type AbilityScores } from './types'
+import { ABILITY_KEYS, type AbilityScores } from './types.ts'
 
 export const STANDARD_ARRAY = [15, 14, 13, 12, 10, 8] as const
 

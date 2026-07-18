@@ -1,0 +1,47 @@
+// Slice 2 review gate rules: when AI prose must pause for the DM's gist console, plus the
+// gist-agent output parser. Pure functions - shared by the session function and the frontend.
+
+import type { DmSettingsState, GameState } from '../state/types.ts'
+
+export const DEFAULT_DM_SETTINGS: DmSettingsState = { autoDialogue: false, autoChecks: false }
+
+/** Settings with pre-Slice-2 persisted states defaulting to full DM control. */
+export function dmSettings(state: GameState): DmSettingsState {
+  return state.dm?.settings ?? DEFAULT_DM_SETTINGS
+}
+
+export interface DialogueGateContext {
+  mode: 'full_ai' | 'assist' | null
+  autoDialogue: boolean
+}
+
+/** Full-AI never gates; assist gates unless the DM switched auto-dialogue on. */
+export function dialogueGateActive(ctx: DialogueGateContext): boolean {
+  return ctx.mode === 'assist' && !ctx.autoDialogue
+}
+
+export interface CheckGateContext {
+  mode: 'full_ai' | 'assist' | null
+  autoChecks: boolean
+}
+
+/** Slice 4: assist DMs confirm/flip each check outcome unless auto-checks is on. */
+export function checkGateActive(ctx: CheckGateContext): boolean {
+  return ctx.mode === 'assist' && !ctx.autoChecks
+}
+
+export const GIST_COUNT = 3
+const GIST_MAX_LENGTH = 200
+
+/** Validates {"gists": string[]} from the gist agent: exactly GIST_COUNT non-empty entries. */
+export function parseGists(raw: unknown): string[] {
+  if (typeof raw !== 'object' || raw === null) throw new Error('gist output is not an object')
+  const gists = (raw as Record<string, unknown>).gists
+  if (!Array.isArray(gists)) throw new Error('gists missing')
+  const cleaned = gists
+    .filter((g): g is string => typeof g === 'string')
+    .map((g) => g.trim().slice(0, GIST_MAX_LENGTH))
+    .filter((g) => g.length > 0)
+  if (cleaned.length < GIST_COUNT) throw new Error(`expected ${GIST_COUNT} gists, got ${cleaned.length}`)
+  return cleaned.slice(0, GIST_COUNT)
+}

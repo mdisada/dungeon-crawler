@@ -1,0 +1,175 @@
+// Boundary parsers for LLM agent output (Adjudicator F07 SS3.3, NPC Agent F10 SS3.3, social
+// classification F10 SS3.2, Consistency Checker F07 SS6). Raw model JSON in, clamped typed
+// data or a rejection out - nothing downstream ever touches unvalidated model output.
+
+import { clampDc } from './checks.ts'
+import { clampDispositionDelta } from './social.ts'
+import type {
+  AdjudicationOutput, AdvDis, CheckSpec, NpcAgentOutput, NpcProposedAction, SocialClassification,
+} from './types.ts'
+
+export type ParsePlayResult<T> = { ok: true; data: T } | { ok: false; errors: string[] }
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function asString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback
+}
+
+function asAdvDis(value: unknown): AdvDis {
+  return value === 'advantage' || value === 'disadvantage' ? value : 'none'
+}
+
+/** Strips markdown fences models love to add around JSON. */
+export function extractJson(text: string): unknown {
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+  try {
+    return JSON.parse(cleaned)
+  } catch {
+    const start = cleaned.indexOf('{')
+    const end = cleaned.lastIndexOf('}')
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(cleaned.slice(start, end + 1))
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
+}
+
+/**
+ * Adjudicator parser. `partySkills` enforces the composition guard (F07 SS3.4): an assist
+ * spec naming a skill nobody in the party has is downgraded to an unassisted check.
+ */
+export function parseAdjudication(raw: unknown, partySkills: string[]): ParsePlayResult<AdjudicationOutput> {
+  if (!isObject(raw)) return { ok: false, errors: ['adjudication: not an object'] }
+  const resolution = raw.resolution
+  if (!isObject(resolution)) return { ok: false, errors: ['adjudication: missing resolution'] }
+  const type = resolution.type
+  if (type !== 'auto_success' && type !== 'auto_fail' && type !== 'check') {
+    return { ok: false, errors: [`adjudication: bad resolution.type ${String(type)}`] }
+  }
+
+  let check: CheckSpec | null = null
+  if (type === 'check') {
+    const rawCheck = resolution.check
+    if (!isObject(rawCheck) || typeof rawCheck.skill !== 'string' || rawCheck.skill.length === 0) {
+      return { ok: false, errors: ['adjudication: check resolution without a valid check.skill'] }
+    }
+    const skills = partySkills.map((s) => s.toLowerCase())
+    let requiresAssist: CheckSpec['requiresAssist'] = null
+    if (isObject(rawCheck.requires_assist)) {
+      const assistSkill = asString(rawCheck.requires_assist.skill).toLowerCase()
+      const effect = rawCheck.requires_assist.effect
+      if (assistSkill && (effect === 'enable' || effect === 'bonus') && skills.includes(assistSkill)) {
+        requiresAssist = { skill: assistSkill, effect }
+      }
+    }
+    check = {
+      skill: rawCheck.skill.toLowerCase(),
+      dc: clampDc(Number(rawCheck.dc)),
+      advDis: asAdvDis(rawCheck.adv_dis),
+      rationale: asString(rawCheck.rationale),
+      group: rawCheck.group === true,
+      requiresAssist,
+    }
+  }
+
+  const flags = isObject(raw.flags) ? raw.flags : {}
+  return {
+    ok: true,
+    data: {
+      interpretation: asString(raw.interpretation, '(no interpretation)'),
+      resolution: { type, check, consequencesHint: asString(resolution.consequences_hint) },
+      flags: { impossible: flags.impossible === true, needsDm: flags.needs_dm === true },
+    },
+  }
+}
+
+const INFLUENCE_SKILLS = ['persuasion', 'deception', 'intimidation'] as const
+const MAGNITUDES = ['trivial', 'reasonable', 'costly', 'against_nature'] as const
+
+/** Social classification parser - anything malformed degrades to plain conversation (no roll). */
+export function parseSocialClassification(raw: unknown): SocialClassification {
+  if (!isObject(raw)) return { kind: 'conversation' }
+  if (raw.kind === 'insight') return { kind: 'insight', skill: 'insight' }
+  if (raw.kind === 'influence') {
+    const skill = INFLUENCE_SKILLS.find((s) => s === raw.skill) ?? 'persuasion'
+    const magnitude = MAGNITUDES.find((m) => m === raw.magnitude) ?? 'reasonable'
+    return { kind: 'influence', skill, magnitude }
+  }
+  return { kind: 'conversation' }
+}
+
+const PROPOSED_ACTION_TYPES = ['join_combat', 'leave', 'give_item', 'canonize_theory'] as const
+
+export function parseNpcOutput(raw: unknown, pcCharacterIds: string[]): ParsePlayResult<NpcAgentOutput> {
+  if (!isObject(raw)) return { ok: false, errors: ['npc: not an object'] }
+  const dialogue = asString(raw.dialogue)
+  if (!dialogue) return { ok: false, errors: ['npc: missing dialogue'] }
+
+  const rawDelta = isObject(raw.disposition_delta) ? raw.disposition_delta : {}
+  const addressPc = asString(raw.address_pc, '')
+  const rawOpening = isObject(raw.opening) ? raw.opening : null
+  const openingUnlockedBy = rawOpening ? asString(rawOpening.unlocked_by) : ''
+
+  const proposedActions: NpcProposedAction[] = []
+  if (Array.isArray(raw.proposed_actions)) {
+    for (const entry of raw.proposed_actions) {
+      if (!isObject(entry)) continue
+      const type = PROPOSED_ACTION_TYPES.find((t) => t === entry.type)
+      if (!type) continue
+      if (type === 'give_item') proposedActions.push({ type, item: asString((entry.payload as Record<string, unknown> | undefined)?.item ?? entry.item, 'an item') })
+      else if (type === 'canonize_theory') proposedActions.push({ type, theory: asString((entry.payload as Record<string, unknown> | undefined)?.theory ?? entry.theory) })
+      else proposedActions.push({ type })
+    }
+  }
+
+  return {
+    ok: true,
+    data: {
+      dialogue,
+      tone: asString(raw.tone, 'neutral'),
+      addressPc: pcCharacterIds.includes(addressPc) ? addressPc : null,
+      reveals: Array.isArray(raw.reveals) ? raw.reveals.filter((r): r is string => typeof r === 'string') : [],
+      opening:
+        rawOpening && pcCharacterIds.includes(openingUnlockedBy)
+          ? { unlockedBy: openingUnlockedBy, skill: asString(rawOpening.skill, 'persuasion').toLowerCase() }
+          : null,
+      dispositionDelta: {
+        value: clampDispositionDelta(Number(rawDelta.value)),
+        reason: asString(rawDelta.reason),
+      },
+      proposedActions,
+    },
+  }
+}
+
+export interface ConsistencyVerdict {
+  ok: boolean
+  violations: { claim: string; conflictsWith: string }[]
+}
+
+export function parseConsistency(raw: unknown): ConsistencyVerdict {
+  if (!isObject(raw)) return { ok: true, violations: [] }
+  const violations = Array.isArray(raw.violations)
+    ? raw.violations.filter(isObject).map((v) => ({
+        claim: asString(v.claim),
+        conflictsWith: asString(v.conflicts_with),
+      }))
+    : []
+  return { ok: raw.ok !== false && violations.length === 0, violations }
+}
+
+/** Narrator options-mode parser (F07 SS5.1): 3-4 one-sentence options, tolerantly extracted. */
+export function parseNarrationOptions(raw: unknown): string[] {
+  if (!isObject(raw) || !Array.isArray(raw.options)) return []
+  return raw.options
+    .map((o) => (typeof o === 'string' ? o : isObject(o) ? asString(o.summary) : ''))
+    .filter((s) => s.length > 0)
+    .slice(0, 4)
+}

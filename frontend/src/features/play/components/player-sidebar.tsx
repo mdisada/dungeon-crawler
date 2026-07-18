@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 
 import { useCharacterSheet } from '../hooks/use-character-sheet'
 import type { CharacterSheet } from '../hooks/use-character-sheet'
+import { useIntents } from '../hooks/use-intents'
 import { usePlay } from '../hooks/use-play-context'
 
 /**
@@ -92,6 +93,11 @@ export function PlayerSidebar() {
 const fmt = (n: number) => (n >= 0 ? `+${n}` : `${n}`)
 
 function SkillsTab({ sheet }: { sheet: CharacterSheet }) {
+  const { state, isSpectator } = usePlay()
+  const { isBusy, roll } = useIntents()
+  const canRoll =
+    !isSpectator && state.session.status === 'active' && !state.dialogue.pending && !state.dialogue.typing
+
   return (
     <div className="flex flex-col gap-4 text-sm">
       <div className="grid grid-cols-3 gap-2">
@@ -118,10 +124,18 @@ function SkillsTab({ sheet }: { sheet: CharacterSheet }) {
         <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Skills</h3>
         <ul className="flex flex-col gap-1">
           {sheet.skills.map((skill) => (
-            <li key={skill.name} className="flex justify-between">
-              {/* Tap-to-roll prefills a roll intent once F07's resolver exists (Phase 5). */}
-              <span className={cn('capitalize', skill.proficient && 'font-semibold')}>{skill.name.replaceAll('-', ' ')}</span>
-              <span>{fmt(skill.modifier)}</span>
+            <li key={skill.name}>
+              {/* Tap-to-roll: fast-path roll intent (F07 SS3.2) - server rolls and posts the line. */}
+              <button
+                type="button"
+                className="flex w-full justify-between rounded px-1 py-0.5 text-left hover:bg-muted disabled:cursor-default disabled:hover:bg-transparent"
+                disabled={!canRoll || isBusy}
+                aria-label={`Roll ${skill.name.replaceAll('-', ' ')}`}
+                onClick={() => void roll(skill.name.replaceAll('-', ' '))}
+              >
+                <span className={cn('capitalize', skill.proficient && 'font-semibold')}>{skill.name.replaceAll('-', ' ')}</span>
+                <span>{fmt(skill.modifier)}</span>
+              </button>
             </li>
           ))}
         </ul>

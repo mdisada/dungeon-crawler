@@ -304,8 +304,30 @@ async function main() {
   ok('state_version still advanced (no replay confusion)', restored.body.state_version > mutated.body.state_version)
 
   console.log('\n[session end]')
+  // Stage an in-progress roleplay scene directly (service role, version untouched) so the end
+  // teardown regression is observable: ending mid-scene must clear the stale dialogue box.
+  const [liveRow] = await serviceRest('GET', `adventure_state?adventure_id=eq.${advId}&select=state`)
+  const stagedState = liveRow.state
+  stagedState.scene.mode = 'roleplay'
+  stagedState.dialogue.speakers = [{ npcId: 'stale-npc', name: 'Lingerer', side: 'left', imageUrl: null }]
+  stagedState.dialogue.lines = [
+    ...(stagedState.dialogue.lines ?? []),
+    { id: 'stale-line', speaker: 'Lingerer', npcId: 'stale-npc', text: 'I never leave.' },
+  ]
+  stagedState.dialogue.activeLineId = 'stale-line'
+  await serviceRest('PATCH', `adventure_state?adventure_id=eq.${advId}`, { state: stagedState })
+
   const end = await sessionAction(tokens.dm, { action: 'end_session', adventure_id: advId })
   ok('DM ends the session (summary + cost)', end.status === 200 && end.body.summary !== undefined, end.body)
+  const endedResync = await sessionAction(tokens.dm, { action: 'resync', adventure_id: advId })
+  const endedState = endedResync.body.state
+  ok('session end returns the scene to narration', endedState.scene.mode === 'narration')
+  ok('session end clears the roleplay stage (speakers + active line + addressee)',
+    endedState.dialogue.speakers.length === 0 &&
+      endedState.dialogue.activeLineId == null &&
+      endedState.dialogue.addressedCharacterId == null,
+    endedState.dialogue)
+  ok('dialogue history survives session end', endedState.dialogue.lines.some((l) => l.id === 'stale-line'))
   const [summaryRow] = await serviceRest('GET', `session_summaries?adventure_id=eq.${advId}&select=id`)
   ok('session summary persisted', Boolean(summaryRow?.id))
   const leave = await sessionAction(tokens.p1, { action: 'leave', adventure_id: advId })

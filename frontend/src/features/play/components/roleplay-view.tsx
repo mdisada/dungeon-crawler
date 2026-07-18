@@ -1,7 +1,3 @@
-import { useState } from 'react'
-
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import type { DialogueState, PlayersState, SceneState } from '@rules/state'
 
@@ -9,17 +5,15 @@ interface RoleplayViewProps {
   scene: SceneState
   dialogue: DialogueState
   players: PlayersState
-  isSpectator: boolean
 }
 
 /**
  * F06 SS3.3 visual-novel renderer: location background, half-body NPC portraits left/right
- * (active speaker full-opacity), PC thumbnails along the bottom, name-plated text box, and the
- * Say/Do/Roll input row. Intents submit to F07 in Phase 5 - the row is disabled with a note
- * until then.
+ * (active speaker full-opacity), PC thumbnails along the bottom (the directly-addressed PC
+ * highlighted, F10 SS3.7), and the name-plated text box. The Say/Do/Roll input row is the
+ * play page's IntentInputRow overlay.
  */
-export function RoleplayView({ scene, dialogue, players, isSpectator }: RoleplayViewProps) {
-  const [draft, setDraft] = useState('')
+export function RoleplayView({ scene, dialogue, players }: RoleplayViewProps) {
   const active = dialogue.lines.find((l) => l.id === dialogue.activeLineId) ?? dialogue.lines.at(-1)
   const speakingNpcId = active?.npcId ?? null
 
@@ -70,14 +64,17 @@ export function RoleplayView({ scene, dialogue, players, isSpectator }: Roleplay
           <div
             key={p.characterId}
             title={p.name}
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-slate-800/90 text-sm font-medium text-white/90"
+            className={cn(
+              'flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-slate-800/90 text-sm font-medium text-white/90 transition-all',
+              dialogue.addressedCharacterId === p.characterId && 'scale-110 border-amber-300 ring-2 ring-amber-300/70',
+            )}
           >
             {p.name.charAt(0)}
           </div>
         ))}
       </div>
 
-      <div className="relative mx-auto mb-4 w-full max-w-4xl px-4">
+      <div className="relative mx-auto mb-16 w-full max-w-4xl px-4">
         <div className="rounded-xl border border-white/10 bg-black/75 p-4 backdrop-blur">
           {active?.speaker && (
             <span className="mb-1 inline-block rounded bg-primary/80 px-2 py-0.5 text-xs font-semibold text-primary-foreground">
@@ -88,23 +85,6 @@ export function RoleplayView({ scene, dialogue, players, isSpectator }: Roleplay
             {active?.text ?? '…'}
           </p>
         </div>
-
-        <form
-          className="mt-2 flex gap-2"
-          onSubmit={(e: React.FormEvent<HTMLFormElement>) => e.preventDefault()}
-        >
-          <Input
-            value={draft}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
-            placeholder={isSpectator ? 'Spectating — waiting for the DM to admit you' : 'Actions and dialogue arrive with the live orchestrator (Phase 5)'}
-            disabled
-            aria-label="Action or dialogue input"
-            className="bg-black/60 text-white placeholder:text-white/40"
-          />
-          <Button type="submit" variant="secondary" disabled>Say</Button>
-          <Button type="submit" variant="secondary" disabled>Do</Button>
-          <Button type="submit" variant="secondary" disabled>Roll</Button>
-        </form>
       </div>
     </div>
   )

@@ -514,3 +514,84 @@ Phase 4 checkpoint.
 **Updated:** migrations `20260718110000-110200`, `supabase/functions/session/`,
 `packages/rules/src/state/`, `frontend/src/features/play/`, seeders, CI mirror check now covers
 `_shared/state`, `tests/integration/session-live.mjs`.
+
+---
+
+## 2026-07-18 — Phase 4 gate (PASS WITH NOTES): AI-Assist mode moved to Phase 10
+
+User's gate reply on the Phase 4 checkpoint: the user is not a dungeon master, so the design of
+the human-DM game flow is on hold, and **AI-Assist mode moves to Phase 10**. The Phase 4 design
+review answers are provisional ("not breaking yet") — more design inputs will come during the
+next phases.
+
+- **Development is Full-AI-behavior-first from Phase 5 onward.** The F07 proposal pipeline is
+  still built in full (MAIN-SPEC principle 1 stands: one pipeline, one flag), but the built-and-
+  tested default is `approval_mode: auto` — every proposal auto-applies and writes a
+  `proposal_log` audit row (`auto_applied`), identical to what F14 specifies.
+- **Deferred to Phase 10:** the DM console / proposal tray UX (F07 §5), human
+  accept/edit/reject flows, and assist-specific behaviors (proposal expiry timers, F09's 8s
+  fast-proposal window, batch-approve UIs). The Phase 4 docked proposal-tray scaffold stays
+  dormant until then. The assist-mode DM flow gets its own design pass at Phase 10.
+- **Phase 9 (F14) becomes a hardening phase** (policy table, degradation ladder, X-card, wipe
+  paths) rather than first contact with Full-AI. Its pre-gate trust report can no longer use
+  F14 §7's human acceptance rates (no human decisions will exist) — it will use incident rates,
+  consistency-block frequency, and user-flagged wrong moments, with a reworked §7 threshold set
+  proposed for approval at that pre-gate. F14 §7's rework is deliberately deferred to then.
+- **Not changed:** F03's mode selector still offers AI-Assist at creation (an assist adventure
+  simply can't be meaningfully run until Phase 10); F07/F09/F14 spec text describing assist mode
+  stays as-is — sequencing moved, not the architecture.
+
+**Why:** the product owner can't evaluate a DM-facing workflow they don't have the experience to
+judge; testing effort goes where their judgment is strongest (the player experience), and the
+full-AI pipeline is the same code path with the flag flipped.
+
+**Updated:** `MAIN-SPEC.md` §10 (build order steps 4/8/9), `DEVELOPMENT-PLAN.md` (Phases 5, 9,
+10), `docs/CHECKPOINTS/PHASE4.md` (verdict + design-review skip notes), `TASK.md`.
+
+---
+
+## 2026-07-18 — Phase 5 BUILD: orchestration architecture decisions
+
+Recorded at BUILD time (same convention as Phase 3b/4); user gate happens at the Phase 5
+checkpoint.
+
+- **The session function stays the single writer** — F07's Adventure Manager did not become a
+  new function; the intent pipeline (router → adjudicator/dialogue → proposals → commit) lives
+  in `supabase/functions/session/` and inherits `applyAndBroadcast`. A `commitDiffs` retry
+  wrapper rebuilds diffs from fresh state on optimistic-lock conflicts (verified live by the
+  concurrent-intent race test).
+- **New `packages/rules/src/play/` module, mirrored to `_shared/play`** (router classification,
+  check engine with seeded RNG, social DC table, group/assist rules, disposition/opening/reveal
+  guardrails, LLM-output parsers with server-side clamping). `src/character` is now also
+  mirrored (server-side skill modifiers needed real character math; its imports gained explicit
+  `.ts` extensions for Deno).
+- **Conversation State and the pending-check stash live in GameState's dm domain**, not a
+  separate table — the dm domain is already DM-channel-only, and the stash (with the hidden DC)
+  is verified to never reach player resyncs. Prompts (`dialogue.pending`), openings, typing
+  indicator, and `addressedCharacterId` are new player-visible dialogue fields; migration
+  20260718130000 backfills existing state rows.
+- **Prompt deadlines are enforced on call, not by timers** — edge functions have no timers, so
+  clients sweep expired prompts via `resolve_pending` and the server validates the deadline
+  (409 before expiry, verified live). Same constraint family as the Phase 4 auto-checkpoint note.
+- **Demo adventures use canned agent outputs for every Phase 5 agent** (adjudicator, social
+  classifier, NPC, narrator, consistency, summaries) including deliberately adversarial
+  fixtures (over-reveal, dead-NPC narration) — the 68-check live integration suite runs at
+  exactly zero LLM spend (asserted via usage_log).
+- **TTS is deferred to Phase 8 (F12)** despite the plan's Phase 5 "listen to streaming TTS"
+  task: `voice_profiles` stores raw clips only — the provider-side voice creation (Mistral
+  Voices API) that OpenRouter's TTS endpoint requires was never built and is F12 scope.
+- **Deferred with reasons, nothing silent:** braided intents + loop-mismatch streak flag need
+  F8 beats (Phase 6); objective completion predicate evaluation moves to Phase 6 with F08's
+  story loop; assist-mode `needs_dm` rulings create pending proposals whose console arrives in
+  Phase 10 (the server-side decide endpoint is complete and tested, incl. expiry); full-AI
+  narration options auto-pick option 1 per F14's auto policy; multi-NPC crosstalk and "Ask the
+  table" are v1.1 per spec.
+- **Known simplification:** ingredient reveal conditions are free text, so the gate can only
+  require "a successful check this utterance" — an insight success can satisfy a
+  persuasion-worded condition. Tighten in F08/F13 if it bites in play.
+
+**Updated:** migration `20260718130000_create_orchestration.sql` (proposals, npc_dispositions,
+npc_interactions, npcs.generated, state backfill), `supabase/functions/session/` (+agents,
+intent, prompts, npc-dialogue, narration, proposals, orchestrate), `packages/rules/src/play/`,
+state contract extensions, `frontend/src/features/play/` (IntentInputRow, CheckPrompt, Story
+tab, proposal tray, tap-to-roll), `tests/integration/orchestration-live.mjs`.
