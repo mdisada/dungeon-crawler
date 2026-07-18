@@ -41,6 +41,10 @@ export function GuidePage() {
 
   const { data } = state
   const isGenerating = data.jobs.some((j) => j.status === 'queued' || j.status === 'running')
+  // Show progress while jobs are in flight AND once the queue pauses on a failure - a failed
+  // stage has no queued/running job, so gating purely on isGenerating would hide the error and
+  // its retry button, leaving the header stuck on "Generating..." with empty tabs.
+  const showPipeline = data.jobs.some((j) => j.status !== 'done')
 
   async function validateStart() {
     const errors = validateGuideReady({
@@ -125,7 +129,7 @@ export function GuidePage() {
       )}
 
       {error && <p className="text-sm text-destructive">{error}</p>}
-      {isGenerating && <PipelineProgress jobs={data.jobs} chapters={data.chapters} onChanged={() => void refresh()} />}
+      {showPipeline && <PipelineProgress jobs={data.jobs} chapters={data.chapters} onChanged={() => void refresh()} />}
 
       {guideWarnings.length > 0 && (
         <section className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">

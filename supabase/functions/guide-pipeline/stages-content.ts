@@ -156,6 +156,28 @@ export async function runStage4(env: StageEnv, chapterId: string): Promise<void>
   )
   assertOk(ingredientError, 'ingredients insert failed')
 
+  // SS4.1 conformance issues are repaired (nonconforming coop sets demoted), not stage failures;
+  // surface each repair as a stage-4 warning, replacing this chapter's previous batch - same
+  // pattern as stage 5's budget warnings.
+  const warningPrefix = `Chapter ${chapter.index + 1} coop: `
+  const { error: oldWarnError } = await env.db
+    .from('guide_warnings')
+    .delete()
+    .eq('adventure_id', env.adventure.id)
+    .eq('stage', 4)
+    .like('message', `${warningPrefix}%`)
+  assertOk(oldWarnError, 'stage-4 warning cleanup failed')
+  if (output.warnings.length > 0) {
+    const { error: warnError } = await env.db.from('guide_warnings').insert(
+      output.warnings.map((w) => ({
+        adventure_id: env.adventure.id,
+        stage: 4,
+        message: `${warningPrefix}${w}`,
+      })),
+    )
+    assertOk(warnError, 'stage-4 warnings insert failed')
+  }
+
   await enqueueJob(env.db, env.adventure.id, 5, chapterId)
 }
 

@@ -66,6 +66,18 @@ describe('stage 1 (chapter arcs)', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errors[0]).toMatch(/no JSON object/)
   })
+
+  it('drops registry entities whose kind is not npc/location instead of failing', () => {
+    const withFaction = STAGE1_RESPONSE.replace(
+      '"entities": [',
+      '"entities": [\n    { "kind": "faction", "name": "The Salvagers", "note": "the cult" },',
+    )
+    const result = parseStage1(withFaction, SEED)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.metaLoop.entities?.map((e) => e.kind)).not.toContain('faction')
+    expect(result.data.metaLoop.entities?.map((e) => e.name)).not.toContain('The Salvagers')
+  })
 })
 
 describe('stage 2 (scene sketches)', () => {
@@ -140,18 +152,19 @@ describe('stage 4 (ingredients + coop sets)', () => {
     expect(parseStage4(patched, ctx).ok).toBe(true)
   })
 
-  it('requires a coop set when min_players > 1', () => {
+  it('warns (not fails) when min_players > 1 and no coop set survives', () => {
     const withoutCoop = JSON.parse(STAGE4_RESPONSE)
     withoutCoop.coop_sets = []
     withoutCoop.ingredients = withoutCoop.ingredients.map(
       (i: { coop_set_key: string | null }) => ({ ...i, coop_set_key: null }),
     )
     const result = parseStage4(JSON.stringify(withoutCoop), STAGE4_CONTEXT)
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.errors.some((e) => e.includes('min_players'))).toBe(true)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.warnings.some((w) => w.includes('min_players'))).toBe(true)
   })
 
-  it('allows a coop-free chapter for a solo adventure', () => {
+  it('allows a coop-free chapter for a solo adventure without warnings', () => {
     const withoutCoop = JSON.parse(STAGE4_RESPONSE)
     withoutCoop.coop_sets = []
     withoutCoop.ingredients = withoutCoop.ingredients.map(
@@ -159,6 +172,30 @@ describe('stage 4 (ingredients + coop sets)', () => {
     )
     const result = parseStage4(JSON.stringify(withoutCoop), { ...STAGE4_CONTEXT, seed: SOLO_SEED })
     expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.warnings).toEqual([])
+  })
+
+  it('demotes a nonconforming split_knowledge set instead of failing (repair + warn)', () => {
+    // Make the coop member a secret without an affinity - the exact live stage-4 failure mode.
+    const broken = JSON.parse(STAGE4_RESPONSE) as {
+      coop_sets: { key: string }[]
+      ingredients: { coop_set_key: string | null; type: string; reveals_to: unknown }[]
+    }
+    const coopKey = broken.coop_sets[0].key
+    for (const ing of broken.ingredients) {
+      if (ing.coop_set_key === coopKey) {
+        ing.type = 'secret'
+        ing.reveals_to = null
+        break
+      }
+    }
+    const result = parseStage4(JSON.stringify(broken), STAGE4_CONTEXT)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.coopSets.map((s) => s.key)).not.toContain(coopKey)
+    // Members stay as plain ingredients, detached from the demoted set.
+    expect(result.data.ingredients.every((i) => i.coopSetKey !== coopKey)).toBe(true)
+    expect(result.data.warnings.some((w) => w.includes(coopKey) && w.includes('demoted'))).toBe(true)
   })
 
   it('rejects a response missing a required registry entity (F04 SS2.1)', () => {

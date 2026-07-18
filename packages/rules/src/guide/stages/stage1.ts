@@ -6,14 +6,20 @@ import type { AdventureSeed, ChapterSketch, EntityRef, MetaLoop, ParseResult } f
 
 /** Shared entity-list parser for stages 1 and 2 (F04 SS2.1 registry entries). */
 export function parseEntityList(c: Check, value: unknown, path: string, min: number, max: number): EntityRef[] {
-  return c.arr(value, path, min, max).map((raw, i) => {
+  const entities: EntityRef[] = []
+  c.arr(value, path, min, max).forEach((raw, i) => {
     const e = c.obj(raw, `${path}[${i}]`)
-    return {
-      kind: c.oneOf(e.kind, `${path}[${i}].kind`, ['npc', 'location'] as const),
+    // The registry only drives npc/location fleshing in later stages. Models routinely add a
+    // faction/item/event entry too; drop those instead of failing the whole generation.
+    const kind = e.kind === 'npc' || e.kind === 'location' ? e.kind : null
+    if (!kind) return
+    entities.push({
+      kind,
       name: c.str(e.name, `${path}[${i}].name`),
       note: c.str(e.note ?? '', `${path}[${i}].note`, { allowEmpty: true }),
-    }
+    })
   })
+  return entities
 }
 
 export interface Stage1Output {

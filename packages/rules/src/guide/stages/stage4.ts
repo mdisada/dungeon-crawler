@@ -39,6 +39,8 @@ export interface Stage4Output {
   locations: LocationDraft[]
   coopSets: CoopSetDraft[]
   ingredients: IngredientDraft[]
+  /** SS4.1 conformance repairs (demoted coop sets etc.) - persisted as stage-4 guide_warnings. */
+  warnings: string[]
 }
 
 export const INGREDIENTS_PER_CHAPTER = { min: 4, max: 12, defaultMin: 6, defaultMax: 10 }
@@ -254,7 +256,11 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
       }
     })
 
-  c.errors.push(...validateCoopConformance({ coopSets, ingredients }, ctx.seed.minPlayers, ctx.objectives.length))
+  // Coop conformance is a QUALITY bar, not a structural contract: nonconforming sets are
+  // repaired (demoted to plain ingredients) with warnings, never a stage failure - same
+  // philosophy as parseCombatSeed above and stage 5's budget warnings.
+  const repaired = repairCoopConformance(coopSets, ingredients, ctx.seed.minPlayers, ctx.objectives.length)
+
   c.errors.push(
     ...validateEntityCoverage(
       ctx.requiredEntities,
@@ -263,7 +269,7 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
     ),
   )
 
-  return c.result({ npcs, locations, coopSets, ingredients })
+  return c.result({ npcs, locations, coopSets: repaired.coopSets, ingredients, warnings: repaired.warnings })
 }
 
 function normalizeEntityName(name: string): string {
@@ -295,7 +301,57 @@ export function validateEntityCoverage(
 }
 
 /**
- * F04 SS4.1 conformance, shared between the stage parser and the test suite:
+ * F04 SS4.1 conformance repair: instead of failing the stage, nonconforming coop sets are
+ * DEMOTED - the set is dropped and its member ingredients stay as plain (non-coop) ingredients,
+ * each repair recorded as a warning for the DM. Mutates members' coopSetKey in place; returns
+ * the surviving sets.
+ */
+export function repairCoopConformance(
+  coopSets: CoopSetDraft[],
+  ingredients: IngredientDraft[],
+  minPlayers: number,
+  objectiveCount: number,
+): { coopSets: CoopSetDraft[]; warnings: string[] } {
+  const warnings: string[] = []
+  const demotedKeys = new Set<string>()
+  const demote = (set: CoopSetDraft, reason: string) => {
+    demotedKeys.add(set.key)
+    for (const ing of ingredients) {
+      if (ing.coopSetKey === set.key) ing.coopSetKey = null
+    }
+    warnings.push(`coop set "${set.key}" was demoted to plain ingredients: ${reason}`)
+  }
+
+  for (const set of coopSets) {
+    const members = ingredients.filter((i) => i.coopSetKey === set.key)
+    if (set.kind === 'split_knowledge') {
+      const reasons: string[] = []
+      if (members.length < 2 || members.length > 3) reasons.push(`needs 2-3 member ingredients, has ${members.length}`)
+      if (members.some((m) => m.type !== 'clue')) reasons.push('all members must be clues')
+      if (members.some((m) => !m.revealsTo)) reasons.push('every member needs a reveals_to affinity')
+      if (reasons.length > 0) demote(set, reasons.join('; '))
+    } else if (members.length === 0) {
+      demote(set, 'has no member ingredients')
+    }
+  }
+
+  const cap = maxCoopDemanding(objectiveCount)
+  const demanding = coopSets.filter((s) => !demotedKeys.has(s.key) && s.kind === 'complementary_obstacle')
+  for (const set of demanding.slice(cap)) {
+    demote(set, `over the density guardrail (at most ${cap} coop-demanding obstacle(s) for ${objectiveCount} objectives)`)
+  }
+
+  const kept = coopSets.filter((s) => !demotedKeys.has(s.key))
+  if (minPlayers > 1 && kept.length === 0) {
+    warnings.push('this chapter ended up with no cooperative content (min_players > 1 asks for at least one coop set per chapter) - consider adding a split-knowledge clue pair by hand')
+  }
+
+  return { coopSets: kept, warnings }
+}
+
+/**
+ * F04 SS4.1 conformance as a pure check (used by the test suite and as the definition the
+ * repair above enforces):
  * - min_players > 1 => at least one coop set per chapter, and split-knowledge sets decompose
  *   across 2-3 member clues that each carry a reveals_to affinity.
  * - density guardrail: coop-DEMANDING (complementary_obstacle) sets capped at 1 per 3 objectives.
