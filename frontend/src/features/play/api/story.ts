@@ -22,6 +22,16 @@ export async function fetchGuideNpcs(adventureId: string): Promise<GuideNpc[]> {
   return (data ?? []) as GuideNpc[]
 }
 
+/** Idle-nudge sweep (F08 SS9.1): the server validates idleness; 409s are the normal case. */
+export async function sweepIdleNudge(adventureId: string): Promise<boolean> {
+  const res = await callEdgeFunction('session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'idle_nudge', adventure_id: adventureId }),
+  })
+  return res.ok
+}
+
 export async function setNpcState(
   adventureId: string,
   npcId: string,

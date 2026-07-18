@@ -161,6 +161,20 @@ export interface VoiceProfile {
   storagePath: string
 }
 
+/** Quest contract (F04 SS4.3): the authored offer behind F08's reactive-story gate. */
+export interface GuideContract {
+  id: string
+  chapterId: string | null
+  label: string
+  giverNpcId: string
+  isEntry: boolean
+  reward: { gold_floor?: number; gold_ceiling?: number; extras?: string[] }
+  stakes: string
+  deadline: { days?: number } | null
+  objectiveIds: string[]
+  humanEdited: boolean
+}
+
 export interface GuideData {
   adventure: GuideAdventure
   chapters: Chapter[]
@@ -171,6 +185,7 @@ export interface GuideData {
   ingredients: Ingredient[]
   encounters: EncounterRow[]
   endings: Ending[]
+  contracts: GuideContract[]
   warnings: GuideWarning[]
   jobs: GuideJob[]
 }

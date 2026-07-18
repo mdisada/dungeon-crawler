@@ -1,8 +1,18 @@
 // F04 SS6: "Start Adventure" validation - at least one objective per chapter, every objective
-// has a valid completion predicate, and at least one location exists. Shared by the editor's
-// CTA (disable + explain) and any server-side activation check later (F05).
+// has a valid completion predicate, at least one location exists, and exactly one valid entry
+// quest contract (F04 SS4.3 - the opening offer that gates the first objective). Shared by the
+// editor's CTA (disable + explain) and any server-side activation check later (F05).
 
 import { validatePredicate } from './predicates.ts'
+
+export interface ContractForValidation {
+  label: string
+  isEntry: boolean
+  giverNpcId: string | null
+  goldFloor: number
+  goldCeiling: number
+  objectiveIds: string[]
+}
 
 export interface GuideForValidation {
   chapters: {
@@ -12,6 +22,10 @@ export interface GuideForValidation {
   locationCount: number
   /** F04 SS4.2: a fluid resolution needs at least two candidate endings. */
   endingCount: number
+  contracts: ContractForValidation[]
+  /** Known ids for contract ref validation. */
+  npcIds: string[]
+  objectiveIds: string[]
 }
 
 export function validateGuideReady(guide: GuideForValidation): string[] {
@@ -44,6 +58,25 @@ export function validateGuideReady(guide: GuideForValidation): string[] {
   if (guide.endingCount < 2) {
     errors.push('The guide needs at least two candidate endings.')
   }
+
+  const entries = guide.contracts.filter((c) => c.isEntry)
+  if (entries.length !== 1) {
+    errors.push('The guide needs exactly one entry quest contract (the opening offer).')
+  }
+  const npcIds = new Set(guide.npcIds)
+  const objectiveIds = new Set(guide.objectiveIds)
+  guide.contracts.forEach((contract) => {
+    const label = contract.label || (contract.isEntry ? 'the entry contract' : 'a quest contract')
+    if (!contract.giverNpcId || !npcIds.has(contract.giverNpcId)) {
+      errors.push(`${label}: the giver must be an existing NPC.`)
+    }
+    if (contract.goldCeiling < contract.goldFloor) {
+      errors.push(`${label}: reward ceiling is below the floor.`)
+    }
+    if (contract.objectiveIds.length === 0 || contract.objectiveIds.some((id) => !objectiveIds.has(id))) {
+      errors.push(`${label}: must cover at least one existing objective.`)
+    }
+  })
 
   return errors
 }

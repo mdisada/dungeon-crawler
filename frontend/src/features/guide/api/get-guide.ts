@@ -6,6 +6,7 @@ import type {
   EncounterRow,
   Ending,
   GuideAdventure,
+  GuideContract,
   GuideData,
   GuideJob,
   GuideWarning,
@@ -24,7 +25,7 @@ function need<T>(res: { data: T | null; error: { message: string } | null }, wha
 }
 
 export async function getGuide(adventureId: string): Promise<GuideData> {
-  const [adventure, chapters, objectives, npcs, locations, coopSets, ingredients, encounters, endings, warnings, jobs] =
+  const [adventure, chapters, objectives, npcs, locations, coopSets, ingredients, encounters, endings, contracts, warnings, jobs] =
     await Promise.all([
       supabase
         .from('adventures')
@@ -39,6 +40,7 @@ export async function getGuide(adventureId: string): Promise<GuideData> {
       supabase.from('ingredients').select('*').eq('adventure_id', adventureId).order('created_at'),
       supabase.from('encounters').select('*').eq('adventure_id', adventureId).order('created_at'),
       supabase.from('endings').select('*').eq('adventure_id', adventureId).order('index'),
+      supabase.from('quest_contracts').select('*').eq('adventure_id', adventureId).order('created_at'),
       supabase.from('guide_warnings').select('*').eq('adventure_id', adventureId).order('created_at'),
       supabase.from('guide_jobs').select('*').eq('adventure_id', adventureId).order('stage').order('created_at'),
     ])
@@ -156,6 +158,20 @@ export async function getGuide(adventureId: string): Promise<GuideData> {
         status: e.status,
         humanEdited: e.human_edited,
         pendingRegen: e.pending_regen,
+      }),
+    ),
+    contracts: need(contracts, 'contracts load').map(
+      (k: any): GuideContract => ({
+        id: k.id,
+        chapterId: k.chapter_id,
+        label: k.label,
+        giverNpcId: k.giver_npc_id,
+        isEntry: k.is_entry,
+        reward: k.reward ?? {},
+        stakes: k.stakes,
+        deadline: k.deadline,
+        objectiveIds: k.objective_ids ?? [],
+        humanEdited: k.human_edited,
       }),
     ),
     warnings: need(warnings, 'warnings load').map(

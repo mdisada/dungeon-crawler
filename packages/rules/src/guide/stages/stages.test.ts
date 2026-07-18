@@ -308,13 +308,13 @@ describe('stage 5 (encounters + budget)', () => {
   })
 })
 
-describe('stage 6 (hooks)', () => {
+describe('stage 6 (hooks + quest contracts)', () => {
   it('parses hooks and validates handles', () => {
     const result = parseStage6(STAGE6_RESPONSE, buildTestDigest())
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.data).toHaveLength(3)
-    expect(result.data[2]).toMatchObject({ kind: 'backstory_slot', fromHandle: null })
+    expect(result.data.hooks).toHaveLength(3)
+    expect(result.data.hooks[2]).toMatchObject({ kind: 'backstory_slot', fromHandle: null })
   })
 
   it('rejects unknown handles and non-null backstory sources', () => {
@@ -327,6 +327,36 @@ describe('stage 6 (hooks)', () => {
       expect(result.errors.some((e) => e.includes('npc#42'))).toBe(true)
       expect(result.errors.some((e) => e.includes('must be null'))).toBe(true)
     }
+  })
+
+  it('parses the entry contract with resolved refs and bounds (F04 SS4.3)', () => {
+    const result = parseStage6(STAGE6_RESPONSE, buildTestDigest())
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.contracts).toHaveLength(1)
+    expect(result.data.contracts[0]).toMatchObject({
+      isEntry: true, giverHandle: 'npc#2', goldFloor: 40, goldCeiling: 90,
+      objectiveHandles: ['obj#1', 'obj#2'],
+    })
+  })
+
+  it('fails on a dangling contract ref, an inverted reward, or a missing entry', () => {
+    const badGiver = JSON.parse(STAGE6_RESPONSE)
+    badGiver.contracts[0].giver = 'npc#42'
+    const giverResult = parseStage6(JSON.stringify(badGiver), buildTestDigest())
+    expect(giverResult.ok).toBe(false)
+
+    const badReward = JSON.parse(STAGE6_RESPONSE)
+    badReward.contracts[0].gold_ceiling = 10
+    const rewardResult = parseStage6(JSON.stringify(badReward), buildTestDigest())
+    expect(rewardResult.ok).toBe(false)
+    if (!rewardResult.ok) expect(rewardResult.errors.some((e) => e.includes('gold_ceiling'))).toBe(true)
+
+    const noEntry = JSON.parse(STAGE6_RESPONSE)
+    noEntry.contracts[0].is_entry = false
+    const entryResult = parseStage6(JSON.stringify(noEntry), buildTestDigest())
+    expect(entryResult.ok).toBe(false)
+    if (!entryResult.ok) expect(entryResult.errors.some((e) => e.includes('is_entry'))).toBe(true)
   })
 })
 

@@ -238,6 +238,14 @@ export const STAGE6_RESPONSE = JSON.stringify({
     { from: 'ing#1', to_objective: 'obj#1', hook_text: "Tam's tally dates line up with the two nights the tide shuddered.", kind: 'location_placement' },
     { from: null, to_objective: 'obj#3', hook_text: "A character who has lost someone to the sea gets Mother Brine's genuine, dangerous sympathy.", kind: 'backstory_slot' },
   ],
+  contracts: [
+    {
+      label: 'Find out why the tide stopped', giver: 'npc#2', is_entry: true,
+      gold_floor: 40, gold_ceiling: 90, extras: ['harbor lodging'],
+      stakes: 'Quill loses his post - and his skin - if the harbor stays dry.',
+      deadline_days: null, objectives: ['obj#1', 'obj#2'],
+    },
+  ],
 })
 
 export const STAGE7_RESPONSE = JSON.stringify({

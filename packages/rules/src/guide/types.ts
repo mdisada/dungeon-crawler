@@ -128,6 +128,19 @@ export interface HookDraft {
   kind: 'npc_objective' | 'location_placement' | 'backstory_slot'
 }
 
+/** Quest contract draft (F04 SS4.3): the authored extrinsic motivation behind F08's offers. */
+export interface ContractDraft {
+  label: string
+  giverHandle: string
+  isEntry: boolean
+  goldFloor: number
+  goldCeiling: number
+  extras: string[]
+  stakes: string
+  deadlineDays: number | null
+  objectiveHandles: string[]
+}
+
 export interface WarningDraft {
   targetHandle: string | null
   message: string

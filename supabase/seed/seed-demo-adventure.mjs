@@ -66,6 +66,8 @@ do $$
 declare
   v_adventure uuid;
   v_chapter uuid;
+  v_obj1 uuid;
+  v_maren uuid;
 begin
   if exists (
     select 1 from adventures where creator_id = ${sqlString(userId)} and title = ${sqlString(TITLE)}
@@ -92,11 +94,15 @@ begin
   values (v_adventure, 0, 'The Vanishings', 'The party reaches Hollowbrook, wins the villagers'' trust, and uncovers what sings beneath the mill.', 'active')
   returning id into v_chapter;
 
+  -- First objective starts hidden: the entry offer gates activation (F08 SS9).
   insert into objectives (adventure_id, chapter_id, index, title, hidden_description, completion_predicates, reveal_state)
   values
     (v_adventure, v_chapter, 0, 'Find the missing boy',
      'The miller''s son sleepwalked into the mill cellar; the Choir keeps him dreaming. DM-ONLY-TRAPWORD-ALPHA.',
-     ${sqlJsonb({ all: [{ fact: 'boy_found', eq: true }] })}, 'active'),
+     ${sqlJsonb({ all: [{ fact: 'boy_found', eq: true }] })}, 'hidden')
+  returning id into v_obj1;
+  insert into objectives (adventure_id, chapter_id, index, title, hidden_description, completion_predicates, reveal_state)
+  values
     (v_adventure, v_chapter, 1, 'Learn what the stranger wants',
      'The stranger is a deserter from the Choir wearing borrowed skin. DM-ONLY-TRAPWORD-BETA.',
      ${sqlJsonb({ all: [{ fact: 'stranger_truth', eq: true }] })}, 'hidden');
@@ -106,11 +112,23 @@ begin
     (v_adventure, v_chapter, 'Elder Maren', 'npc',
      ${sqlJsonb({ voice: 'weary, warm', wants: 'the vanishings to stop' })}, 'Hollowbrook',
      'The village elder, holding a frightened community together.', 'elderly village leader, lantern light',
-     ${sqlJsonb({ portrait: '/placeholders/portrait.png', token: '/placeholders/token.png' })}),
+     ${sqlJsonb({ portrait: '/placeholders/portrait.png', token: '/placeholders/token.png' })})
+  returning id into v_maren;
+  insert into npcs (adventure_id, chapter_id, name, role, personality, faction, description, image_prompt, images)
+  values
     (v_adventure, v_chapter, 'The Stranger', 'npc',
      ${sqlJsonb({ voice: 'clipped, evasive', wants: 'to reach the mill first' })}, 'Unknown',
      'A traveler who arrived the night the first villager vanished.', 'hooded traveler, rain-soaked',
      ${sqlJsonb({ portrait: '/placeholders/portrait.png', token: '/placeholders/token.png' })});
+
+  -- Entry quest contract (F04 SS4.3): Maren's offer opens the adventure.
+  insert into quest_contracts (adventure_id, chapter_id, label, giver_npc_id, is_entry, reward, stakes, objective_ids)
+  values (
+    v_adventure, v_chapter, 'Find the miller''s missing boy', v_maren, true,
+    ${sqlJsonb({ gold_floor: 25, gold_ceiling: 60, extras: ['lodging at the inn'] })},
+    'Another dreamer walks at moonrise tonight; Maren is out of time and out of villagers willing to search.',
+    array[v_obj1]
+  );
 
   insert into locations (adventure_id, chapter_id, name, description, image_prompt, background_url, map)
   values (

@@ -28,7 +28,8 @@ Stage 5  Encounter Design boss specs + candidate encounters per objective
                           (Budget-Engine-validated against expected party level)
 Stage 6  Hook Weaver      cross-links: NPC↔objective hooks, location↔ingredient
                           placement, backstory hook slots (filled at session start
-                          when real characters are known)
+                          when real characters are known); quest contracts — one
+                          entry contract + optional side contracts (§4.3)
 Stage 7  Consistency pass plot-hole scan across hidden descriptions; also flags any
                           global registry entity that never landed in a chapter list or
                           content row; warnings in the editor (never silent rewrites)
@@ -93,6 +94,12 @@ ingredients: id, adventure_id, chapter_id?, type ('clue'|'secret'|'event'|'item'
              objective_links uuid[], discovered boolean default false,
              canon_source ('generated'|'dm'|'player_theory')
 hooks:       id, adventure_id, from_ref, to_objective_id, hook_text, kind
+quest_contracts: id, adventure_id, chapter_id?, label,  -- "Escort Maren to the coast" (added 2026-07-18, §4.3)
+             giver_npc_id, is_entry boolean,            -- exactly one entry contract per adventure
+             reward jsonb {gold_floor, gold_ceiling, extras[]},
+             stakes text,                               -- player-facing why-this-matters
+             deadline jsonb?,                           -- optional, in-fiction world-clock days
+             objective_ids uuid[]                       -- the objectives this quest spans
 encounters:  id, adventure_id, type ('battle'|'social'|'environment'),
              spec jsonb, budget jsonb, location_id?
 endings:     id, adventure_id, index, title text (hidden), description text (hidden),
@@ -184,6 +191,27 @@ therefore never "contradict" an ending: the concrete finale is written when it's
   Adventure-level only for v1 — chapter arcs still adapt live via the loop/beat system;
   per-chapter branch points are backlog.
 
+## 4.3 Quest contracts (added 2026-07-18 — the authored side of F8 §2.1)
+
+The reactive-story principle (F8 §2.1: quests are offered and accepted, never imposed) needs its
+extrinsic motivation authored here, not improvised at play time:
+
+- **Shape:** `quest_contracts` (§3) — a giver NPC, a player-facing `label`, a `reward` with
+  gold floor/ceiling (the negotiation bounds F10 haggling operates inside) plus narrative
+  `extras`, `stakes` (why this matters, player-facing), an optional in-fiction `deadline`, and
+  the objectives the quest spans.
+- **Authoring:** Stage 6 (Hook Weaver) emits contracts alongside hooks — exactly one
+  `is_entry` contract covering chapter 1's opening objectives, and optionally one side contract
+  per chapter where the content supports it. The entry giver must be a registry NPC staged in
+  the entry scene (Stage 3's first scene sketch), so the offer can land in dialogue in the
+  first minutes of play — hard-validated like ending signal refs (dangling giver/objective ref =
+  stage failure).
+- **Live use:** F8's Hook Weaver instantiates offers from these contracts and may adapt wording
+  and (within floor/ceiling) terms; the guide's contract is the canonical bound, the live offer
+  the negotiated instance.
+- **Editor:** contracts render in the Plot tab under their chapter — giver picker (registry
+  NPCs), label/stakes inline edit, reward floor/ceiling fields, objective chips.
+
 ## 5. Editor UI — `/adventures/:id/guide`
 
 Header: adventure title, status, pipeline progress (while generating), "Start Adventure" CTA (enabled when `guide_ready`). Tabs:
@@ -235,7 +263,7 @@ Collapsible right drawer available on all tabs: ingredient list filterable by ch
 
 ## 6. Save & activation
 
-Everything persists as edited (row-level autosave). "Start Adventure" → validates (≥1 objective per chapter, all objectives have predicates, min 1 location, **≥ 2 candidate endings**), embeds guide content (F13), sets `status: active`, first objective of chapter 1 → `reveal_state: active`, opens the lobby (F5).
+Everything persists as edited (row-level autosave). "Start Adventure" → validates (≥1 objective per chapter, all objectives have predicates, min 1 location, **≥ 2 candidate endings**, **exactly one entry quest contract whose giver is staged in the entry scene** — §4.3), embeds guide content (F13), sets `status: active`, first objective of chapter 1 → `reveal_state: hidden` behind the entry offer (F8 §9 — activation waits for acceptance), opens the lobby (F5).
 
 ## 7. Acceptance criteria
 
@@ -255,6 +283,10 @@ Everything persists as edited (row-level autosave). "Start Adventure" → valida
       failure); distinctness warnings fire on near-duplicate or no-positive-signal endings.
       "Start Adventure" validation catches < 2 endings.
 - [ ] Per-ending regeneration proposes a diff on human-edited endings (same as other rows).
+- [ ] Stage 6 emits exactly one entry quest contract (giver = registry NPC staged in the entry
+      scene, reward floor ≤ ceiling, objective refs resolve — dangling ref = stage failure);
+      "Start Adventure" validation catches a missing/invalid entry contract; contracts are
+      editable in the Plot tab.
 
 ## 8. Open questions
 

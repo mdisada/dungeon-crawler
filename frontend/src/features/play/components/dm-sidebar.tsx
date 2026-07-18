@@ -14,22 +14,26 @@ export function DmSidebar() {
   const [tab, setTab] = useState('main')
 
   return (
-    <div className="h-full overflow-y-auto p-3">
-      <Tabs value={tab} onValueChange={(value) => setTab(String(value))}>
-        <TabsList>
-          <TabsTab value="main">Main</TabsTab>
-          <TabsTab value="tools">Tools</TabsTab>
-          <TabsTab value="immersion">Immersion</TabsTab>
-        </TabsList>
-        <TabsPanel value="main" className="mt-3">
-          <DmMainTab />
-        </TabsPanel>
-        <TabsPanel value="tools" className="mt-3">
-          <DmToolsTab />
-        </TabsPanel>
-        <TabsPanel value="immersion" className="mt-3">
-          <DmImmersionTab />
-        </TabsPanel>
+    <div className="flex h-full flex-col">
+      <Tabs value={tab} onValueChange={(value) => setTab(String(value))} className="flex min-h-0 flex-1 flex-col">
+        <div className="border-b p-3">
+          <TabsList>
+            <TabsTab value="main">Main</TabsTab>
+            <TabsTab value="tools">Tools</TabsTab>
+            <TabsTab value="immersion">Immersion</TabsTab>
+          </TabsList>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          <TabsPanel value="main" className="mt-0">
+            <DmMainTab />
+          </TabsPanel>
+          <TabsPanel value="tools" className="mt-0">
+            <DmToolsTab />
+          </TabsPanel>
+          <TabsPanel value="immersion" className="mt-0">
+            <DmImmersionTab />
+          </TabsPanel>
+        </div>
       </Tabs>
     </div>
   )

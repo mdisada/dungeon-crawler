@@ -9,6 +9,7 @@ export type GuideTable =
   | 'ingredients'
   | 'encounters'
   | 'endings'
+  | 'quest_contracts'
 
 /**
  * Row-level autosave (F04 SS6). Every user edit marks the row human_edited so pipeline

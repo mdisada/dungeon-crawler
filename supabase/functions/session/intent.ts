@@ -19,8 +19,12 @@ import {
   appendLinesDiff, loadCharacter, loadPartyCharacters, loadPlayContext, newLine,
   partySkillList, pendingDiffs, skillModifierFor, typingDiff,
 } from './orchestrate.ts'
-import type { CharacterRow } from './orchestrate.ts'
+import { classifyAndHandle, noteIntentForClassifier, planAndOpenBeat } from './beats.ts'
+import type { CharacterRow, PlayContext } from './orchestrate.ts'
+import { evaluateStoryProgress } from './progress.ts'
 import { expireStaleProposals, recordProposal } from './proposals.ts'
+import { completeQuest, journalPatch, maybeHandleOfferResponse, stageOfferByContractId } from './story.ts'
+import { antagonistTurn, noteSuspicion } from './steward.ts'
 import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
 
 export interface DoCheckStash {
@@ -55,7 +59,7 @@ export async function playerIntent(
   // Superseded-by-events rule (F07 SS4): stale pending proposals expire as play moves on.
   await expireStaleProposals(service, adventureId)
 
-  if (kind === 'dm_command') return dmCommand(service, adventureId, play.isDm, play.sessionId, body)
+  if (kind === 'dm_command') return dmCommand(service, adventureId, play, body)
 
   if (!play.member?.character_id) return mustPickCharacter
   const character = await loadCharacter(service, play.member.character_id)
@@ -72,6 +76,14 @@ export async function playerIntent(
     return { status: 409, body: { error: 'The DM is choosing a response - one moment' } }
   }
 
+  // Open offer on the table (F08 SS2.1): free text runs the offer classifier before normal
+  // routing - any PC's clear accept binds the party; 'unrelated' falls through untouched.
+  if (kind === 'say' || kind === 'do') {
+    const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
+    const offerResult = await maybeHandleOfferResponse(service, env, play.sessionId, character, text)
+    if (offerResult) return offerResult
+  }
+
   const route = classifyIntent(
     { kind: kind as never, skill, targetId },
     { mode: row.state.scene.mode, stagedNpcIds: row.state.dialogue.speakers.map((s) => s.npcId) },
@@ -80,24 +92,51 @@ export async function playerIntent(
     kind, route, character_id: character.id, text: text.slice(0, 200),
   })
 
+  let result: { status: number; body: Record<string, unknown> }
   switch (route) {
     case 'fast_path':
-      return fastPath(service, adventureId, play.sessionId, kind, skill, character)
+      result = await fastPath(service, adventureId, play.sessionId, kind, skill, character)
+      break
     case 'chat': {
       await commitDiffs(service, adventureId, (s) => [appendLinesDiff(s, [newLine(character.name, null, text)])])
       await logEvent(service, adventureId, play.sessionId, 'chat', { character_id: character.id, text })
-      return { status: 200, body: { ok: true, resolved: 'chat' } }
+      try {
+        const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
+        await noteSuspicion(service, env, play.sessionId, text)
+      } catch (err) {
+        console.error('suspicion pass failed', err)
+      }
+      result = { status: 200, body: { ok: true, resolved: 'chat' } }
+      break
     }
     case 'dialogue': {
       const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
       const utterance: SayUtterance = { actorCharacterId: character.id, actorName: character.name, text }
-      return handleSay(service, env, play.sessionId, utterance, targetId)
+      result = await handleSay(service, env, play.sessionId, utterance, targetId)
+      break
     }
     case 'adjudicate':
-      return adjudicate(service, adventureId, play, character, text)
+      result = await adjudicate(service, adventureId, play, character, text)
+      break
     default:
       return { status: 400, body: { error: `Unroutable intent kind: ${kind}` } }
   }
+
+  // Off-loop streak bookkeeping (F08 SS3) runs after the route resolves so a triggered
+  // classifier pivot narrates after the action, never interleaved with it.
+  if (result.status === 200) {
+    const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
+    try {
+      const classified = await noteIntentForClassifier(service, env, play.sessionId, kind)
+      if (classified?.body.resolved === 'pivoted') {
+        const patch = await journalPatch(service, adventureId)
+        await commitDiffs(service, adventureId, () => [patch])
+      }
+    } catch (err) {
+      console.error('classifier pass failed', err)
+    }
+  }
+  return result
 }
 
 /** Explicit rolls resolve engine-only - the usage_log assertion in the AI tests rides on this. */
@@ -262,22 +301,99 @@ function buildPrompt(spec: CheckSpec, actor: CharacterRow, partyCharacterIds: st
   return prompt as PendingPromptState
 }
 
-/** F07 SS5.2 direct overrides. v1: the consistency fact base (npc dead/alive/absent). */
+/** F07 SS5.2 direct overrides: consistency facts, automation toggles, and F08 quest overrides. */
 async function dmCommand(
   service: SupabaseClient,
   adventureId: string,
-  isDm: boolean,
-  sessionId: string,
+  play: PlayContext,
   body: Record<string, unknown>,
 ) {
+  const { isDm, sessionId } = play
   if (!isDm) return { status: 403, body: { error: 'DM only' } }
   const command = String(body.command ?? '')
+  const env: AgentEnv = {
+    service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode,
+  }
+  if (command === 'stage_offer') {
+    const contractId = String(body.contract_id ?? '')
+    if (!contractId) return { status: 400, body: { error: 'contract_id required' } }
+    return stageOfferByContractId(service, env, sessionId, contractId)
+  }
+  if (command === 'complete_quest') {
+    const offerId = String(body.offer_id ?? '')
+    if (!offerId) return { status: 400, body: { error: 'offer_id required' } }
+    const result = await completeQuest(service, env, sessionId, offerId)
+    if (result.status === 200) await evaluateStoryProgress(service, env, sessionId)
+    return result
+  }
+  // F08 story overrides: world facts/flags/marker events feed the predicate evaluator; every
+  // write triggers a story-progress pass (objectives, beat exits, ending scores).
+  if (command === 'set_flag') {
+    const flag = String(body.flag ?? '')
+    if (!flag) return { status: 400, body: { error: 'flag required' } }
+    const value = (body.value ?? true) as Json
+    await commitDiffs(service, adventureId, () => [
+      { domain: 'dm', patch: { facts: { flags: { [flag]: value } } } },
+    ])
+    await logEvent(service, adventureId, sessionId, 'dm_override', { command, flag, value })
+    await evaluateStoryProgress(service, env, sessionId)
+    return { status: 200, body: { ok: true } }
+  }
+  if (command === 'set_fact') {
+    const fact = String(body.fact ?? '')
+    if (!fact) return { status: 400, body: { error: 'fact required' } }
+    const value = (body.value ?? true) as Json
+    await commitDiffs(service, adventureId, () => [
+      { domain: 'dm', patch: { facts: { world: { [fact]: value } } } },
+    ])
+    await logEvent(service, adventureId, sessionId, 'dm_override', { command, fact, value })
+    await evaluateStoryProgress(service, env, sessionId)
+    return { status: 200, body: { ok: true } }
+  }
+  if (command === 'mark_event') {
+    const tag = String(body.tag ?? '')
+    if (!tag) return { status: 400, body: { error: 'tag required' } }
+    await logEvent(service, adventureId, sessionId, 'story_event', { tag })
+    await evaluateStoryProgress(service, env, sessionId)
+    return { status: 200, body: { ok: true } }
+  }
+  if (command === 'plan_beat') {
+    const { data: loops } = await service
+      .from('core_loops')
+      .select('id')
+      .eq('adventure_id', adventureId)
+      .eq('status', 'active')
+      .limit(1)
+    const loopId = (loops ?? [])[0]?.id as string | undefined
+    if (!loopId) return { status: 409, body: { error: 'No active loop - accept a quest first' } }
+    return planAndOpenBeat(service, env, sessionId, loopId, 'dm_command')
+  }
+  if (command === 'reclassify') {
+    const result = await classifyAndHandle(service, env, sessionId)
+    if (result.body.resolved === 'pivoted') {
+      const patch = await journalPatch(service, adventureId)
+      await commitDiffs(service, adventureId, () => [patch])
+    }
+    return result
+  }
+  if (command === 'advance_day') {
+    const after = await commitDiffs(service, adventureId, (s) => [
+      { domain: 'scene', patch: { day: s.scene.day + 1 } },
+    ])
+    await logEvent(service, adventureId, sessionId, 'day_advanced', { day: after.state.scene.day })
+    await antagonistTurn(service, env, sessionId, 'world_clock')
+    await evaluateStoryProgress(service, env, sessionId)
+    return { status: 200, body: { ok: true, day: after.state.scene.day } }
+  }
   if (command === 'set_auto') {
-    const patch: Record<string, boolean> = {}
+    const patch: Record<string, boolean | number> = {}
     if (typeof body.auto_dialogue === 'boolean') patch.autoDialogue = body.auto_dialogue
     if (typeof body.auto_checks === 'boolean') patch.autoChecks = body.auto_checks
+    if (typeof body.nudge_minutes === 'number' && body.nudge_minutes >= 1) {
+      patch.nudgeMinutes = Math.min(60, Math.round(body.nudge_minutes))
+    }
     if (Object.keys(patch).length === 0) {
-      return { status: 400, body: { error: 'auto_dialogue or auto_checks (boolean) required' } }
+      return { status: 400, body: { error: 'auto_dialogue, auto_checks, or nudge_minutes required' } }
     }
     // Always write the full settings object so partial pre-Slice-2 states heal to a complete shape.
     const after = await commitDiffs(service, adventureId, (s) => [
@@ -296,6 +412,7 @@ async function dmCommand(
       { domain: 'dm', patch: { facts: { npcStates: { [npcId]: state } } } },
     ])
     await logEvent(service, adventureId, sessionId, 'dm_override', { command, npc_id: npcId, state })
+    await evaluateStoryProgress(service, env, sessionId)
     return { status: 200, body: { ok: true } }
   }
   return { status: 400, body: { error: `Unknown dm_command: ${command}` } }

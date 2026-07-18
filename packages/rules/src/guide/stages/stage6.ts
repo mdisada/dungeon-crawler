@@ -4,7 +4,7 @@
 // never sees row UUIDs; the pipeline resolves handles back to ids.
 
 import { Check, extractJsonObject } from '../json.ts'
-import type { HookDraft, ParseResult } from '../types.ts'
+import type { ContractDraft, HookDraft, ParseResult } from '../types.ts'
 
 export interface GuideDigest {
   /** Handle -> one-line description, e.g. "npc#1" -> "Volgarth (boss, chapter 2): ...". */
@@ -33,8 +33,18 @@ Rules:
 - hook_text is 1-2 sentences of DM-usable connective tissue, concrete, spoiler-aware.
 - 1-3 backstory_slot hooks total for the whole adventure.
 
+Also produce quest CONTRACTS: the story is offered, not imposed - a quest only starts once
+players accept an in-fiction offer from a giver NPC with stated pay and stakes.
+- Exactly ONE contract with "is_entry": true - the adventure's opening job, given by an NPC the
+  party meets in the first scene, covering chapter 1's opening objective(s).
+- Optionally up to one side contract per later chapter where the content supports it.
+- "gold_floor" is the opening bid; "gold_ceiling" is the most the giver can be haggled up to.
+  Keep amounts modest and level-appropriate (a village elder does not offer 5000 gold).
+- "stakes" is the player-facing reason this matters TO THE GIVER (never the party's motivation).
+
 Respond with ONLY a JSON object, no prose, in exactly this shape:
-{ "hooks": [ { "from": "npc#1" | null, "to_objective": "obj#3", "hook_text": "...", "kind": "npc_objective"|"location_placement"|"backstory_slot" } ] }`
+{ "hooks": [ { "from": "npc#1" | null, "to_objective": "obj#3", "hook_text": "...", "kind": "npc_objective"|"location_placement"|"backstory_slot" } ],
+  "contracts": [ { "label": "Escort Maren to the coast", "giver": "npc#1", "is_entry": true, "gold_floor": 50, "gold_ceiling": 100, "extras": ["a night's lodging"], "stakes": "...", "deadline_days": null, "objectives": ["obj#1"] } ] }`
 
   const user = `Objectives:
 ${digestLines(digest.objectives)}
@@ -51,7 +61,12 @@ ${digestLines(digest.ingredients)}`
   return { system, user, maxTokens: 3000 }
 }
 
-export function parseStage6(raw: string, digest: GuideDigest): ParseResult<HookDraft[]> {
+export interface Stage6Output {
+  hooks: HookDraft[]
+  contracts: ContractDraft[]
+}
+
+export function parseStage6(raw: string, digest: GuideDigest): ParseResult<Stage6Output> {
   const extracted = extractJsonObject(raw)
   if (!extracted.ok) return extracted
 
@@ -81,5 +96,45 @@ export function parseStage6(raw: string, digest: GuideDigest): ParseResult<HookD
     return { fromHandle, toObjectiveHandle, hookText: c.str(h.hook_text, `${path}.hook_text`), kind }
   })
 
-  return c.result(hooks)
+  // Quest contracts (F04 SS4.3): dangling refs are a stage failure, never a warning.
+  const contracts: ContractDraft[] = c.arr(extracted.data.contracts, '$.contracts', 1, 8).map((raw, i) => {
+    const path = `$.contracts[${i}]`
+    const k = c.obj(raw, path)
+    const giverHandle = c.str(k.giver, `${path}.giver`)
+    if (giverHandle && !digest.npcs.has(giverHandle)) {
+      c.errors.push(`${path}.giver: unknown npc handle "${giverHandle}"`)
+    }
+    const goldFloor = c.int(k.gold_floor, `${path}.gold_floor`, 0, 100_000)
+    const goldCeiling = c.int(k.gold_ceiling, `${path}.gold_ceiling`, 0, 100_000)
+    if (goldCeiling < goldFloor) {
+      c.errors.push(`${path}.gold_ceiling: must be >= gold_floor`)
+    }
+    const objectiveHandles = c.arr(k.objectives, `${path}.objectives`, 1, 6).map((o, j) => {
+      const handle = c.str(o, `${path}.objectives[${j}]`)
+      if (handle && !digest.objectives.has(handle)) {
+        c.errors.push(`${path}.objectives[${j}]: unknown handle "${handle}"`)
+      }
+      return handle
+    })
+    return {
+      label: c.str(k.label, `${path}.label`),
+      giverHandle,
+      isEntry: k.is_entry === true,
+      goldFloor,
+      goldCeiling,
+      extras: Array.isArray(k.extras) ? k.extras.filter((x): x is string => typeof x === 'string') : [],
+      stakes: c.str(k.stakes, `${path}.stakes`),
+      deadlineDays:
+        typeof k.deadline_days === 'number' && Number.isInteger(k.deadline_days) && k.deadline_days > 0
+          ? k.deadline_days
+          : null,
+      objectiveHandles,
+    }
+  })
+  const entryCount = contracts.filter((k) => k.isEntry).length
+  if (entryCount !== 1) {
+    c.errors.push(`$.contracts: exactly one contract must have is_entry true (got ${entryCount})`)
+  }
+
+  return c.result({ hooks, contracts })
 }

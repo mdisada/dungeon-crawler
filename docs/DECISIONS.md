@@ -595,3 +595,145 @@ npc_interactions, npcs.generated, state backfill), `supabase/functions/session/`
 intent, prompts, npc-dialogue, narration, proposals, orchestrate), `packages/rules/src/play/`,
 state contract extensions, `frontend/src/features/play/` (IntentInputRow, CheckPrompt, Story
 tab, proposal tray, tap-to-roll), `tests/integration/orchestration-live.mjs`.
+
+## 2026-07-18 — Phase 5 gate PASS; Phase 6 design: reactive story contract (quest offers & acceptance)
+
+**Verdict:** Phase 5 (F07 + F10) GATE: PASS — all checkpoint boxes checked
+(`docs/CHECKPOINTS/PHASE5.md`), including the paid real-LLM solo session and the two-player
+cooperation test. F07 and F10 move to **gated**.
+
+**CHANGES (user, at Phase 6 kickoff):** in fully-AI adventures the story felt passive — the
+opening presumed party motivation ("You've come to these remote shores to uncover the truth…"),
+narration never put a decision in front of the players, and quests were never *asked for or
+accepted*. The user wants the player reactive and complicit in the story: a clear extrinsic
+motivation (e.g. someone offers payment), an explicit yes before a quest drives play, and
+narration that ends with the ball in the players' court — while the AI still guides the story
+to an ending. Design resolved via a full grill-me interview (all recommendations accepted):
+
+1. **Scope:** the entry hook AND every quest-shaped core loop arrive as offers; objectives
+   inside an accepted quest flow without re-asking.
+2. **Mechanic:** in-fiction offers + tracked `quest_offers` state with a player-visible banner;
+   accept/decline/negotiate detected from free text by the Router/classifier — no buttons.
+3. **Party semantics:** any PC's clear acceptance binds the party (no voting UI).
+4. **Negotiation:** haggling runs through the existing F10 influence pipeline, bounded by
+   guide-authored reward floor/ceiling.
+5. **Decline:** honored; giver disposition shifts; Meta Loop Steward advances the antagonist
+   plan; Hook Weaver re-weaves from a different angle at most 2×; then consequences physically
+   reach the party; persistent disengagement → emergent "walked away" ending (Ending Steward).
+6. **Motivation source:** authored `quest_contracts` in the guide (F04 Stage 6: exactly one
+   entry contract, giver staged in the entry scene; optional side contracts), adapted live.
+7. **Rewards:** simple party gold ledger in game state now (event-logged payouts); items/XP
+   stay narrative until F11.
+8. **UI:** minimal quest journal extending the objective display (active quest, giver, terms,
+   stakes, suspended quests) + system lines in the story feed on accept/decline/payout.
+9. **Concurrency:** accepted quests map onto the F8 loop stack (one active, others suspended);
+   ≤ 2 unresolved offers outstanding.
+10. **Narration contract:** every beat ends at a concrete decision point (situational, not a
+    formulaic "What do you do?"); openings stage the entry offer and never presume motivation.
+11. **Pacing:** event-driven in full-AI — beat exit → Beat Planner → Narrator opens the next
+    beat automatically; idle players get one in-fiction nudge (default 3 min, configurable);
+    plot never advances without player input; "Narrate next" stays as manual override.
+12. **Ending guarantee:** unchanged — Ending Steward (F8 §8.1) still steers to a conclusion;
+    the refusal ending makes even total disengagement a real ending.
+
+**Spec updates (spec-first per change rules):** `docs/F08-story-loop-system.md` new §2.1
+(quest contracts & offer lifecycle), §2.2 (quest journal), §6 offer-delivery note, §9
+acceptance-gates-activation, new §9.1 (reactive narration & pacing contract), §10 criteria;
+`docs/F04-adventure-guide-pipeline-editor.md` `quest_contracts` shape + §4.3, Stage 6 output,
+Start-Adventure validation (entry contract; first objective now hidden behind the entry offer),
+§7 criteria; `docs/F07-live-orchestration-core.md` §5.1 narration contract note.
+
+## 2026-07-18 — Phase 6 slice 1 BUILD: offer-pipeline architecture decisions
+
+- **Offer detection is a pre-routing hook, not a Router route:** with an open offer, `say`/`do`
+  text runs a cheap offer classifier (canned keyword match on demo, one small LLM call live)
+  before `classifyIntent`; `unrelated` falls through to the normal pipeline untouched. Keeps
+  the deterministic Router pure and the offer path additive.
+- **Reaction beats go through the Narrator only** (`story.ts` never imports the NPC pipeline):
+  giver reactions to accept/decline/haggle are narration, not `npcReply`, because
+  `npc-dialogue.ts` must import `finishNegotiation` for the check-resume path and an import
+  cycle would result. Revisit in slice 3 if giver-voiced replies matter (a shared beat module
+  would break the cycle).
+- **Journal state placement:** offers/quests live on the `objectives` domain (the journal is an
+  extension of the objective display per F08 §2.2), party gold on `players.gold`. No new diff
+  domain. `quest_offers`/`core_loops`/`beats`/`quest_contracts` tables are DM-read-only
+  (negotiation ceilings and beat plans are hidden info); the player-visible subset travels in
+  GameState only — verified by RLS checks in the live suite.
+- **Accepted quests push a `custom`-type core loop** labeled with the quest; the Loop
+  Classifier (slice 3) owns real typing/pivots. Negotiation stash is a third
+  `pendingContext` flow (`negotiate`) beside `do`/`social`, resumed by `continueAfterCheck`.
+- **Re-weaves are DM-triggered for now** (`dm_command stage_offer`, budget-enforced, terms
+  escalate halfway to ceiling per declined round); the Hook Weaver automates re-weave timing
+  and angle in slice 3. Third decline logs `consequence_due` for the slice-4 Steward.
+- **`complete_quest` is a DM override** (F07 §5.2 checkbox family) with `paid_at` as the
+  payout idempotency guard (second call 409s); automatic completion via objective predicates
+  is later Phase 6 work.
+- **Demo seed unchanged:** the Phase 4/5 scripted demo pre-activates its objective, so it does
+  not exercise offers; the story suite builds its own contract fixture. A demo contract (and
+  Stage 6 authoring) lands with slice 2 so the user's manual demo run shows the offer flow.
+
+**Updated:** migration `20260718150000_create_story_loops.sql`, `packages/rules/src/story/`
+(+ `_shared/story` mirror, sync script now mirrors 5 modules), state contract
+(players.gold, objectives.offers/quests), `supabase/functions/session/` (story.ts new; agents,
+intent, prompts, npc-dialogue, lifecycle extended), `frontend/src/features/play/`
+(offer-banner.tsx new; player-sidebar, dm-overview-panel, play-page extended),
+`tests/integration/story-live.mjs` (50 checks). Deployed live; migration applied.
+
+## 2026-07-18 — Phase 6 slices 2-5 BUILD: full F08 story brain (decisions + deviations)
+
+**Built on top of slice 1:** Stage 6 quest-contract authoring (F04 §4.3: entry contract
+hard-validated - giver resolves to a first-chapter NPC, dangling refs = stage failure; re-runs
+preserve human-edited contracts), contract editor cards in the Plot tab + Start-Adventure
+validation, demo-seed entry contract (first objective now hidden behind Maren's offer), Beat
+Planner + Loop Classifier + live Hook Weaver + Variety Manager + idle nudge (slice 3), and
+predicate evaluation + Ending Steward + Meta Loop Steward + player-theory canonization
+(slice 4). Architecture decisions, nothing silent:
+
+- **Classifier trigger is deterministic:** `intent kind -> pillar` tagging vs the loop
+  template's pillar profile; 3 consecutive off-loop intents run the classifier (streak in
+  `dm.story.offLoopStreak`; mid-band full-AI pivots set a -5 cooldown = "re-evaluate after 5
+  events"). Thresholds per spec: propose >= 0.65, full-AI auto-accept >= 0.8.
+- **Braided beats: emission only.** The Planner emits pairs gated on the composition profile
+  (skills present + party size, soft-dropped otherwise); pairs are stored and fed to agent
+  context, but the live linked-DC resolution between two clients (F07 §3.4 golden fixture)
+  is deferred to Phase 7, where F09's encounter specs consume the same link shape. The F07 §8
+  braided acceptance criterion stays open until then.
+- **Ingredient Generator folded into planner requests:** unmet requests become ingredient rows
+  from the request's own purpose text (no second LLM call); pool reuse asserted by fixture
+  (`beat_ingredient_reused` vs `ingredient_generated` events).
+- **Predicate world state lives in `dm.facts`** (`world`/`flags` beside `npcStates`) + marker
+  events (`story_event` rows, exact-tag match). Progress passes run at story-relevant points
+  (dm story commands, quest completion, beat opens, check resolutions via commands), not
+  literally on every diff. **`propose_objective_completion` (Adjudicator ambiguous atoms) is
+  deferred** - v1 completion sources are deterministic predicates + the DM-command override
+  family. Flagged for the gate; revisit before F14 hardening.
+- **Ending Steward:** deterministic scoring on every progress pass (argmax, index tie-break),
+  commitment only when the final objective is in play + margin >= 3 + >= 30 recorded events;
+  full-AI auto-commit gated on the Consistency scan; climax re-authored live from the event
+  log at commitment. **The holistic LLM confirm pass (chapter boundaries) and emergent/refusal
+  ending authoring are deferred** - `consequence_due` (re-weave budget exhausted) is the
+  authored hook for the refusal path; wire both when F13's condensed-event summaries exist.
+- **Dial nudges run at session end** over the transcript (±1/±2 clamped, justification logged
+  per move); per-scene nudges can move to `end_encounter` later without schema change.
+- **Suspicion = keyword heuristic + registry-name match** (F08 §11 starting point); BBEG
+  commitment at tally >= 5 with >= 2 sessions, full-AI commits only if the NPC isn't dead,
+  retro-pass plants a hook. **Canonization** ships the full-AI path (clean registry-wide
+  Consistency scan -> `player_theory` ingredient; conflicts surface as `canonization_blocked`
+  with violations); the DM "Make it true" surface is Phase 10.
+- **Idle nudge is client-swept** (DM client timer -> `idle_nudge` action; server validates
+  idleness against event-log age, dedupes, and never advances plot) - same no-timers family
+  as prompt deadlines. Default 3 min, `set_auto { nudge_minutes }` to change.
+- **Backstory interlocks (F08 §6) defer to Phase 7** - they link *personal* progression
+  loops, which don't exist until F11.
+- **Existing guide_ready adventures predate contracts:** they fail the new Start-Adventure
+  validation until Stage 6 is re-run (Regenerate guide) or a contract is added in the editor.
+  Active adventures are unaffected (no entry gating once started).
+
+**Updated:** migrations `20260718160000` (contract editing columns) + `20260718170000`
+(meta_loop, adventures ending columns); `packages/rules/src/guide/` (stage6 contracts,
+validation) + `src/story/` (templates, classifier, beats, evaluate, endings, variety - rules
+suite now 255 tests); `supabase/functions/guide-pipeline/stages-weave.ts`;
+`supabase/functions/session/` (story-agents.ts, beats.ts, progress.ts, steward.ts new;
+intent/lifecycle/npc-dialogue/index extended); `frontend/src/features/guide/` (contract card,
+validation, types) and `features/play/` (idle sweep); seed;
+`tests/integration/story-live.mjs` -> 92 checks. All deployed; both functions redeployed.

@@ -27,6 +27,57 @@ Operations: `push(loop)`, `suspend(loop)`, `resume(loop)`, `complete(loop)`, `ad
 
 **Loop type library:** each type ships a template — canonical beat sequence + expected intent profile + entry/exit heuristics (e.g. `monster_hunt: rumor → preparation → the_hunt → confrontation → aftermath`). Templates are defaults; Beat Planner may deviate.
 
+## 2.1 Quest contracts & the offer lifecycle (added 2026-07-18)
+
+Design principle: **the story is offered, not imposed.** Players are never told what motivates
+them — quest-shaped goals arrive as in-fiction offers with a giver, stated reward, and stakes,
+and nothing quest-shaped becomes active until the party says yes. Acceptance is what creates
+motivation; narration that presumes it ("you've come here to uncover the truth") is a defect.
+
+```
+quest_offers: id, adventure_id, contract_id?,   -- authored contract (F4 §4.3) or live-woven
+              quest_label, giver_npc_id,
+              terms jsonb {reward: {gold, extras[]}, stakes, deadline?},
+              status ('offered'|'accepted'|'declined'|'expired'),
+              core_loop_id?,                    -- set on accept
+              reweave_count int default 0, offered_at, resolved_at?
+party ledger: gold int on GameState (players domain) + event-log entries per payout
+```
+
+- **Scope:** the adventure's entry hook AND every quest-shaped core loop entering play (side
+  quests, pivots into a new quest line) begin as an offer. Objectives inside an accepted quest
+  flow per §9 without re-asking. Non-quest loops (a dungeon the party walks into) need no offer.
+- **Presentation:** in-fiction — giver NPC dialogue or narration stages the ask. Tracked state
+  renders a persistent player-visible banner ("Offer: escort Maren to the coast — 50 gp") so
+  what the game is waiting on is never ambiguous. At most **2 unresolved offers** outstanding.
+- **Resolution is free-text:** the intent Router / social classifier detect accept / decline /
+  negotiate from what players actually say — no Accept/Decline buttons. **Any PC's clear
+  acceptance binds the party** (table realism, no voting UI); a prior objection is just
+  conversation the giver responds to.
+- **Negotiation:** an influence attempt against the giver through the normal F10 pipeline;
+  success improves terms within the contract's authored floor/ceiling (F4 §4.3), gated by
+  disposition and magnitude rules unchanged. Terms-as-accepted are recorded on the offer.
+- **Accept:** system line in the story feed ("Contract accepted: 50 gp on delivery"), core loop
+  pushed/activated with the contract attached, giver disposition +1, journal updated (§2.2).
+- **Decline:** honored — never argued in the moment. Giver disposition shifts per personality;
+  the Meta Loop Steward receives a decline event (the antagonist plan advances on its own
+  schedule, §8); the Hook Weaver may **re-weave** the offer later from a genuinely different
+  angle (higher pay, personal stakes, visible consequences) — at most **2 re-weaves**. After
+  the re-weave budget, escalation stops being an offer: §8 surfacing brings the consequences
+  physically to the party (the threat comes to them; survival needs no contract). If the party
+  still disengages, the Ending Steward may author an emergent "walked away" ending (§8.1
+  emergent rules) so the adventure concludes honestly instead of nagging forever.
+- **Payout:** quest exit conditions met → `terms.reward.gold` credited to the party ledger
+  (event-logged, narrated by the giver when alive/present). Item/XP extras stay narrative
+  until F11 wires real progression — no fake inventory.
+
+## 2.2 Quest journal (minimal, player-visible)
+
+Extends the existing objective display, not a new page: active quest (label, giver, accepted
+terms, stakes), suspended accepted quests, current objective, plus the outstanding-offer
+banner. Accept/decline/payout moments also drop system lines into the story feed so decisions
+stay legible in the transcript. Archive view (declined/completed history) is v1.1.
+
 ## 3. Loop Classifier Agent
 
 Trigger: scene transitions; Action Router mismatch flag (3+ off-loop intents); DM manual "reclassify".
@@ -82,6 +133,12 @@ Output: { hooks: [{ placement: npc_dialogue|scene_detail|rumor|event,
 ```
 
 Hooks are delivered as context to the Narrator/NPC agents ("work this in naturally"), not broadcast directly. This is the mechanism behind "the app directs players toward unlocking the next objective" — always pull (hooks inside the current loop), never push (forced scenes).
+
+**Offer delivery (2026-07-18):** when a hook's target is a quest contract (§2.1), the Weaver's
+job is to stage the giver scene — get the giver and the party into the same fiction so the ask
+lands in dialogue. Re-weaves after a decline must come from a *different* angle (new placement,
+escalated terms, or newly visible stakes), never a verbatim re-pitch; the Weaver receives
+`reweave_count` and prior declined terms as input.
 
 **Backstory interlocks (min_players > 1):** at the first-session pass (F5) and on personal-loop milestones, the Weaver deliberately links personal loops *across* characters where the material allows — A's vendetta beast is guarded by the cult from B's past — so personal progression invites each other's help. Interlocks are recorded as hooks with `kind: 'interlock'` and referenced by both personal loops. Guardrail: interlocks connect, never gate — a personal loop must remain completable without the other PC's loop (assist, not padlock).
 
@@ -149,8 +206,31 @@ system follows).
 ## 9. Objective flow (ties F4 → live play)
 
 - One objective `active` (player-visible) at a time per the reveal order; predicates auto-evaluated on every state diff; Adjudicator handles ambiguous atoms via `propose_objective_completion`.
+- **Acceptance gates activation (2026-07-18):** a quest's first objective only becomes `active`
+  once its offer is `accepted` (§2.1); before that, the loop's entry beat *is* the offer scene.
+  Objectives inside an accepted quest then flow per the reveal order without re-asking.
 - Completion → proposal (assist) / conservative auto (full-AI, F14) → next objective `active` → Hook Weaver plants its hooks into the current loop → Narrator gets a reveal seed.
 - DM manual checkbox = override event (F7 §5.2).
+
+## 9.1 Reactive narration & pacing contract (added 2026-07-18)
+
+- **Every narration beat ends at a concrete decision point** facing the players — an NPC
+  awaiting an answer, a fork, a threat, an open offer — and MAY end with a direct question to
+  the party or a named PC when natural. Never a formulaic "What do you do?" appended to every
+  beat; the situation itself must put the ball visibly in the players' court. Enforced via the
+  Narrator system prompt (F7 §5.1 narration contract).
+- **Session openings stage the offer, never the motivation:** the opening premise establishes
+  scene and atmosphere and leads *into* the entry offer scene. It must not presume party
+  motivation ("you've come to these shores to uncover the truth") — motivation is what
+  acceptance creates.
+- **Beat goals are situations, not events:** the Beat Planner phrases `goals` as situations
+  demanding a player decision, not things that happen to the party.
+- **Pacing is event-driven in full-AI:** beat exit conditions met → Beat Planner plans the next
+  beat → Narrator opens it automatically (no button press). "Narrate next" remains a manual
+  override for the creator/DM.
+- **Idle nudge:** players idle past a threshold (default 3 min, DM-configurable) → one
+  in-fiction nudge (an NPC speaks up, a distant sound, the giver presses for an answer). A
+  nudge never advances plot state without player input.
 
 ## 10. Acceptance criteria
 
@@ -167,6 +247,23 @@ system follows).
       re-ranks the leading ending; dial nudges are logged with justifications; commitment fires
       only at the late threshold and re-authors the climax from the event log; auto-commit
       (Full-AI) blocked on a Consistency contradiction.
+- [ ] Offer lifecycle: the entry hook arrives as an `offered` quest_offer with banner state; a
+      free-text accept activates the quest loop, drops the system line, and shifts giver
+      disposition; the quest's first objective is NOT `active` before acceptance (fixture).
+- [ ] Any-accept binds: with two PCs, one objection followed by the other's clear accept
+      resolves the offer `accepted`; the objection routes to NPC conversation, not a veto.
+- [ ] Negotiation: a successful influence attempt improves terms within the contract's authored
+      floor/ceiling and never beyond the ceiling (clamp fixture); failure leaves terms unchanged;
+      accepted terms are what the payout uses.
+- [ ] Decline path: decline honored (no re-pitch in the same scene), steward receives the
+      decline event, re-weave arrives from a different angle with `reweave_count` incremented;
+      after 2 re-weaves no further offers — consequence surfacing fires instead (fixture
+      sequence); refusal ending only creatable after the re-weave budget is exhausted.
+- [ ] Ledger payout: quest completion credits accepted gold to the party ledger with an event-log
+      entry (idempotent — no double-pay on re-evaluation).
+- [ ] Reactive narration: demo/canned narration fixtures end on a decision point; the opening
+      premise prompt forbids presumed motivation and stages the entry offer (prompt-contract
+      assertion + fixture).
 
 ## 11. Open questions
 

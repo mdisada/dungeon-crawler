@@ -14,6 +14,8 @@ import {
 import type {
   AdjudicationOutput, ConsistencyVerdict, NpcAgentOutput, SocialClassification,
 } from '../_shared/play/index.ts'
+import { parseOfferResponse } from '../_shared/story/index.ts'
+import type { OfferResponseKind } from '../_shared/story/index.ts'
 
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? ''
 
@@ -26,7 +28,7 @@ export interface AgentEnv {
   mode: 'full_ai' | 'assist' | null
 }
 
-async function agentJson(env: AgentEnv, role: string, system: string, user: string, maxTokens: number): Promise<unknown> {
+export async function agentJson(env: AgentEnv, role: string, system: string, user: string, maxTokens: number): Promise<unknown> {
   const text = await callAgentText({
     serviceClient: env.service,
     openRouterApiKey: OPENROUTER_API_KEY,
@@ -174,6 +176,8 @@ function cannedNpcOutput(ctx: NpcContext): unknown {
   // Adversarial fixture: "secret" tries to dump the whole knowledge list, gated or not.
   if (t.includes('secret')) out.reveals = ctx.knowledge.map((k) => k.id)
   else if (ctx.checkResult?.success && ctx.knowledge.length > 0) out.reveals = [ctx.knowledge[0].id]
+  // F08 SS5 fixture: a stated theory makes the canned NPC propose canonization.
+  if (t.includes('theory')) out.proposed_actions = [{ type: 'canonize_theory', payload: { theory: ctx.utterance.text } }]
   if (ctx.checkResult?.success && ctx.checkResult.skill === 'insight') {
     out.opening = { unlocked_by: ctx.utterance.actorCharacterId, skill: 'persuasion' }
   }
@@ -254,7 +258,11 @@ export async function runReplyGists(env: AgentEnv, ctx: NpcContext, rejected?: s
 
 const NARRATOR_SYSTEM =
   'You narrate a tabletop RPG. Second person, present tense, 2-4 sentences, vivid but concise. ' +
-  'Never invent facts about named NPCs/items/places beyond the given context. Output only narration text.'
+  'Never invent facts about named NPCs/items/places beyond the given context. ' +
+  'End every narration at a concrete decision point facing the players - someone awaiting their ' +
+  'answer, a fork, a threat, an open question - never a settled scene. Never presume the party\'s ' +
+  'motivation or feelings; motivation belongs to the players. Vary how beats end - no formulaic ' +
+  'closing line. Output only narration text.'
 
 export async function runNarrator(env: AgentEnv, prompt: string, constraint?: string): Promise<string> {
   if (env.demo) return `[demo narration] ${prompt.slice(0, 140)}`
@@ -316,6 +324,33 @@ export async function runConsistency(
     )
   } catch {
     return { ok: true, violations: [] } // checker outage must not block play; incidents log elsewhere
+  }
+}
+
+const OFFER_SYSTEM =
+  'The party faces an open quest offer in a D&D-style game. Classify their utterance as a response ' +
+  'to it. Reply with ONLY JSON: {"response": "accept"|"decline"|"negotiate"|"unrelated"}. ' +
+  '"accept" only on a clear yes to taking the job; "decline" on a clear refusal; "negotiate" when ' +
+  'they push for better terms or payment; anything else - questions about the job, small talk, ' +
+  'unrelated actions - is "unrelated". When unsure, "unrelated".'
+
+function cannedOfferResponse(text: string): OfferResponseKind {
+  const t = text.toLowerCase()
+  if (/(more gold|pay us more|double|sweeten|better terms|for that price|make it worth)/.test(t)) return 'negotiate'
+  if (/(we accept|i accept|we'll do it|we will do it|you have a deal|count us in|we'll take the job|we take the job)/.test(t)) return 'accept'
+  if (/(we decline|not interested|find someone else|no deal|we refuse|we won't do it)/.test(t)) return 'decline'
+  return 'unrelated'
+}
+
+/** F08 SS2.1: free-text accept/decline/negotiate detection. Failure degrades to 'unrelated'. */
+export async function runOfferClassifier(env: AgentEnv, offerSummary: string, utterance: string): Promise<OfferResponseKind> {
+  if (env.demo) return cannedOfferResponse(utterance)
+  try {
+    return parseOfferResponse(
+      await agentJson(env, 'adjudicator', OFFER_SYSTEM, `Offer on the table: ${offerSummary}\nUtterance: ${utterance}`, 100),
+    )
+  } catch {
+    return 'unrelated' // classification failure = normal routing, never a blocked table
   }
 }
 

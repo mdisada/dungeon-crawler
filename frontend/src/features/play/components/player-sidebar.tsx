@@ -28,33 +28,68 @@ export function PlayerSidebar() {
   const setTab = (next: string) => setTabState({ isBattle, tab: next })
 
   const currentObjective = state.objectives.list.find((o) => o.id === state.objectives.currentId)
+  const { offers, quests } = state.objectives
 
   return (
     <div className="flex h-full flex-col">
       <header className="border-b p-3">
-        <p className="text-xs uppercase tracking-wide text-muted-foreground">Current objective</p>
+        <div className="flex items-baseline justify-between gap-2">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Current objective</p>
+          <p className="shrink-0 text-xs font-medium tabular-nums" aria-label="Party gold">
+            {state.players.gold} gp
+          </p>
+        </div>
         <p className="text-sm font-medium">{currentObjective?.title ?? 'None yet'}</p>
+        {/* Minimal quest journal (F08 SS2.2): accepted terms stay visible at a glance. */}
+        {quests.length > 0 && (
+          <div className="mt-2">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Quests</p>
+            <ul className="mt-0.5 flex flex-col gap-0.5">
+              {quests.map((quest) => (
+                <li key={quest.id} className="text-xs">
+                  <span className={cn('font-medium', quest.status === 'completed' && 'text-muted-foreground line-through')}>
+                    {quest.label}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {' '}- {quest.giverName}
+                    {quest.gold > 0 ? `, ${quest.gold} gp` : ''}
+                    {quest.status === 'suspended' ? ' (paused)' : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {offers.length > 0 && (
+          <p className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400">
+            Awaiting your answer: {offers.map((o) => o.label).join('; ')}
+          </p>
+        )}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {sheetState.status === 'loading' && <p className="text-sm text-muted-foreground">Loading sheet…</p>}
-        {sheetState.status === 'error' && <p className="text-sm text-muted-foreground">{sheetState.message}</p>}
+      <div className="flex min-h-0 flex-1 flex-col">
+        {sheetState.status === 'loading' && <p className="p-3 text-sm text-muted-foreground">Loading sheet…</p>}
+        {sheetState.status === 'error' && <p className="p-3 text-sm text-muted-foreground">{sheetState.message}</p>}
         {sheetState.status === 'ready' && (
-          <Tabs value={tab} onValueChange={(value) => setTab(String(value))}>
-            <TabsList>
-              <TabsTab value="skills">Ability &amp; Skills</TabsTab>
-              <TabsTab value="combat">Combat</TabsTab>
-              <TabsTab value="background">Background</TabsTab>
-            </TabsList>
-            <TabsPanel value="skills" className="mt-3">
-              <SkillsTab sheet={sheetState.sheet} />
-            </TabsPanel>
-            <TabsPanel value="combat" className="mt-3">
-              <CombatTab sheet={sheetState.sheet} hp={me?.hp ?? null} />
-            </TabsPanel>
-            <TabsPanel value="background" className="mt-3">
-              <BackgroundTab sheet={sheetState.sheet} />
-            </TabsPanel>
+          <Tabs value={tab} onValueChange={(value) => setTab(String(value))} className="flex min-h-0 flex-1 flex-col">
+            <div className="border-b p-3">
+              <TabsList>
+                <TabsTab value="skills">Ability &amp; Skills</TabsTab>
+                <TabsTab value="combat">Combat</TabsTab>
+                <TabsTab value="background">Background</TabsTab>
+              </TabsList>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              <TabsPanel value="skills" className="mt-0">
+                <SkillsTab sheet={sheetState.sheet} />
+              </TabsPanel>
+              <TabsPanel value="combat" className="mt-0">
+                <CombatTab sheet={sheetState.sheet} hp={me?.hp ?? null} />
+              </TabsPanel>
+              <TabsPanel value="background" className="mt-0">
+                <BackgroundTab sheet={sheetState.sheet} />
+              </TabsPanel>
+            </div>
           </Tabs>
         )}
       </div>

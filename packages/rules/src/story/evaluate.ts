@@ -1,0 +1,42 @@
+// Deterministic predicate evaluation (F08 SS9, F04 SS4): objective completion and beat exit
+// conditions evaluate against the world fact base on every story-progress pass - pure lookups,
+// never an LLM. Ambiguous atoms (facts nobody has written) simply don't hold; the Adjudicator
+// path proposes completions for those.
+
+import type { Predicate } from '../guide/predicates.ts'
+import { isValidPredicate } from '../guide/predicates.ts'
+import type { Json } from '../state/types.ts'
+
+export interface WorldFacts {
+  /** Flat fact paths, e.g. "npc.volgarth.status" -> "dead", "boy_found" -> true. */
+  facts: Record<string, Json>
+  flags: Record<string, Json>
+  /** Marker events already logged, matched by exact tag. */
+  events: ReadonlySet<string>
+}
+
+function scalarEq(a: Json | undefined, b: Json): boolean {
+  return a === b
+}
+
+export function evaluatePredicate(predicate: unknown, world: WorldFacts): boolean {
+  if (!isValidPredicate(predicate)) return false
+  return holds(predicate, world)
+}
+
+function holds(p: Predicate, world: WorldFacts): boolean {
+  if ('any' in p) return p.any.some((branch) => holds(branch, world))
+  if ('all' in p) return p.all.every((branch) => holds(branch, world))
+  if ('fact' in p) {
+    const value = world.facts[p.fact]
+    if (value === undefined) return false
+    if ('eq' in p && p.eq !== undefined) return scalarEq(value, p.eq)
+    if ('in' in p && p.in) return p.in.some((candidate) => scalarEq(value, candidate))
+    return false
+  }
+  if ('flag' in p) {
+    const value = world.flags[p.flag]
+    return value !== undefined && scalarEq(value, p.eq)
+  }
+  return world.events.has(p.event)
+}

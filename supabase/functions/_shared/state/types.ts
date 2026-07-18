@@ -143,6 +143,8 @@ export interface PlayerView {
 
 export interface PlayersState {
   list: PlayerView[]
+  /** Party ledger (F08 SS2.1): quest payouts credit here. Items/XP stay narrative until F11. */
+  gold: number
 }
 
 export interface ObjectiveView {
@@ -152,9 +154,33 @@ export interface ObjectiveView {
   state: 'revealed' | 'active' | 'completed'
 }
 
+/** An unresolved quest offer on the table (F08 SS2.1 banner) - the negotiation ceiling never enters GameState. */
+export interface OfferBannerView {
+  id: string
+  label: string
+  giverName: string
+  /** Currently offered gold (floor or negotiated up). */
+  gold: number
+  stakes: string
+}
+
+/** Accepted quest in the minimal journal (F08 SS2.2), terms as accepted. */
+export interface QuestJournalView {
+  id: string
+  label: string
+  giverName: string
+  gold: number
+  stakes: string
+  status: 'active' | 'suspended' | 'completed'
+}
+
 export interface ObjectivesState {
   currentId: string | null
   list: ObjectiveView[]
+  /** Open offers awaiting the party's answer (at most 2 - F08 SS2.1). */
+  offers: OfferBannerView[]
+  /** The quest journal: accepted quests mapped onto the loop stack (F08 SS2.2). */
+  quests: QuestJournalView[]
 }
 
 export interface SessionState {
@@ -180,6 +206,8 @@ export interface DmSettingsState {
   autoDialogue: boolean
   /** true = check outcomes stand; false = the DM confirms/flips each result (Slice 4). */
   autoChecks: boolean
+  /** Idle-nudge threshold in minutes (F08 SS9.1); absent = default 3. */
+  nudgeMinutes?: number
 }
 
 export interface ReviewCandidate {
@@ -252,15 +280,21 @@ export interface DmState {
   /** Proposal audit trail, newest first (bounded). */
   proposals: ProposalEntry[]
   /**
-   * Consistency fact base (F07 SS6): deterministic world facts the checker validates drafts
-   * against, e.g. npcStates: { [npcId]: 'dead' | 'alive' | 'absent' }. Set via dm_command
-   * overrides now; F8/F9 write these mechanically in later phases.
+   * Consistency fact base (F07 SS6) + predicate world state (F08 SS9): npcStates feed the
+   * checker and ending signals; world/flags are the fact/flag atoms objective and beat
+   * predicates evaluate against (written by dm_command overrides and story events).
    */
-  facts: { npcStates: { [npcId: string]: string } }
+  facts: {
+    npcStates: { [npcId: string]: string }
+    world?: { [path: string]: Json }
+    flags?: { [flag: string]: Json }
+  }
   conversation: ConversationState
   /** Optional: absent in states persisted before Slice 2 - read via dmSettings()/pendingReview helpers. */
   settings?: DmSettingsState
   pendingReview?: PendingReviewState | null
+  /** F08 story bookkeeping (optional, absent pre-Phase 6): the off-loop mismatch streak. */
+  story?: { offLoopStreak: number }
 }
 
 export interface GameState {
@@ -314,8 +348,8 @@ export function initialGameState(): GameState {
       addressedCharacterId: null,
     },
     combat: null,
-    players: { list: [] },
-    objectives: { currentId: null, list: [] },
+    players: { list: [], gold: 0 },
+    objectives: { currentId: null, list: [], offers: [], quests: [] },
     session: { id: null, index: 0, status: 'lobby', recap: null },
     dm: {
       objectives: [],

@@ -16,9 +16,10 @@ import { continueAfterCheck } from './npc-dialogue.ts'
 import type { SocialCheckStash } from './npc-dialogue.ts'
 import { narrationBeat } from './narration.ts'
 import { loadCharacter, loadPlayContext, pendingDiffs, skillModifierFor, typingDiff } from './orchestrate.ts'
+import type { NegotiateStash } from './story.ts'
 import { commitDiffs, loadState, logEvent } from './util.ts'
 
-type Stash = DoCheckStash | SocialCheckStash
+type Stash = DoCheckStash | SocialCheckStash | NegotiateStash
 
 function currentPrompt(state: GameState, promptId: string): PendingPromptState | null {
   const pending = state.dialogue.pending
@@ -47,7 +48,7 @@ async function resolveOutcome(
     const ruling: PendingReviewState = {
       id: crypto.randomUUID(),
       kind: 'check_ruling',
-      actorName: stash.flow === 'social' ? stash.utterance.actorName : stash.actorName,
+      actorName: stash.flow === 'do' ? stash.actorName : stash.utterance.actorName,
       skill: result.skill,
       total: result.total,
       dc: result.dc,
@@ -81,7 +82,7 @@ export async function rollPending(service: SupabaseClient, adventureId: string, 
   const character = await loadCharacter(service, play.member.character_id)
   if (!character) return { status: 403, body: { error: 'Character not found' } }
   const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
-  const dc = stash.flow === 'social' ? stash.dc : stash.spec.dc
+  const dc = stash.flow === 'do' ? stash.spec.dc : stash.dc
 
   if (prompt.kind === 'check') {
     if (prompt.actorCharacterId !== character.id) {
@@ -207,7 +208,7 @@ export async function resolvePending(service: SupabaseClient, adventureId: strin
     return { status: 409, body: { error: 'Prompt has not expired yet' } }
   }
   const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
-  const dc = stash.flow === 'social' ? stash.dc : stash.spec.dc
+  const dc = stash.flow === 'do' ? stash.spec.dc : stash.dc
 
   if (prompt.kind === 'check') {
     const actor = await loadCharacter(service, prompt.actorCharacterId ?? '')

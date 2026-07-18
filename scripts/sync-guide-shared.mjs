@@ -9,15 +9,15 @@
 //
 // Mirrored: src/guide -> _shared/guide (F04 pipeline), src/state -> _shared/state (Phase 4
 // GameState contract), src/play -> _shared/play (F07/F10 orchestration rules), src/character
-// -> _shared/character (server-side check modifiers). Tests (*.test.ts) and __fixtures__ stay
-// behind.
+// -> _shared/character (server-side check modifiers), src/story -> _shared/story (F08 loop
+// stack + quest offers). Tests (*.test.ts) and __fixtures__ stay behind.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const MIRRORS = ['guide', 'state', 'play', 'character'].map((name) => ({
+const MIRRORS = ['guide', 'state', 'play', 'character', 'story'].map((name) => ({
   name,
   src: join(root, 'packages', 'rules', 'src', name),
   dest: join(root, 'supabase', 'functions', '_shared', name),

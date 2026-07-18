@@ -1,3 +1,4 @@
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
 
@@ -6,16 +7,19 @@ import { useSession } from '@/features/auth'
 import { cn } from '@/lib/utils'
 
 import { getMemberAdventure } from '../api/lobby'
+import { sweepIdleNudge } from '../api/story'
 import { useGameState } from '../hooks/use-game-state'
 import { useMusic } from '../hooks/use-music'
 import type { MemberAdventure } from '../types'
 import { BattleMap } from './battle-map'
 import { IntentInputRow } from './intent-input-row'
+import { DmOverviewPanel } from './dm-overview-panel'
 import { DmSidebar } from './dm-sidebar'
 import { DowntimeView } from './downtime-view'
 import { FxLayer } from './fx-layer'
 import { LobbyModal } from './lobby-modal'
 import { NarrationView } from './narration-view'
+import { OfferBanner } from './offer-banner'
 import { PlayerSidebar } from './player-sidebar'
 import { PlayHeader } from './play-header'
 import type { VolumeLevels } from './play-header'
@@ -98,6 +102,7 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
   const game = useGameState(adventure.id)
   const [volumes, setVolumes] = useState<VolumeLevels>(loadVolumes)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   useEffect(() => {
     localStorage.setItem(VOLUME_KEY, JSON.stringify(volumes))
@@ -105,6 +110,24 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
 
   const musicTrack = game.status === 'ready' ? game.state.scene.musicTrack : null
   const music = useMusic(adventure.id, musicTrack, volumes.muted ? 0 : volumes.music)
+
+  // Idle-nudge sweep (F08 SS9.1): edge functions have no timers, so the DM's client checks in
+  // after each quiet stretch; the server validates idleness and dedupes (409 = not idle).
+  const idleEligible =
+    game.status === 'ready' &&
+    game.role === 'dm' &&
+    game.state.session.status === 'active' &&
+    !game.state.dialogue.typing &&
+    !game.state.dialogue.pending
+  const version = game.status === 'ready' ? game.version : 0
+  const nudgeMinutes = game.status === 'ready' ? (game.state.dm?.settings?.nudgeMinutes ?? 3) : 3
+  useEffect(() => {
+    if (!idleEligible) return
+    const timer = setTimeout(() => {
+      void sweepIdleNudge(adventure.id)
+    }, nudgeMinutes * 60_000 + 5_000)
+    return () => clearTimeout(timer)
+  }, [adventure.id, idleEligible, nudgeMinutes, version])
 
   if (game.status === 'connecting')
     return <p className="p-8 text-muted-foreground">Connecting to the table…</p>
@@ -153,6 +176,10 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
         <div className="relative flex min-h-0 flex-1">
           <main className="relative min-w-0 flex-1">
             {renderer()}
+            {/* Open quest offers pin top-center for everyone (F08 SS2.1). */}
+            {state.scene.mode !== 'battle' && !inLobby && <OfferBanner offers={state.objectives.offers} />}
+            {/* Objectives + players pinned upper-left for the DM (F06 SS2). */}
+            {game.role === 'dm' && !inLobby && <DmOverviewPanel />}
             {/* Live input overlay (Phase 5); battle keeps token-drag as its input until F09. */}
             {state.scene.mode !== 'battle' && !inLobby && <IntentInputRow />}
             <FxLayer fx={game.fx} />
@@ -162,16 +189,31 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
             {game.endedCard && <SessionEndedCard card={game.endedCard} onDismiss={game.dismissEndedCard} />}
           </main>
 
-          {/* Sidebar: fixed column >=1024px, slide-over drawer below (F06 SS2). */}
+          {/* Sidebar: fixed column >=1024px, slide-over drawer below (F06 SS2). Collapsible on
+              both roles via a shared rail so DM and player panels behave identically. */}
           <aside
             className={cn(
-              'w-80 shrink-0 border-l bg-card lg:static lg:block',
-              drawerOpen
-                ? 'fixed inset-y-0 right-0 z-50 block shadow-2xl'
-                : 'hidden',
+              'shrink-0 border-l bg-card lg:static lg:block',
+              sidebarCollapsed ? 'w-12' : 'w-80',
+              drawerOpen ? 'fixed inset-y-0 right-0 z-50 block shadow-2xl' : 'hidden',
             )}
           >
-            {game.role === 'dm' ? <DmSidebar /> : <PlayerSidebar />}
+            <div className="flex h-full flex-col">
+              <div className="flex shrink-0 items-center justify-end border-b p-1">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                  aria-expanded={!sidebarCollapsed}
+                  onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+                >
+                  {sidebarCollapsed ? <ChevronLeft className="size-4" /> : <ChevronRight className="size-4" />}
+                </Button>
+              </div>
+              <div className={cn('min-h-0 flex-1', sidebarCollapsed && 'hidden')}>
+                {game.role === 'dm' ? <DmSidebar /> : <PlayerSidebar />}
+              </div>
+            </div>
           </aside>
           <Button
             variant="secondary"

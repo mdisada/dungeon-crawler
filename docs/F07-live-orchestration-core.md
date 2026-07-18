@@ -82,6 +82,12 @@ DM text area accepts anything, e.g. "Narrate the next story":
 2. Options render as chips; DM clicks one → full narration generated from that option → preview with inline edit → **Publish** (broadcast + TTS) or regenerate.
 3. Both stages logged as proposals.
 
+**Narration contract (added 2026-07-18, per F8 §9.1):** the Narrator's system prompt requires
+every published beat to end at a concrete decision point facing the players (an NPC awaiting an
+answer, a fork, a threat, an open offer), optionally with a direct question when natural — never
+a formulaic closer. Session-opening premise narration (F5 lifecycle) must stage the entry offer
+scene and never presume party motivation; motivation comes from accepting the offer (F8 §2.1).
+
 ### 5.2 Overrides
 
 The DM can override anything:

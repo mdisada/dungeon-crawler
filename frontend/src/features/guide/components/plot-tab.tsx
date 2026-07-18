@@ -5,6 +5,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { regenerateRow } from '../api/pipeline'
 import { insertGuideRow, saveGuideRow } from '../api/save-guide-row'
 import type { GuideData } from '../types'
+import { ContractCard } from './contract-card'
 import { NarratorVoicePanel } from './narrator-voice-panel'
 import { ObjectiveRow } from './objective-row'
 import { RegenBanner } from './regen-banner'
@@ -44,6 +45,23 @@ export function PlotTab({ data, onChanged }: PlotTabProps) {
   return (
     <div className="flex flex-col gap-4">
       {error && <p className="text-sm text-destructive">{error}</p>}
+
+      {/* Quest contracts (F04 SS4.3): the authored offers players must accept in play. */}
+      {data.contracts.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-xs font-semibold uppercase text-muted-foreground">Quest contracts</h2>
+          {data.contracts.map((contract) => (
+            <ContractCard
+              key={contract.id}
+              contract={contract}
+              npcs={data.npcs}
+              objectives={data.objectives}
+              onChanged={onChanged}
+            />
+          ))}
+        </section>
+      )}
+
       {data.chapters.map((chapter) => {
         const isOpen = chapter.id === openChapterId
         const objectives = data.objectives

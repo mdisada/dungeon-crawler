@@ -6,6 +6,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import { corsHeaders } from '../_shared/cors.ts'
+import { idleNudgeAction } from './beats.ts'
 import { playerIntent } from './intent.ts'
 import { endSession, manualCheckpoint, restoreCheckpoint, startSession } from './lifecycle.ts'
 import { activate, admit, join, leave, pickCharacter, regenInvite, setReady } from './membership.ts'
@@ -123,6 +124,9 @@ Deno.serve(async (req) => {
         break
       case 'player_intent':
         result = requireAdventure() ?? (await playerIntent(service, adventureId, userId, body))
+        break
+      case 'idle_nudge':
+        result = requireAdventure() ?? (await idleNudgeAction(service, adventureId, userId))
         break
       case 'roll_pending':
         result =

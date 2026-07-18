@@ -6,7 +6,12 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { bindCoopSet } from '../_shared/guide/affinity.ts'
 import { AgentCallError, callAgentText } from '../_shared/llm.ts'
 import type { DmState, Json, StateDiff } from '../_shared/state/index.ts'
+import { applyDialNudge } from '../_shared/story/index.ts'
+import type { AgentEnv } from './agents.ts'
 import { recomputePartyProfile } from './membership.ts'
+import { entryContract, journalViews, stageEntryOfferIfNeeded } from './story.ts'
+import { runDialSummarizer } from './story-agents.ts'
+import { antagonistTurn } from './steward.ts'
 import {
   applyAndBroadcast, assertOk, broadcast, loadContext, loadState, logEvent, resolveMediaUrl, writeCheckpoint,
 } from './util.ts'
@@ -32,6 +37,7 @@ async function buildRecap(
   service: SupabaseClient,
   adventure: AdventureRow,
   sessionIndex: number,
+  entryGiverName: string | null,
 ): Promise<string> {
   const { data: lastSummary } = await service
     .from('session_summaries')
@@ -49,9 +55,18 @@ async function buildRecap(
   }
 
   try {
+    // Openings stage the offer, never the motivation (F08 SS9.1): scene and atmosphere only,
+    // ending where the entry giver seeks the party out - acceptance is what creates purpose.
     const source = lastSummary
       ? `Write a "Previously on..." recap (max 120 words) from this session summary. Second person plural, present tense, no spoilers beyond what players witnessed:\n${JSON.stringify(lastSummary.summary)}`
-      : `Write a spoiler-safe opening premise narration (max 120 words) for the players from this pitch. Do not reveal twists or hidden information:\n${premise}`
+      : `Write a spoiler-safe opening premise narration (max 120 words) for the players from this pitch. ` +
+        `Second person plural, present tense. Establish the place and atmosphere only. Do NOT presume ` +
+        `the party's motivation, purpose, or reasons for being here - they have not chosen anything yet. ` +
+        `Do not reveal twists or hidden information. End at a concrete moment facing the players` +
+        (entryGiverName
+          ? `, leading toward ${entryGiverName} seeking the party out (do not state any job terms yet)`
+          : '') +
+        `:\n${premise}`
     return await callAgentText({
       serviceClient: service,
       openRouterApiKey: OPENROUTER_API_KEY,
@@ -122,6 +137,7 @@ async function buildStartDiffs(
   sessionId: string,
   sessionIndex: number,
   recap: string,
+  entryPending: boolean,
 ): Promise<StateDiff[]> {
   const [{ data: chapters }, { data: objectives }, { data: members }] = await Promise.all([
     service.from('chapters').select('id, index, title').eq('adventure_id', adventure.id).order('index'),
@@ -133,9 +149,10 @@ async function buildStartDiffs(
   const chapterObjectives = (objectives ?? []).filter((o) => o.chapter_id === firstChapter?.id)
 
   // Reveal the first objective of chapter 1 if nothing is revealed yet (server-side write so
-  // the guide rows and the broadcast view agree).
+  // the guide rows and the broadcast view agree). With an entry contract pending acceptance,
+  // activation waits for the offer (F08 SS9) - the entry beat IS the offer scene.
   let revealed = (objectives ?? []).filter((o) => o.reveal_state !== 'hidden')
-  if (revealed.length === 0 && chapterObjectives.length > 0) {
+  if (revealed.length === 0 && chapterObjectives.length > 0 && !entryPending) {
     const first = chapterObjectives[0]
     await service.from('objectives').update({ reveal_state: 'active' }).eq('id', first.id)
     first.reveal_state = 'active'
@@ -212,6 +229,8 @@ async function buildStartDiffs(
           title: o.title,
           state: o.reveal_state === 'hidden' ? 'revealed' : o.reveal_state,
         })),
+        // Journal (F08 SS2.2) rebuilt from the offer tables on every session start.
+        ...(await journalViews(service, adventure.id)),
       }),
     },
     { domain: 'dm', patch: asPatch({ objectives: dmObjectives, proposals: [] }) },
@@ -261,14 +280,39 @@ export async function startSession(service: SupabaseClient, adventureId: string,
 
   if (sessionIndex === 1) await firstSessionPass(service, adventureId)
 
-  const recap = await buildRecap(service, adventure, sessionIndex)
+  // Entry gating (F08 SS2.1/SS9): with an unaccepted entry contract, the first objective stays
+  // hidden and the session opens on the giver's offer scene instead.
+  const entry = await entryContract(service, adventureId)
+  let entryPending = false
+  if (entry) {
+    const { data: acceptedRows } = await service
+      .from('quest_offers')
+      .select('id')
+      .eq('adventure_id', adventureId)
+      .eq('contract_id', entry.id)
+      .eq('status', 'accepted')
+      .limit(1)
+    entryPending = (acceptedRows ?? []).length === 0
+  }
+  const entryGiverName = entry && entryPending
+    ? ((await service.from('npcs').select('name').eq('id', entry.giver_npc_id).maybeSingle()).data?.name as string | null)
+    : null
+
+  const recap = await buildRecap(service, adventure, sessionIndex, entryGiverName)
   const before = await loadState(service, adventureId)
-  const diffs = await buildStartDiffs(service, adventure, sessionId, sessionIndex, recap)
+  const diffs = await buildStartDiffs(service, adventure, sessionId, sessionIndex, recap, entryPending)
   const after = await applyAndBroadcast(service, adventureId, before, diffs)
 
   const checkpointId = await writeCheckpoint(service, adventureId, sessionId, after, 'auto', `session ${sessionIndex} start`)
   await service.from('sessions').update({ start_checkpoint_id: checkpointId }).eq('id', sessionId)
   await logEvent(service, adventureId, sessionId, 'session_started', { index: sessionIndex })
+
+  if (entryPending) {
+    const env: AgentEnv = {
+      service, adventureId, creatorId: adventure.creator_id, demo: adventure.demo, mode: adventure.mode,
+    }
+    await stageEntryOfferIfNeeded(service, env, sessionId)
+  }
 
   return { status: 200, body: { ok: true, session_id: sessionId, index: sessionIndex, recap } }
 }
@@ -358,6 +402,38 @@ export async function endSession(service: SupabaseClient, adventureId: string, u
     },
   ])
   await logEvent(service, adventureId, session.id, 'session_ended', { index: session.index })
+
+  // F08 SS8 + SS8.1 session-end passes: dial nudges from the session transcript (auditable,
+  // logged with justifications) and the antagonist's off-screen turn. Both best-effort.
+  try {
+    const env: AgentEnv = {
+      service, adventureId, creatorId: ctx.adventure.creator_id, demo: ctx.adventure.demo, mode: ctx.adventure.mode,
+    }
+    const { data: adventureRow } = await service
+      .from('adventures')
+      .select('story_dials, dial_values')
+      .eq('id', adventureId)
+      .single()
+    const dials = ((adventureRow?.story_dials ?? []) as { key: string; name: string; description: string }[])
+    if (dials.length > 0) {
+      const transcript = stateRow.state.dialogue.lines.slice(-30).map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`)
+      const moves = await runDialSummarizer(env, dials, transcript)
+      if (moves.length > 0) {
+        const values = { ...((adventureRow?.dial_values ?? {}) as Record<string, number>) }
+        for (const move of moves) {
+          const next = applyDialNudge(values[move.dial] ?? 0, move.delta)
+          await logEvent(service, adventureId, session.id, 'dial_nudged', {
+            dial: move.dial, from: values[move.dial] ?? 0, to: next, why: move.why,
+          })
+          values[move.dial] = next
+        }
+        await service.from('adventures').update({ dial_values: values as unknown as Json }).eq('id', adventureId)
+      }
+    }
+    await antagonistTurn(service, env, session.id, 'session_end')
+  } catch (err) {
+    console.error('session-end story passes failed', err)
+  }
 
   // End-of-session card (F05 SS4.3). XP is 0 until F11; cost goes only to this caller (DM/creator).
   let cost: number | null = null

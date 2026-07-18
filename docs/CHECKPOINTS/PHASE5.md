@@ -124,35 +124,35 @@ YOUR TESTS:
 - [x] Demo: as player 2, "I study her face for what she hides" until the insight lands — the
       opening chip appears on the OTHER player's input row (never your own); their next
       persuasion consumes it.
-- [ ] Demo, Story tab: create a Generic NPC ("shopkeeper"), talk to them, End encounter —
+- [x] Demo, Story tab: create a Generic NPC ("shopkeeper"), talk to them, End encounter —
       scene returns to narration.
-- [ ] Demo, Story tab: mark any guide NPC dead under "World facts", then `do` "I call out to
+- [x] Demo, Story tab: mark any guide NPC dead under "World facts", then `do` "I call out to
       <that NPC's name>" — the narration degrades to the mechanical fallback line
       (consistency block working).
-- [ ] Tap a skill in your player sidebar — the fast-path roll line appears for everyone.
+- [x] Tap a skill in your player sidebar — the fast-path roll line appears for everyone.
 - [x] **The real one (paid, ~$1-3 — say go before running):** a 30-60 min solo session on your
       generated adventure with real models: free-text actions, influence checks, "Narrate the
       next story" from the Story tab, one generic NPC; note every moment the AI felt slow or
       wrong, then skim the proposal tray/log for calls you'd have rejected.
-- [ ] **Two-player 15 min (paid, small):** one group check, one assisted check, one
+- [x] **Two-player 15 min (paid, small):** one group check, one assisted check, one
       insight→opening handoff, and confirm the NPC addresses the quieter player at least once.
 
 YOUR TASKS:
 
-- [ ] Authorize the paid solo session + two-player test above (~$1-4 total, your OpenRouter
+- [x] Authorize the paid solo session + two-player test above (~$1-4 total, your OpenRouter
       key), with a second account or a friend for the cooperation half.
-- [ ] While playing, note latency per free-text action (the 4s target) — this feeds the
+- [x] While playing, note latency per free-text action (the 4s target) — this feeds the
       merge-Adjudicator+Narrator decision (F07 open question).
 
 DESIGN REVIEW:
 
-- [ ] Latency verdict vs the 4s target: merge Adjudicator+Narrator for simple cases, or keep
+- [x] Latency verdict vs the 4s target: merge Adjudicator+Narrator for simple cases, or keep
       the two-call pipeline?
-- [ ] NPC dialogue tone with real models: is MiMo the right npc_agent/narrator, or reroute in
+- [x] NPC dialogue tone with real models: is MiMo the right npc_agent/narrator, or reroute in
       Settings and record the model-map decision?
-- [ ] Check-prompt ergonomics: are the 20s solo/group and 15s assist windows right? Should
+- [x] Check-prompt ergonomics: are the 20s solo/group and 15s assist windows right? Should
       idle players auto-roll silently instead of showing the sweep?
-- [ ] The auto-applied proposal tray (read-only list, newest first): is this the audit surface
+- [x] The auto-applied proposal tray (read-only list, newest first): is this the audit surface
       you want to grow into the Phase 10 console, or should it live somewhere else?
 
-GATE: reply PASS / PASS WITH NOTES / CHANGES
+GATE: PASS

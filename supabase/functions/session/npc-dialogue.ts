@@ -21,6 +21,9 @@ import type { DoCheckStash } from './intent.ts'
 import { directedNarrationPrompt, narrationBeat, publishNarration, stageNarrationReview } from './narration.ts'
 import { appendLinesDiff, newLine, pcLineCounts, pendingDiffs, typingDiff } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
+import { finishNegotiation } from './story.ts'
+import type { NegotiateStash } from './story.ts'
+import { noteSuspicion } from './steward.ts'
 import {
   assertOk, broadcast, commitDiffs, loadContext, loadState, logEvent, resolveMediaUrl,
 } from './util.ts'
@@ -378,6 +381,53 @@ export async function npcReply(
   }
 
   for (const action of output.proposedActions) {
+    if (action.type === 'canonize_theory') {
+      // Player-theory canonization (F08 SS5): full-AI auto-approves only on a clean
+      // Consistency pass; a contradiction is surfaced, never silently dropped. The DM
+      // "Make it true" surface arrives with the Phase 10 console.
+      const theory = action.theory.trim()
+      if (!theory) continue
+      // The retro-consistency check scans the whole registry, not just the staged NPC.
+      const { data: registryNpcs } = await service.from('npcs').select('id, name').eq('adventure_id', env.adventureId)
+      const theoryVerdict = await runConsistency(
+        env, theory, ((registryNpcs ?? []) as { id: string; name: string }[]), npcStates, '',
+      )
+      const auto = env.mode === 'full_ai' && theoryVerdict.ok
+      await recordProposal(service, {
+        adventureId: env.adventureId,
+        sessionId,
+        type: 'canonization',
+        payload: { npc_id: npcId, theory, violations: theoryVerdict.violations as unknown as Json },
+        mode: auto ? 'auto' : 'human',
+        summary: `Make it true: ${theory.slice(0, 60)}`,
+      })
+      if (!theoryVerdict.ok) {
+        await logEvent(service, env.adventureId, sessionId, 'canonization_blocked', {
+          npc_id: npcId, theory, violations: theoryVerdict.violations as unknown as Json,
+        })
+        continue
+      }
+      if (auto) {
+        const { data: canonized, error: canonError } = await service
+          .from('ingredients')
+          .insert({
+            adventure_id: env.adventureId,
+            type: 'secret',
+            content: { text: theory } as unknown as Json,
+            reveals: theory,
+            placement: { npc_id: npcId } as unknown as Json,
+            canon_source: 'player_theory',
+            discovered: true,
+          })
+          .select('id')
+          .single()
+        assertOk(canonError, 'canonized ingredient insert failed')
+        await logEvent(service, env.adventureId, sessionId, 'theory_canonized', {
+          npc_id: npcId, theory, ingredient_id: canonized.id,
+        })
+      }
+      continue
+    }
     const disposition = dispositions[utterance.actorCharacterId] ?? 0
     const allowed = env.demo || actionAutoAllowed(action, disposition)
     await logEvent(service, env.adventureId, sessionId, 'npc_action', {
@@ -454,6 +504,12 @@ export async function handleSay(
   await logEvent(service, env.adventureId, sessionId, 'say', {
     character_id: utterance.actorCharacterId, npc_id: npcId, text: utterance.text,
   })
+  // Suspicion tagging (F08 SS8) - a failure here must never block the reply.
+  try {
+    await noteSuspicion(service, env, sessionId, utterance.text)
+  } catch (err) {
+    console.error('suspicion pass failed', err)
+  }
 
   // typing:true is now committed and broadcast; any failure below must clear it or the input
   // row stays locked on "Waiting on the table..." for the whole table (the `do` path guards
@@ -526,10 +582,14 @@ export async function continueAfterCheck(
   service: SupabaseClient,
   env: AgentEnv,
   sessionId: string,
-  stash: DoCheckStash | SocialCheckStash,
+  stash: DoCheckStash | SocialCheckStash | NegotiateStash,
   result: CheckResult & { skill: string },
   detail: string,
 ): Promise<void> {
+  if (stash.flow === 'negotiate') {
+    await finishNegotiation(service, env, sessionId, stash, result)
+    return
+  }
   if (stash.flow === 'social') {
     await commitDiffs(service, env.adventureId, () => [typingDiff(true), ...pendingDiffs(null, null)])
     await npcBeat(service, env, stash.npcId, stash.utterance, result)
@@ -639,7 +699,7 @@ export async function reviewDecide(
     if (choice !== 'accept' && choice !== 'flip') {
       return { status: 400, body: { error: 'A check ruling takes accept or flip' } }
     }
-    const stash = (row.state.dm?.conversation.pendingContext ?? null) as DoCheckStash | SocialCheckStash | null
+    const stash = (row.state.dm?.conversation.pendingContext ?? null) as DoCheckStash | SocialCheckStash | NegotiateStash | null
     if (!stash) return { status: 409, body: { error: 'Ruling context missing - the flow moved on' } }
     const flipped = choice === 'flip'
     const success = flipped ? !review.success : review.success

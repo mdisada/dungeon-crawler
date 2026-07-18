@@ -8,10 +8,60 @@ import { assertOk, buildDigest } from './util.ts'
 export async function runStage6(env: StageEnv): Promise<void> {
   const { digest, refs, objectiveIdByHandle } = await buildDigest(env.db, env.adventure.id)
 
-  const hooks = await env.generate('hook_weaver', buildStage6Prompt(digest), (raw) => parseStage6(raw, digest))
+  const { hooks, contracts } = await env.generate('hook_weaver', buildStage6Prompt(digest), (raw) => parseStage6(raw, digest))
 
   const { error: deleteError } = await env.db.from('hooks').delete().eq('adventure_id', env.adventure.id)
   assertOk(deleteError, 'hooks delete failed')
+
+  // Quest contracts (F04 SS4.3): the entry giver must be a first-chapter (or global) NPC so
+  // the offer can land in the opening scene - hard validation, a bad ref is a stage failure.
+  const entry = contracts.find((k) => k.isEntry)!
+  const entryGiverRef = refs.get(entry.giverHandle)
+  if (!entryGiverRef || entryGiverRef.table !== 'npcs') throw new Error('entry contract giver did not resolve to an NPC')
+  const [{ data: giverRow }, { data: firstChapter }] = await Promise.all([
+    env.db.from('npcs').select('chapter_id').eq('id', entryGiverRef.id).maybeSingle(),
+    env.db.from('chapters').select('id').eq('adventure_id', env.adventure.id).order('index').limit(1).maybeSingle(),
+  ])
+  if (giverRow?.chapter_id && firstChapter && giverRow.chapter_id !== firstChapter.id) {
+    throw new Error('entry contract giver must appear in the first chapter (the offer opens the adventure)')
+  }
+
+  // Re-runs preserve creator-edited contracts (guide-editor convention); an edited entry
+  // contract also suppresses the generated one (entry uniqueness is a hard constraint).
+  const { data: editedRows, error: editedError } = await env.db
+    .from('quest_contracts')
+    .select('id, is_entry')
+    .eq('adventure_id', env.adventure.id)
+    .eq('human_edited', true)
+  assertOk(editedError, 'edited contracts load failed')
+  const keepEntry = (editedRows ?? []).some((r) => r.is_entry)
+  const { error: contractsDelete } = await env.db
+    .from('quest_contracts')
+    .delete()
+    .eq('adventure_id', env.adventure.id)
+    .eq('human_edited', false)
+  assertOk(contractsDelete, 'contracts delete failed')
+  const contractRows = contracts
+    .filter((k) => !(k.isEntry && keepEntry))
+    .map((k) => {
+      const giver = refs.get(k.giverHandle)!
+      const objectiveIds = k.objectiveHandles.map((h) => objectiveIdByHandle.get(h)).filter(Boolean)
+      return {
+        adventure_id: env.adventure.id,
+        chapter_id: null,
+        label: k.label,
+        giver_npc_id: giver.id,
+        is_entry: k.isEntry,
+        reward: { gold_floor: k.goldFloor, gold_ceiling: k.goldCeiling, extras: k.extras },
+        stakes: k.stakes,
+        deadline: k.deadlineDays ? { days: k.deadlineDays } : null,
+        objective_ids: objectiveIds,
+      }
+    })
+  if (contractRows.length > 0) {
+    const { error: contractsInsert } = await env.db.from('quest_contracts').insert(contractRows)
+    assertOk(contractsInsert, 'contracts insert failed')
+  }
 
   const { error: insertError } = await env.db.from('hooks').insert(
     hooks.map((h) => ({

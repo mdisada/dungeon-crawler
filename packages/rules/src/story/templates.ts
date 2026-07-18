@@ -1,0 +1,71 @@
+// Loop type library (F08 SS2): canonical beat sequence + expected pillar profile per type.
+// Templates are defaults the Beat Planner may deviate from; the pillar profile also powers the
+// deterministic off-loop mismatch counter (F08 SS3).
+
+import type { LoopType } from './types.ts'
+
+export type Pillar = 'combat' | 'social' | 'exploration'
+
+export interface LoopTemplate {
+  beats: string[]
+  /** Pillars this loop type expects; intents outside them count toward the mismatch streak. */
+  pillars: Pillar[]
+}
+
+export const LOOP_TEMPLATES: Record<LoopType, LoopTemplate> = {
+  mystery: {
+    beats: ['hook', 'first_clues', 'complication', 'revelation', 'confrontation'],
+    pillars: ['social', 'exploration'],
+  },
+  monster_hunt: {
+    beats: ['rumor', 'preparation', 'the_hunt', 'confrontation', 'aftermath'],
+    pillars: ['exploration', 'combat'],
+  },
+  dungeon_crawl: {
+    beats: ['threshold', 'descent', 'setback', 'inner_sanctum', 'escape'],
+    pillars: ['exploration', 'combat'],
+  },
+  siege_defense: {
+    beats: ['warning', 'preparation', 'first_assault', 'breach', 'last_stand'],
+    pillars: ['combat', 'social'],
+  },
+  infiltration: {
+    beats: ['casing', 'way_in', 'deep_inside', 'complication', 'way_out'],
+    pillars: ['exploration', 'social'],
+  },
+  intrigue: {
+    beats: ['invitation', 'alliances', 'betrayal', 'leverage', 'reckoning'],
+    pillars: ['social'],
+  },
+  rebellion: {
+    beats: ['spark', 'recruitment', 'first_strike', 'reprisal', 'uprising'],
+    pillars: ['social', 'combat'],
+  },
+  survival: {
+    beats: ['stranded', 'shelter', 'threat', 'desperation', 'deliverance'],
+    pillars: ['exploration'],
+  },
+  escort: {
+    beats: ['departure', 'open_road', 'ambush', 'detour', 'arrival'],
+    pillars: ['exploration', 'combat'],
+  },
+  heist: {
+    beats: ['the_job', 'crew_and_plan', 'the_take', 'it_goes_wrong', 'getaway'],
+    pillars: ['exploration', 'social'],
+  },
+  custom: {
+    beats: ['opening', 'rising_action', 'turning_point', 'resolution'],
+    pillars: ['combat', 'social', 'exploration'],
+  },
+}
+
+/** Deterministic intent -> pillar tag (F08 SS7): combat verbs, social says, everything else explores. */
+export function intentPillar(kind: string): Pillar {
+  if (kind === 'attack' || kind === 'cast') return 'combat'
+  if (kind === 'say') return 'social'
+  return 'exploration'
+}
+
+export function isOffLoop(pillar: Pillar, loopType: LoopType): boolean {
+  return !LOOP_TEMPLATES[loopType].pillars.includes(pillar)
+}

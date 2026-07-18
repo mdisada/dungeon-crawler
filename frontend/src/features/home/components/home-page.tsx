@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
-import { listMemberAdventures } from '@/features/play'
+import { useSession } from '@/features/auth'
+import { deleteAdventure, listMemberAdventures } from '@/features/play'
 import type { MemberAdventure } from '@/features/play'
+
+import { DeleteAdventureDialog } from './delete-adventure-dialog'
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Draft',
@@ -19,10 +22,12 @@ function adventureLink(adventure: MemberAdventure): string {
 }
 
 export function HomePage() {
+  const { user } = useSession()
   const [adventures, setAdventures] = useState<MemberAdventure[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  useEffect(() => {
+  const refetch = useCallback(() => {
     let cancelled = false
     listMemberAdventures()
       .then((rows) => {
@@ -38,6 +43,18 @@ export function HomePage() {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => refetch(), [refetch])
+
+  async function handleDelete(adventureId: string) {
+    setDeleteError(null)
+    try {
+      await deleteAdventure(adventureId)
+      refetch()
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete adventure')
+    }
+  }
 
   return (
     <div className="flex w-full max-w-4xl flex-col gap-8">
@@ -70,6 +87,7 @@ export function HomePage() {
 
       <section aria-label="Your adventures" className="flex flex-col gap-3">
         <h2 className="text-base font-medium">Your adventures</h2>
+        {deleteError && <p className="text-sm text-destructive">{deleteError}</p>}
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : adventures.length === 0 ? (
@@ -79,10 +97,10 @@ export function HomePage() {
         ) : (
           <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {adventures.map((adventure) => (
-              <li key={adventure.id}>
+              <li key={adventure.id} className="relative">
                 <Link
                   to={adventureLink(adventure)}
-                  className="flex flex-col gap-1 rounded-xl border bg-card p-4 transition-colors hover:border-ring hover:bg-accent"
+                  className="flex flex-col gap-1 rounded-xl border bg-card p-4 pr-10 transition-colors hover:border-ring hover:bg-accent"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-sm font-medium">{adventure.title || 'Untitled adventure'}</span>
@@ -96,6 +114,14 @@ export function HomePage() {
                     {adventure.isDemo && ' · demo'}
                   </span>
                 </Link>
+                {adventure.creatorId === user?.id && (
+                  <div className="absolute right-2 top-2">
+                    <DeleteAdventureDialog
+                      adventureTitle={adventure.title || 'Untitled adventure'}
+                      onConfirm={() => void handleDelete(adventure.id)}
+                    />
+                  </div>
+                )}
               </li>
             ))}
           </ul>

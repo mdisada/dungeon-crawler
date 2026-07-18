@@ -3,4 +3,5 @@ export { PlayPage } from './components/play-page'
 export { listMemberAdventures } from './api/lobby'
 // Shared with the F04 guide editor: its Start Adventure CTA opens the lobby (F05).
 export { activateAdventure } from './api/session'
+export { deleteAdventure } from './api/delete-adventure'
 export type { MemberAdventure } from './types'

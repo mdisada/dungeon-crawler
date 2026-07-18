@@ -48,17 +48,40 @@ archived checkpoints. Carried over from Phase 4: the Immersion-tab music test + 
 — user handles music later (see §3 item 5: planned settings-page upload for music/voice); re-test
 with F12 in Phase 8.
 
-**Now working on:** `DEVELOPMENT-PLAN.md` PHASE 5 — F07 Live Orchestration + F10 Social
-Encounters, Full-AI-first. BUILD + AI-TEST done: migration `20260718130000` applied live,
-`session` function redeployed with the full intent pipeline (router → Adjudicator/NPC dialogue →
-consistency → auto-applied proposals → single-writer commit), rules `play/` module (179 rules
-tests), frontend input row/check prompts/openings/DM Story tab (46 frontend tests), and the
-68-check zero-spend live integration suite PASS (plus Phase 4's 43 checks re-run green). At
-CHECKPOINT (see `docs/CHECKPOINTS/PHASE5.md`) — the real-LLM solo session and the two-player
-cooperation test are user tasks (paid, needs authorization).
+**Phase 5 gated PASS (2026-07-18)** — all checkpoint boxes checked incl. the paid solo + two-player
+tests (`docs/CHECKPOINTS/PHASE5.md`); F07 and F10 are gated.
 
-**Next up:** On Phase 5 PASS, PHASE 6 (F8 Story & Loop System). TTS moved to Phase 8 (see
-`docs/DECISIONS.md` 2026-07-18 Phase 5 BUILD entry).
+**Now working on:** `DEVELOPMENT-PLAN.md` PHASE 6 — F08 Story & Loop System, **plus the
+reactive-story contract designed at kickoff** (user CHANGES, 2026-07-18 — see `docs/DECISIONS.md`):
+quest offers with authored contracts (giver, reward floor/ceiling, stakes) that players must
+accept in free text before a quest activates, F10-negotiable terms, decline → re-weave (≤2) →
+consequences → emergent refusal ending, party gold ledger, minimal quest journal, narration that
+always ends on a decision point, event-driven beat pacing + idle nudge. Specs updated first:
+F08 §2.1/§2.2/§6/§9/§9.1/§10, F04 §4.3 + `quest_contracts` + Stage 6 + validation, F07 §5.1
+narration contract. BUILD not started.
+
+**BUILD + AI-TEST complete (all 5 slices, 2026-07-18):** migrations
+`20260718150000`/`160000`/`170000` applied live (quest_contracts, core_loops, beats,
+quest_offers, meta_loop, adventures ending columns, GameState ledger/journal backfill);
+`packages/rules/src/story/` (loop stack, offers, templates, classifier, beat plans, predicate
+evaluator, ending scoring, variety counting — rules suite 255/255); Stage 6 authors quest
+contracts (hard-validated entry contract, editor cards, Start-Adventure validation, demo-seed
+contract); session function: offer pipeline (free-text accept/decline/negotiate, bounded
+haggling, re-weave budget → `consequence_due`, ledger payout), Beat Planner pacing (acceptance
+opens the first beat, exits open the next, pool reuse before generation), Loop Classifier
+(off-loop streak → propose/auto-accept per thresholds), live Hook Weaver + auto re-weaves,
+Variety Manager flags, idle nudge (client-swept), predicate evaluation → objective flow,
+Ending Steward (deterministic scoring, late decisive auto-commit, live climax re-author),
+Meta Loop Steward (antagonist turns, suspicion → BBEG commit), player-theory canonization.
+Frontend: offer banner, quest journal, party gold, contract editor, idle sweep (tsc/eslint/
+build clean, 60/60). **`tests/integration/story-live.mjs` 92/92 PASS live at $0**; Phase 5
+(123) + Phase 4 (46) regressions green; both functions deployed. **At CHECKPOINT** (see
+`docs/CHECKPOINTS/PHASE6.md`) — the deliberate-derail session and design-review knobs are
+user tasks. Deviations (see DECISIONS): braided live resolution → Phase 7, ambiguous-atom
+objective completion (Adjudicator) deferred, emergent/refusal endings + holistic ending pass
+wait on F13 summaries, backstory interlocks wait on F11 personal loops.
+
+**Next up:** On Phase 6 PASS, PHASE 7 (F9 Combat + F11 Progression). TTS remains Phase 8.
 
 ---
 
@@ -135,10 +158,10 @@ checkpoint — the only status that means "done" per `DEVELOPMENT-PLAN.md` rule 
 | F04 | Adventure Guide Pipeline & Editor | gated | `packages/rules/src/guide/` (canonical stage contracts, mirrored to `supabase/functions/_shared/guide/` via `scripts/sync-guide-shared.mjs` — CI now runs `--check`), `supabase/functions/guide-pipeline/`, `frontend/src/features/guide/`, migrations `20260717190000-200000` + `20260718090000` | Backlog (non-blocking): scenes have no editor surface (hidden scaffolding, per spec); no RTL tests for the editor; live ending scoring (Ending Steward) is F08/Phase 6 |
 | F05 | Lobby & Session Lifecycle | gated | migrations `20260718110000-110200`, `supabase/functions/session/`, `frontend/src/features/play/` (lobby modal, join page), `supabase/seed/seed-demo-adventure.mjs`, `tests/integration/session-live.mjs` | Disconnect/auto-delay combat turns + adventure-completion unlock are Phase 5/7 work; music playback test carried to Phase 8 |
 | F06 | Adventure Page (Live Play Frontend) | gated | `frontend/src/features/play/` (3 renderers + battle map, DM/Player sidebars, `@rules/state` contract mirrored to `_shared/state`) | Input row / TTS-synced subtitles wired to F07/F12 in later phases; proposal tray scaffold dormant until Phase 10 (AI-Assist deferral) |
-| F07 | Live Orchestration Core | built, ungated | `supabase/functions/session/` (intent/prompts/npc-dialogue/narration/proposals/agents), `packages/rules/src/play/`, migration `20260718130000`, `tests/integration/orchestration-live.mjs` | Awaiting Phase 5 gate. Braided intents + loop-mismatch flag need F8 (Phase 6); DM console/proposal tray UX is Phase 10; combat verbs 409 until F09 |
-| F08 | Story & Loop System | not started | one pacing counter (`storage.py: turns_since_last_plot_point`) | Everything: Loop Stack Manager, Loop Classifier, Beat Planner, Ingredient Pool, Hook Weaver, Meta Loop Steward |
+| F07 | Live Orchestration Core | gated | `supabase/functions/session/` (intent/prompts/npc-dialogue/narration/proposals/agents), `packages/rules/src/play/`, migration `20260718130000`, `tests/integration/orchestration-live.mjs` | Braided intents + loop-mismatch flag land with F8 (Phase 6); DM console/proposal tray UX is Phase 10; combat verbs 409 until F09 |
+| F08 | Story & Loop System | built, ungated | `packages/rules/src/story/`, `supabase/functions/session/` (story, beats, progress, steward, story-agents), migrations `20260718150000-170000`, `tests/integration/story-live.mjs` | Awaiting Phase 6 gate. Deferred: braided live resolution (Phase 7), Adjudicator objective-completion proposals, emergent/refusal endings + holistic pass (with F13), backstory interlocks (with F11) |
 | F09 | Combat Engine & Tactical Map | not started | none | Everything; depends on SRD data (Phase 0) |
-| F10 | Social Encounter System | built, ungated | `supabase/functions/session/npc-dialogue.ts`, `npc_dispositions`/`npc_interactions` tables, `frontend/src/features/play/` (input row, check prompts, openings, Story tab) | Awaiting Phase 5 gate. TTS deferred to Phase 8 (no provider-side voice cloning yet); multi-NPC crosstalk v1.1; interaction-memory embeddings arrive with F13 |
+| F10 | Social Encounter System | gated | `supabase/functions/session/npc-dialogue.ts`, `npc_dispositions`/`npc_interactions` tables, `frontend/src/features/play/` (input row, check prompts, openings, Story tab) | TTS deferred to Phase 8 (no provider-side voice cloning yet); multi-NPC crosstalk v1.1; interaction-memory embeddings arrive with F13 |
 | F11 | Progression System | not started | none | Everything; depends on SRD data (Phase 0) |
 | F12 | Asset & Immersion Pipeline | partial | `backend/job_queue.py`, `backend/tts.py`, audio chunk player (see §4) | Image gen (none exists), voice profile upload/cloning, music/ambience; settings-page music/voice-sample upload library (§3 item 5); migrate TTS to spec's gateway model if §3 item 1 requires it |
 | F13 | Memory & RAG | early scaffold | `backend/campaign/extraction.py` (flat NPC/lore extraction, no embeddings) | Embedding pipeline (Qwen3 -> pgvector), `query_lore`, Summarizer, spoiler gating |

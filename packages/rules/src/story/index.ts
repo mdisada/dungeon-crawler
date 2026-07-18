@@ -1,0 +1,34 @@
+export { parseBeatPlan } from './beats.ts'
+export type { BeatParseResult, BeatPlan, BeatPlanContext, BraidedPair, IngredientRequest } from './beats.ts'
+export {
+  MISMATCH_THRESHOLD, nextStreak, parsePivot, PIVOT_AUTO_CONFIDENCE, PIVOT_PROPOSE_CONFIDENCE,
+  PIVOT_REEVALUATE_EVENTS, pivotHandling, streakTriggersClassifier,
+} from './classifier.ts'
+export type { PivotAssessment, PivotHandling } from './classifier.ts'
+export {
+  applyDialNudge, COMMIT_MIN_EVENTS, COMMIT_MIN_MARGIN, commitmentReady, DIAL_MAX, DIAL_MIN,
+  parseEndingSignals, scoreEndings,
+} from './endings.ts'
+export type { EndingCandidate, EndingScores, EndingSignal, EndingSignalWhen, EndingWorld } from './endings.ts'
+export { evaluatePredicate } from './evaluate.ts'
+export type { WorldFacts } from './evaluate.ts'
+export {
+  activeLoop, advanceBeat, completeLoop, pushLoop, resumeLoop, suspendLoop,
+} from './loops.ts'
+export type { LoopOpResult, LoopSeed } from './loops.ts'
+export {
+  canReweave, canStageOffer, MAX_OPEN_OFFERS, MAX_REWEAVES, negotiatedGold, offerBanner,
+  openingTerms, parseOfferResponse, parseRewardBounds,
+} from './offers.ts'
+export { intentPillar, isOffLoop, LOOP_TEMPLATES } from './templates.ts'
+export type { LoopTemplate, Pillar } from './templates.ts'
+export { LOOP_TYPES } from './types.ts'
+export type {
+  BeatStatus, CoreLoop, LoopStatus, LoopType, OfferResponseKind, OfferStatus, OfferTerms,
+  RewardBounds,
+} from './types.ts'
+export {
+  COOP_FATIGUE_STREAK, computeVarietyFlags, dominantPillar, LOOP_TYPE_WINDOW, SAME_TYPE_LIMIT,
+  SPOTLIGHT_MIN_INTENTS, SPOTLIGHT_SHARE, varietyGuidance,
+} from './variety.ts'
+export type { VarietyFlags, VarietyInput } from './variety.ts'

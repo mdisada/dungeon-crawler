@@ -1,6 +1,7 @@
 // Slice 1: the DM Main tab adapts to scene.mode - combat status in battle, the social
 // encounter controls in roleplay, narration controls otherwise. Objectives + players pinned.
 import { cleanup, render, screen } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(cleanup)
@@ -17,6 +18,7 @@ import { initialGameState } from '@rules/state'
 import type { CombatState, GameState } from '@rules/state'
 
 import { DmMainTab } from './components/dm-tabs/main-tab'
+import { DmOverviewPanel } from './components/dm-overview-panel'
 import { PlayProvider } from './components/play-context'
 import type { MemberAdventure } from './types'
 
@@ -42,7 +44,7 @@ function stateWith(overrides: (state: GameState) => void): GameState {
   return state
 }
 
-function renderAsDm(state: GameState) {
+function renderAsDm(state: GameState, node: ReactNode = <DmMainTab />) {
   return render(
     <PlayProvider
       adventure={adventure}
@@ -54,16 +56,16 @@ function renderAsDm(state: GameState) {
       connection="live"
       fx={[]}
     >
-      <DmMainTab />
+      {node}
     </PlayProvider>,
   )
 }
 
 describe('DmMainTab', () => {
-  it('pins objectives and players above the adaptive section', () => {
-    renderAsDm(stateWith(() => {}))
-    expect(screen.getByText('Find the relic')).toBeInTheDocument()
-    expect(screen.getByText('Ash')).toBeInTheDocument()
+  it('renders the adaptive section without the objectives/players overview', () => {
+    renderAsDm(stateWith((s) => { s.scene.mode = 'narration' }))
+    expect(screen.queryByText('Find the relic')).not.toBeInTheDocument()
+    expect(screen.queryByText('Ash')).not.toBeInTheDocument()
   })
 
   it('shows narration controls outside combat and roleplay', () => {
@@ -96,6 +98,14 @@ describe('DmMainTab', () => {
     renderAsDm(stateWith((s) => { s.dm!.settings = { autoDialogue: true, autoChecks: false } }))
     const toggle = screen.getByRole('checkbox', { name: /Auto dialogue/ })
     expect(toggle).toBeChecked()
+  })
+})
+
+describe('DmOverviewPanel', () => {
+  it('renders objectives and players in collapsible sections', () => {
+    renderAsDm(stateWith(() => {}), <DmOverviewPanel />)
+    expect(screen.getByText('Find the relic')).toBeInTheDocument()
+    expect(screen.getByText('Ash')).toBeInTheDocument()
   })
 })
 

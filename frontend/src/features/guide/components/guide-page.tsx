@@ -56,6 +56,16 @@ export function GuidePage() {
       })),
       locationCount: data.locations.length,
       endingCount: data.endings.length,
+      contracts: data.contracts.map((k) => ({
+        label: k.label,
+        isEntry: k.isEntry,
+        giverNpcId: k.giverNpcId,
+        goldFloor: k.reward.gold_floor ?? 0,
+        goldCeiling: k.reward.gold_ceiling ?? 0,
+        objectiveIds: k.objectiveIds,
+      })),
+      npcIds: data.npcs.map((n) => n.id),
+      objectiveIds: data.objectives.map((o) => o.id),
     })
     setValidationErrors(errors)
     if (errors.length > 0 || !id) return
