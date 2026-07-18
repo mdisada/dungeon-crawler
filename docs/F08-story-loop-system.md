@@ -95,6 +95,57 @@ Hooks are delivered as context to the Narrator/NPC agents ("work this in natural
 - **Antagonist turns:** World Clock triggers every N in-game days (default 3) and at session end. Input: antagonist plan + current step + party's visible impact on it. Output: `{ step_progress: advance|stall|setback, off_screen_event, surfacing_suggestions: [rumor|scene_detail|npc_reaction] }` → non-blocking proposal ("Off-screen: the cult acquired the second relic. Surface via refugee rumors?"). Accepted surfacings become ingredients.
 - **Suspicion tally:** Summarizer tags player expressions of suspicion/hostility toward NPCs; Steward maintains `suspicion_tally`. At threshold (default: score ≥ 5 with ≥ 2 sessions of signals) → **BBEG commitment proposal**: "Players strongly suspect/hate Lady Aster. Commit her as the antagonist's agent? Locks retroactive continuity." Assist: human decides. **Full-AI: commits at threshold automatically but only if the Consistency Manager confirms no contradicting established facts.** Commitment writes `committed_bbeg_npc_id` and triggers a Hook Weaver retro-pass.
 
+## 8.1 Ending Steward (multiple fluid endings)
+
+Extends the Meta Loop Steward. F4 authors 3-5 hidden **candidate endings**, each with weighted
+`trigger_conditions` (F4 §4.2). The Steward makes the conclusion *fluid* — the players' emerging
+trajectory picks which ending the story lands, and the system gently reinforces it without ever
+forcing it.
+
+**Live state** (not in F4's authored shape): `endings.status` transitions
+`candidate → leading → committed` (or `discarded`); the adventure tracks
+`ending_scores jsonb {ending_id: score}`, `dial_values jsonb {key: -5..5}` (all start 0), and
+`committed_ending_id?`.
+
+- **Signal vocabulary (closed, F4 §4.2):** signals reference only state this system is guaranteed
+  to maintain — objective outcomes (completed/failed, already auto-evaluated on every diff, §9),
+  registry NPC states (dead/alive/allied/hostile, from F10 disposition + world state), and story
+  dial thresholds. No free-form flags: a signal that can never fire is worse than no signal.
+- **Dial upkeep (Summarizer):** after each scene/beat close, the Summarizer nudges any moved dial
+  by ±1 (±2 for a defining moment) with a one-line logged justification appended to the event log
+  (auditable; DM can correct the value in assist mode). Dials are trajectory memory, not judgment.
+- **Scoring (deterministic, every state diff / objective completion / dial change / clock tick):**
+  for each candidate ending, sum the `weight` of every signal whose `when` currently holds — pure
+  lookups against objective states, NPC states, and dial values (an Engine, not an LLM). The
+  argmax is the **leading** ending; ties break by lowest `index` (so one always leads → no
+  dead-end). Cheap, testable, runs on every diff.
+- **Holistic pass (LLM, on chapter boundaries / clock ticks):** the Steward gets the condensed
+  event log + the (close-scoring) candidate endings and confirms/adjusts the leading pick for
+  tone and relationship nuance the flags don't capture — mirrors the deterministic-atoms +
+  Adjudicator split used elsewhere. Low frequency, high-stakes-planning model.
+- **Gentle pull, never push:** the leading ending is passed as context to the Beat Planner
+  (`narration_seed` / beat framing bends toward its trajectory) and Hook Weaver (hooks lean toward
+  its climax), but **all endings stay reachable until commitment** — this is the §6 pull-not-push
+  principle applied to the resolution. Early game the pull is light; it strengthens as one ending
+  pulls clear.
+- **Commitment:** near the climax (final chapter's last objective active, or a score margin +
+  min-events threshold), the Steward drafts a **commitment proposal** exactly like the BBEG one
+  (§8): assist → DM decides; Full-AI → auto-commit only when the margin is decisive **and** the
+  Consistency Manager confirms no contradiction. Commitment **re-authors the climax live**: the
+  Steward drafts the concrete finale from the actual event log + committed relationships, seeded
+  by the ending's premise — the guide's `climax_summary` was only an illustrative sketch (F4
+  §4.2), so the story can't have drifted away from a script that didn't exist. It then writes
+  `committed_ending_id`, sets the climax objective's reveal path, and triggers a Hook Weaver
+  retro-pass. Other endings → `discarded`.
+- **Emergent endings:** if the leading score stays low/ambiguous (players went off-map), the
+  Steward may **propose a new ending** authored from the actual trajectory (`is_emergent = true`),
+  gated the same way as player-theory canonization (§5): assist → DM approves; Full-AI → only on a
+  clean Consistency pass. Keeps agency real without abandoning coherence.
+
+Guardrail: the pull must not collapse into a railroad — commitment happens *late*, and a player
+action that flips the leading ending before commitment always re-ranks (the players steer, the
+system follows).
+
 ## 9. Objective flow (ties F4 → live play)
 
 - One objective `active` (player-visible) at a time per the reveal order; predicates auto-evaluated on every state diff; Adjudicator handles ambiguous atoms via `propose_objective_completion`.
@@ -111,6 +162,11 @@ Hooks are delivered as context to the Narrator/NPC agents ("work this in natural
 - [ ] Variety flags fire per rules and alter Beat Planner output (fixture comparison).
 - [ ] Cooperation counters: `coop_low`, `coop_fatigue`, and `spotlight` fire against seeded event-log fixtures; braided beats emitted only when the composition profile supports the goal pair.
 - [ ] Interlock guardrail: a personal loop with an interlock remains completable when the linked PC's loop is untouched (predicate fixture).
+- [ ] Ending Steward: deterministic scoring ranks candidate endings from a seeded fixture of
+      objective outcomes + NPC states + dial values; a player action that flips the winning signal
+      re-ranks the leading ending; dial nudges are logged with justifications; commitment fires
+      only at the late threshold and re-authors the climax from the event log; auto-commit
+      (Full-AI) blocked on a Consistency contradiction.
 
 ## 11. Open questions
 

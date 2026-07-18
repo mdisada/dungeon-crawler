@@ -1,0 +1,165 @@
+// Per-entity "Regenerate" contract (F04 SS2: "individually re-runnable ... per entity"). One
+// small LLM call regenerates a single chapter/objective/NPC/location; the pipeline then either
+// overwrites (untouched row) or writes a pending_regen proposal (human-edited row) per regen.ts.
+
+import { Check, countWords, extractJsonObject } from './json.ts'
+import { validatePredicate } from './predicates.ts'
+import { OBJECTIVE_TITLE_MAX_WORDS } from './stages/stage3.ts'
+import { parseSignalWhen, signalWhenToStored } from './stages/stage8.ts'
+import type { EntityRef, Json, ParseResult } from './types.ts'
+
+export type RegenEntityType = 'chapter' | 'objective' | 'npc' | 'location' | 'ending'
+
+/** Closed-vocabulary ref lists for ending regen (F04 SS4.2), in prompt order. */
+export interface EndingRegenRefs {
+  objectives: { id: string; label: string }[]
+  npcs: { id: string; label: string }[]
+  dials: { key: string; name: string }[]
+}
+
+export interface RegenEntityContext {
+  premise: string
+  antagonist: string
+  chapterTitle: string
+  chapterArc: string
+  /** Canonical cast & places (F04 SS2.1) - keeps regenerated entities inside the registry. */
+  entities?: EntityRef[]
+  /** Required for type 'ending': what its signals may reference. */
+  endingRefs?: EndingRegenRefs
+  /** The row's current generated/edited fields, shown to the model as the starting point. */
+  current: Record<string, Json>
+}
+
+export const REGEN_AGENT_ROLE: Record<RegenEntityType, 'story_director' | 'ingredient_generator'> = {
+  chapter: 'story_director',
+  objective: 'story_director',
+  npc: 'ingredient_generator',
+  location: 'ingredient_generator',
+  ending: 'story_director',
+}
+
+const SHAPES: Record<RegenEntityType, string> = {
+  chapter: '{ "title": "short chapter title", "arc_summary": "hidden DM summary, 3-6 sentences" }',
+  objective: `{ "title": "player-facing, AT MOST ${OBJECTIVE_TITLE_MAX_WORDS} words, open phrasing", "hidden_description": "DM-only grounding", "completion_predicates": { "any": [ { "flag": "...", "eq": true } ] } }`,
+  npc: '{ "name": "...", "role": "npc"|"boss", "personality": { "traits": "...", "voice": "...", "wants": "..." }, "faction": "...", "description": "...", "image_prompt": "..." }',
+  location: '{ "name": "...", "description": "...", "image_prompt": "..." }',
+  ending:
+    '{ "title": "hidden label", "description": "1-2 sentence resolution premise", "climax_summary": "illustrative sketch, 1-2 sentences", "tone": "triumphant|tragic|pyrrhic|...", "trigger_conditions": { "summary": "what play leads here", "signals": [ { "when": { "objective": 1, "outcome": "completed" } | { "npc": 1, "state": "dead"|"alive"|"allied"|"hostile" } | { "dial": "<key>", "gte" or "lte": -5..5 }, "weight": 3, "note": "..." } ] } }',
+}
+
+export function buildRegenEntityPrompt(
+  type: RegenEntityType,
+  ctx: RegenEntityContext,
+): { system: string; user: string; maxTokens: number } {
+  const endingRules =
+    type === 'ending'
+      ? '\nSignal "when" refs must use the numbered objective/NPC lists and declared dial keys below - nothing else. weight is signed nonzero in [-5, 5].'
+      : ''
+  const system = `You are regenerating one ${type} of a tabletop RPG adventure guide. Produce a FRESH take that still fits the adventure and chapter context - do not just paraphrase the current version.${endingRules}
+
+Respond with ONLY a JSON object, no prose, in exactly this shape:
+${SHAPES[type]}`
+
+  const registry = (ctx.entities ?? []).map((e) => `- [${e.kind}] ${e.name}: ${e.note}`).join('\n')
+  const refs = ctx.endingRefs
+  const refBlock = refs
+    ? `\nObjectives (reference by number):\n${refs.objectives.map((o, i) => `${i + 1}. ${o.label}`).join('\n')}\n\nNPCs (reference by number):\n${refs.npcs.map((n, i) => `${i + 1}. ${n.label}`).join('\n') || '(none)'}\n\nDial keys: ${refs.dials.map((d) => `${d.key} (${d.name})`).join(', ') || '(none)'}\n`
+    : ''
+
+  const user = `Adventure premise: ${ctx.premise}
+Antagonist: ${ctx.antagonist}
+Chapter: ${ctx.chapterTitle}
+Chapter arc (hidden): ${ctx.chapterArc}
+${registry ? `\nCanonical cast & places (stay inside this registry):\n${registry}\n` : ''}${refBlock}
+Current ${type} (regenerate this):
+${JSON.stringify(ctx.current, null, 2)}`
+
+  return { system, user, maxTokens: 1500 }
+}
+
+/**
+ * Returns DB-ready (snake_case) fields for the row, validated per entity type. `refs` is
+ * required for type 'ending' (closed-vocabulary mapping of list numbers to row UUIDs).
+ */
+export function parseRegenEntity(
+  type: RegenEntityType,
+  raw: string,
+  refs?: EndingRegenRefs,
+): ParseResult<Record<string, Json>> {
+  const extracted = extractJsonObject(raw)
+  if (!extracted.ok) return extracted
+  const c = new Check()
+  const o = extracted.data
+
+  if (type === 'chapter') {
+    return c.result({
+      title: c.str(o.title, '$.title'),
+      arc_summary: c.str(o.arc_summary, '$.arc_summary'),
+    })
+  }
+
+  if (type === 'objective') {
+    const title = c.str(o.title, '$.title')
+    if (title && countWords(title) > OBJECTIVE_TITLE_MAX_WORDS) {
+      c.errors.push(`$.title: "${title}" is over ${OBJECTIVE_TITLE_MAX_WORDS} words`)
+    }
+    c.errors.push(...validatePredicate(o.completion_predicates, '$.completion_predicates'))
+    return c.result({
+      title,
+      hidden_description: c.str(o.hidden_description, '$.hidden_description'),
+      completion_predicates: (o.completion_predicates ?? null) as Json,
+    })
+  }
+
+  if (type === 'npc') {
+    return c.result({
+      name: c.str(o.name, '$.name'),
+      role: c.oneOf(o.role, '$.role', ['npc', 'boss'] as const),
+      personality: c.obj(o.personality ?? {}, '$.personality') as Json,
+      faction: c.str(o.faction ?? '', '$.faction', { allowEmpty: true }),
+      description: c.str(o.description, '$.description'),
+      image_prompt: c.str(o.image_prompt, '$.image_prompt'),
+    })
+  }
+
+  if (type === 'ending') {
+    if (!refs) {
+      c.errors.push('$: ending regeneration requires objective/npc/dial reference lists')
+      return c.result({})
+    }
+    const dialKeys = new Set(refs.dials.map((d) => d.key))
+    const objectiveIds = refs.objectives.map((r) => r.id)
+    const npcIds = refs.npcs.map((r) => r.id)
+    const tc = c.obj(o.trigger_conditions, '$.trigger_conditions')
+    const signals = c.arr(tc.signals, '$.trigger_conditions.signals', 1, 8).map((raw, j) => {
+      const sPath = `$.trigger_conditions.signals[${j}]`
+      const s = c.obj(raw, sPath)
+      const when = parseSignalWhen(c, s.when, `${sPath}.when`, objectiveIds.length, npcIds.length, dialKeys)
+      const weight = typeof s.weight === 'number' && Number.isFinite(s.weight) ? s.weight : NaN
+      if (Number.isNaN(weight) || weight === 0 || Math.abs(weight) > 5) {
+        c.errors.push(`${sPath}.weight: expected a nonzero number in [-5, 5]`)
+      }
+      return {
+        when: when ? signalWhenToStored(when, objectiveIds, npcIds) : null,
+        weight: Number.isNaN(weight) ? 1 : weight,
+        note: c.str(s.note ?? '', `${sPath}.note`, { allowEmpty: true }),
+      }
+    })
+    return c.result({
+      title: c.str(o.title, '$.title'),
+      description: c.str(o.description, '$.description'),
+      climax_summary: c.str(o.climax_summary, '$.climax_summary'),
+      tone: c.str(o.tone, '$.tone'),
+      trigger_conditions: {
+        summary: c.str(tc.summary ?? '', '$.trigger_conditions.summary', { allowEmpty: true }),
+        signals,
+      } as unknown as Json,
+    })
+  }
+
+  return c.result({
+    name: c.str(o.name, '$.name'),
+    description: c.str(o.description, '$.description'),
+    image_prompt: c.str(o.image_prompt, '$.image_prompt'),
+  })
+}

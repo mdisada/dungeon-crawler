@@ -39,15 +39,20 @@ Feature doc index:
 
 ## 2. Current status
 
-**Phase:** Phase 0 (foundation), starting. The spec framework (MAIN-SPEC, DEVELOPMENT-PLAN, all
-F0X docs) was adopted 2026-07-16. The §3 open decisions were resolved with the user the same day
-— see §3 for the record. Nothing in the codebase has been built against the spec yet — see §4.
+**Phase:** Phase 0 gated PASS WITH NOTES, Phase 1 gated PASS, Phase 2 gated PASS, Phase 3a gated
+PASS (all 2026-07-17), Phase 3b gated PASS (2026-07-18 — incl. mid-checkpoint amendments 1
+[multiple fluid endings] and 2 [entity registry + closed-vocabulary ending signals]; see the
+checkpoint and `docs/DECISIONS.md` addenda). See `docs/CHECKPOINTS/` for archived checkpoints.
 
-**Now working on:** `DEVELOPMENT-PLAN.md` PHASE 0 — BUILD + AI-TEST done, at CHECKPOINT (see
-`docs/CHECKPOINTS/PHASE0.md`), awaiting the user's gate verdict.
+**Now working on:** `DEVELOPMENT-PLAN.md` PHASE 4 — F05 Lobby & Session Lifecycle + F06 Adventure
+Page (Live Play Frontend) with dummy content. BUILD + AI-TEST done: migrations applied live,
+`session` function deployed, 43-check live integration suite PASS, demo adventure + characters
+seeded for the main account. At CHECKPOINT (see `docs/CHECKPOINTS/PHASE4.md`), awaiting the
+user's gate verdict — the two-browser lobby test, phone test, and renderer sign-off are user
+tasks.
 
-**Next up:** On PASS, move to PHASE 1 (F1 Auth, Settings & AI Connectivity). Do not start Phase 1
-work before the gate verdict lands (rule zero).
+**Next up:** On Phase 4 PASS, PHASE 5 (F7 + F10 Live Orchestration & Social Encounters — the
+first phase where the game is actually played with AI).
 
 ---
 
@@ -107,12 +112,12 @@ checkpoint — the only status that means "done" per `DEVELOPMENT-PLAN.md` rule 
 
 | # | Feature | Status | Existing reference code | Next task |
 |---|---|---|---|---|
-| F01 | Auth, Settings & AI Connectivity | early scaffold | `frontend/src/features/auth/` (email/password only); `backend/llm/` (OpenRouter + Ollama client, no per-role routing) | Resolve §3 items 1 & 3, then build per spec: Edge Function proxy, per-role model map, `usage_log`, settings page |
-| F02 | Character Page & Creator | not started | none | SRD race/class/background data ingestion is a prerequisite (Phase 0) |
-| F03 | Adventure Creation Wizard | partial | `frontend/src/features/new-campaign/`, `backend/campaign/plot.py` | Add mode select (Full-AI/AI-Assist), player min/max, chapter bounds |
-| F04 | Adventure Guide Pipeline & Editor | early scaffold | `backend/campaign/plot_points.py` (flat plot-point list only), `extraction.py` | Everything past the flat list: chapters/scenes/objectives w/ completion predicates, Ingredient Generator, Hook Weaver, Encounter Designer, editor tabs |
-| F05 | Lobby & Session Lifecycle | not started | none — a hardcoded `DEBUG_PLAYER_EMAIL` escape hatch in `campaign-session/constants.ts` is not a lobby | Needs a real multiplayer membership model first |
-| F06 | Adventure Page (Live Play Frontend) | early scaffold | `frontend/src/features/campaign-session/` | Needs `scene.mode` state machine, tactical grid, VN layout, Player/DM sidebars |
+| F01 | Auth, Settings & AI Connectivity | gated | `supabase/functions/ai-proxy` (+ `ai-credit`, `worker-token`, `worker-heartbeat`), `frontend/src/features/settings/`, `frontend/src/components/navbar.tsx`, RLS migrations | Real BYOK key rotation (Vault-backed) and localStorage fallback still unwired past the settings toggle — backlog, not blocking |
+| F02 | Character Page & Creator | gated | `supabase/migrations/20260717150000_create_srd_races_backgrounds.sql`, `..._create_characters.sql`, `packages/rules/src/character/`, `frontend/src/features/characters/` | Backlog (non-blocking): Cleric skill/equipment data gap in SRD source; real image-gen quality + crop-tool feel unjudged (placeholder-mode only); no RTL tests for wizard/crop tool |
+| F03 | Adventure Creation Wizard | gated | `supabase/migrations/20260717180000_create_adventures.sql`, `frontend/src/features/adventures/` (old prototype `frontend/src/features/new-campaign/` kept as F04 reference) | Backlog (non-blocking): genre/tone preset chips deferred (F03 §7 nice-to-have) |
+| F04 | Adventure Guide Pipeline & Editor | gated | `packages/rules/src/guide/` (canonical stage contracts, mirrored to `supabase/functions/_shared/guide/` via `scripts/sync-guide-shared.mjs` — CI now runs `--check`), `supabase/functions/guide-pipeline/`, `frontend/src/features/guide/`, migrations `20260717190000-200000` + `20260718090000` | Backlog (non-blocking): scenes have no editor surface (hidden scaffolding, per spec); no RTL tests for the editor; live ending scoring (Ending Steward) is F08/Phase 6 |
+| F05 | Lobby & Session Lifecycle | built, ungated | migrations `20260718110000-110200`, `supabase/functions/session/`, `frontend/src/features/play/` (lobby modal, join page), `supabase/seed/seed-demo-adventure.mjs`, `tests/integration/session-live.mjs` | Awaiting Phase 4 gate; disconnect/auto-delay combat turns + adventure-completion unlock are Phase 5/7 work |
+| F06 | Adventure Page (Live Play Frontend) | built, ungated | `frontend/src/features/play/` (3 renderers + battle map, DM/Player sidebars, `@rules/state` contract mirrored to `_shared/state`) | Awaiting Phase 4 gate; input row / proposals / TTS-synced subtitles wired to F07/F12 in later phases |
 | F07 | Live Orchestration Core | early scaffold | `backend/campaign/session_handlers.py`, `narration.py` | Needs Action Router, Adjudicator, single-writer Adventure Manager + `state_version`, proposal lifecycle, Consistency pass |
 | F08 | Story & Loop System | not started | one pacing counter (`storage.py: turns_since_last_plot_point`) | Everything: Loop Stack Manager, Loop Classifier, Beat Planner, Ingredient Pool, Hook Weaver, Meta Loop Steward |
 | F09 | Combat Engine & Tactical Map | not started | none | Everything; depends on SRD data (Phase 0) |

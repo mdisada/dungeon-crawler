@@ -16,7 +16,7 @@
 
   font: 18px/145% var(--sans);
   letter-spacing: 0.18px;
-  color-scheme: light dark;
+  color-scheme: light;
   color: var(--text);
   background: var(--bg);
   font-synthesis: none;
@@ -91,20 +91,11 @@
   --sidebar-ring: oklch(0.708 0 0)
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-  }
-}
-
 #root {
-  width: 1126px;
-  max-width: 100%;
+  width: 100%;
+  max-width: 1126px;
   margin: 0 auto;
-  text-align: center;
+  padding-inline: clamp(1rem, 4vw, 2rem);
   min-height: 100svh;
   display: flex;
   flex-direction: column;
@@ -123,13 +114,9 @@ h2 {
 }
 
 h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
+  font-size: clamp(32px, 20px + 2.5vw, 56px);
+  letter-spacing: -0.03em;
+  line-height: 1.1;
 }
 
 @theme inline {
@@ -176,6 +163,10 @@ h1 {
 }
 
 .dark {
+  color-scheme: dark;
+  --text: #9ca3af;
+  --text-h: #f3f4f6;
+  --bg: #16171d;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
@@ -216,3 +207,31 @@ h1 {
     @apply bg-background text-foreground;}
   html {
     @apply font-sans;}}
+/* Phase 4 live-play animations (F06 SS3): Ken Burns background pan + transient combat fx. */
+@keyframes ken-burns {
+  0% { transform: scale(1) translate(0, 0); }
+  50% { transform: scale(1.08) translate(-1.5%, -1%); }
+  100% { transform: scale(1) translate(0, 0); }
+}
+.ken-burns {
+  animation: ken-burns 45s ease-in-out infinite;
+}
+
+@keyframes fx-float {
+  0% { transform: translateY(0); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translateY(-70px); opacity: 0; }
+}
+.fx-float {
+  animation: fx-float 2.4s ease-out forwards;
+}
+
+@keyframes fx-banner {
+  0% { transform: scale(0.8); opacity: 0; }
+  20% { transform: scale(1.05); opacity: 1; }
+  80% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1); opacity: 0; }
+}
+.fx-banner {
+  animation: fx-banner 2.4s ease-in-out forwards;
+}

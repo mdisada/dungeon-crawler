@@ -54,3 +54,17 @@ See `docs/DECISIONS.md` (2026-07-17) for why.
   `seed/apply-seed.mjs` (see above) to push the refreshed data.
 - `seed/apply-seed.mjs` — applies `seed.sql` to a given `--db-url` one statement at a time.
 - `seed.sql` — generated output of `ingest-srd.mjs`; do not hand-edit.
+- `seed/seed-demo-characters.mjs` — 2 complete demo PCs with placeholder images for a given
+  user email (`node supabase/seed/seed-demo-characters.mjs "$POSTGRES_URL_NON_POOLING" <email>`).
+- `seed/seed-demo-adventure.mjs` — one `demo=true` guide_ready adventure with fixture guide
+  content (chapter, objectives, NPCs, mapped location, endings) so the Phase 4 scripted demo
+  session runs with zero LLM spend. Same usage; idempotent per user+title.
+
+## Edge functions
+
+- `functions/_shared/guide/` and `functions/_shared/state/` are **generated** — canonical source
+  is `packages/rules/src/` (edge bundles can't import outside `supabase/functions/`). After
+  editing the canonical files, run `node scripts/sync-guide-shared.mjs` (add `--check` to verify
+  without writing; CI runs the check).
+- Deploy (needs `supabase login` or `SUPABASE_ACCESS_TOKEN`; Docker-free):
+  `npx supabase functions deploy <name> --use-api`

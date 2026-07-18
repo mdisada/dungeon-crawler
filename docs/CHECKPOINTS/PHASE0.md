@@ -107,7 +107,7 @@ bug in the SRD items ingestion (see BUILT/AI TESTS below and `docs/DECISIONS.md`
 
 **YOUR TASKS:**
 
-- [x] Double check the OpenRouter spend limit is really set (a 30-second dashboard glance),
+- [ ] Double check the OpenRouter spend limit is really set (a 30-second dashboard glance),
       since Phase 1 (F1) depends on it. (Migrations + seed are already live in your project with
       your go-ahead, and pgvector was independently confirmed - neither needs a task from you.)
 

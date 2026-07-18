@@ -13,27 +13,61 @@ Runs as an orchestrated sequence of Job Queue jobs; the Guide page shows live st
 
 ```
 Stage 1  Story Director   plot → meta loop + chapter arcs (commits chapter count within range)
+                          + the global ENTITY REGISTRY: every named NPC/location the story
+                          mentions, as {kind, name, note} (§2.1)
 Stage 2  Story Director   per chapter → 3–6 scene sketches (hidden scaffolding)
+                          + the chapter's entity list (registry entities appearing here
+                          + any new named entities this chapter introduces)
 Stage 3  Story Director   scenes → objectives (ordered, short, open phrasing)
                           + hidden descriptions + completion predicates
 Stage 4  Ingredient Gen   per chapter → NPCs (incl. bosses), locations, clues,
                           secrets, scheduled events — pillar-tagged, objective-linked;
-                          min_players > 1 → cooperative sets (§4.1)
+                          MUST produce a row for every entity in the chapter's registry
+                          list (hard validation, §2.1); min_players > 1 → coop sets (§4.1)
 Stage 5  Encounter Design boss specs + candidate encounters per objective
                           (Budget-Engine-validated against expected party level)
 Stage 6  Hook Weaver      cross-links: NPC↔objective hooks, location↔ingredient
                           placement, backstory hook slots (filled at session start
                           when real characters are known)
-Stage 7  Consistency pass plot-hole scan across hidden descriptions; flags surfaced
-                          as warnings in the editor (never silent rewrites)
+Stage 7  Consistency pass plot-hole scan across hidden descriptions; also flags any
+                          global registry entity that never landed in a chapter list or
+                          content row; warnings in the editor (never silent rewrites)
+Stage 8  Ending Designer  whole-guide: 3-5 hidden candidate endings (direction, not
+                          script) + 2-4 story dials; trigger signals restricted to a
+                          closed vocabulary the live system tracks (§4.2)
 ```
+
+Stage 1 also emits 2-4 short **ending premises** (one-liners) alongside the meta loop, so chapter
+arcs escalate *toward* diverging resolutions rather than a single fixed one; Stage 8 fleshes those
+premises into full endings once the objectives/NPCs they hinge on exist.
+
+## 2.1 Entity registry (cohesion contract)
+
+Names invented in prose are cheap; rows are what live play can reference. The registry is the
+contract that closes the gap:
+
+- **Stage 1** emits `meta_loop.entities`: every named NPC/location in the story spine, as
+  `{kind: 'npc'|'location', name, note}` (one-line role: "Xyloth — lich antagonist").
+- **Stage 2** receives the global registry and emits `chapters.entities` for its chapter: the
+  registry entities that appear there plus any new named entities its scenes introduce. Every
+  global entity should land in ≥ 1 chapter.
+- **Stage 4** receives its chapter's entity list as a **must-cover constraint**: every listed
+  entity must come back as an NPC/location row (exact name, normalized compare) or reuse an
+  existing row. A miss is a validation error fed back to the model for retry — never a silent gap.
+- **Stage 7** warns on any global entity that never reached a chapter list or a content row.
+- **Per-entity regeneration** prompts include the registry, so regenerated entities stay in the
+  canonical cast instead of inventing strangers.
+
+No user approval step: consistency is enforced mechanically; the editor remains the review
+surface. (An opt-in "pause after outline" toggle is backlog if hands-on naming control is wanted.)
 
 Failure handling: a stage failure pauses the pipeline with a retry button; partial results remain editable.
 
 ## 3. Data model
 
 ```
-chapters:    id, adventure_id, index, title, arc_summary text (hidden), status
+chapters:    id, adventure_id, index, title, arc_summary text (hidden), status,
+             entities jsonb [{kind,name,note}]               -- chapter registry list (§2.1)
 scenes:      id, chapter_id, index, sketch text (hidden scaffolding)
 objectives:  id, chapter_id, index, title text,            -- short & open: "Defeat Volgarth"
              hidden_description text,                       -- sense-making / plot-hole catcher
@@ -42,7 +76,9 @@ objectives:  id, chapter_id, index, title text,            -- short & open: "Def
              linked_location_ids uuid[], linked_npc_ids uuid[],
              encounter_ids uuid[]                           -- candidate routes, not gates
 npcs:        id, adventure_id, name, role ('npc'|'boss'), personality jsonb,
-             stat_block_ref (srd id | custom jsonb), faction, voice_id?,
+             stat_block jsonb,                              -- lightweight combat block (see below)
+             stat_block_ref (srd id | custom jsonb),        -- seam: point at a full SRD monster/char
+             faction, voice_id?,
              images jsonb {fullbody,avatar,token,portrait}, description text,
              tactics_profile jsonb?,                        -- for Tactician (F9)
              boss_phases jsonb[]?                           -- F9 phase defs
@@ -59,7 +95,23 @@ ingredients: id, adventure_id, chapter_id?, type ('clue'|'secret'|'event'|'item'
 hooks:       id, adventure_id, from_ref, to_objective_id, hook_text, kind
 encounters:  id, adventure_id, type ('battle'|'social'|'environment'),
              spec jsonb, budget jsonb, location_id?
+endings:     id, adventure_id, index, title text (hidden), description text (hidden),
+             climax_summary text (hidden),      -- ILLUSTRATIVE sketch only; the real climax is
+                                                -- authored live at commitment (F8 §8.1)
+             tone text,
+             trigger_conditions jsonb,          -- { summary, signals: [{when, weight, note}] } (§4.2)
+             exclusivity_group text,            -- endings in a group are mutually exclusive
+             is_emergent boolean default false, -- authored at guide time = false; created live (F8) = true
+             status ('candidate'|'leading'|'committed'|'discarded') default 'candidate'
+                                                -- 'candidate' at guide time; F8's Ending Steward drives the rest
+
+adventures.story_dials jsonb                    -- [{key, name, description}] 2-4 adventure-specific
+                                                -- trajectory axes declared by Stage 8 (§4.2); live
+                                                -- VALUES (-5..5) are F8 state, not stored here
 ```
+
+Live-play ending selection state (leading/committed ending, running scores) lives with the Ending
+Steward in **F8 §8.1**, not here — F4 owns only the authored ending content + trigger shapes.
 
 ## 4. Completion predicates
 
@@ -88,6 +140,50 @@ When the adventure's `min_players > 1`, Stage 4 and Stage 5 are prompted to prod
 
 Editor: coop sets render as grouped cards in the Ingredients drawer with their affinity chips; the DM can regroup, retag affinities, or dissolve a set.
 
+## 4.2 Multiple endings (fluid resolution)
+
+An adventure has 3-5 hidden **candidate endings**, not one fixed conclusion. Which one the story
+lands is driven by how play actually goes. This is the same mechanism as the BBEG-commitment tally
+(F8 §8): a signal accumulates, and at a threshold near the climax the system **commits** an
+outcome.
+
+**Endings are direction, not script.** The canonical parts of an ending are its title, tone, a
+1-2 sentence resolution premise (`description`), and its trigger profile. `climax_summary` is an
+*illustrative sketch* for the DM's read in the editor — at commitment time F8's Ending Steward
+re-authors the actual climax from the real story so far, seeded by the premise. Live play can
+therefore never "contradict" an ending: the concrete finale is written when it's chosen.
+
+- **Trigger signals — closed vocabulary.** Free-form flags/facts authored at guide time are not
+  guaranteed to ever be written during live play (state namespaces drift). Signals may therefore
+  ONLY reference state the live system deterministically maintains. Shape:
+  `{ summary, signals: [{ when, weight, note }] }` where `when` is exactly one of:
+  - `{ "objective_id": uuid, "outcome": "completed" | "failed" }` — objectives are the tracked
+    contract between guide and live play (F8 §9 auto-evaluates them on every state diff);
+  - `{ "npc_id": uuid, "state": "dead" | "alive" | "allied" | "hostile" }` — registry NPCs
+    (§2.1) whose status/disposition F10 maintains;
+  - `{ "dial": key, "gte" | "lte": n }` — threshold on a story dial (below).
+  `weight` is a signed number in [-5, 5], nonzero (negative = counter-indicates the ending). The
+  LLM authors refs by list number; the pipeline maps them to UUIDs on insert and hard-validates
+  every ref resolves — a dangling ref is a stage failure, not a warning.
+- **Story dials.** Stage 8 also declares 2-4 adventure-specific trajectory axes
+  (`adventures.story_dials`, e.g. `mercy_vs_ruthlessness`, `trust_in_lyra`), each `{key, name,
+  description}`. Live values run -5..5, start at 0, and are nudged by F8's Summarizer after scenes
+  with a logged one-line justification — semi-subjective at update time, numeric and auditable at
+  scoring time. Dials capture the tonal trajectory that objective outcomes can't.
+- **Gentle pull, never push:** once an ending leads, F8's Hook Weaver/Beat Planner bend hooks and
+  beat framing toward its trajectory, but **all endings stay reachable until commitment** — the
+  players' emerging direction picks the ending, the system only reinforces it (F8's existing "pull
+  never push" principle). Commitment locks the climax path near the end.
+- **Emergent endings:** if play goes somewhere none of the authored endings fit, the DM (or the AI
+  in Full-AI, only when the Consistency pass is clean) can author a new ending mid-play
+  (`is_emergent = true`) — same philosophy as player-theory canonization (F8 §5). The authored set
+  is the spine, not a cage.
+- **Distinctness (Stage 8 warnings):** endings must be meaningfully distinct (no near-duplicates)
+  and each needs ≥ 1 positively-weighted signal; argmax over scores guarantees one always wins (no
+  dead-end). These surface as editor warnings; ref resolution is the hard check above.
+  Adventure-level only for v1 — chapter arcs still adapt live via the loop/beat system;
+  per-chapter branch points are backlog.
+
 ## 5. Editor UI — `/adventures/:id/guide`
 
 Header: adventure title, status, pipeline progress (while generating), "Start Adventure" CTA (enabled when `guide_ready`). Tabs:
@@ -103,6 +199,15 @@ Header: adventure title, status, pipeline progress (while generating), "Start Ad
 
 - Layout mirrors the Character Page: left list (avatar, name, boss badge), main overview.
 - All fields autogenerated and editable via the character-creator components in "prefilled" mode. Images **never** auto-generate — per-NPC prompt shown, user clicks Generate; same crop tool as F2 (avatar/token/portrait).
+- **Combat stat block (`npcs.stat_block`):** every NPC is combat-ready with a lightweight,
+  character-shaped block so F09 can drop it into a fight (F02 §9). Stage 4 emits only a small seed
+  per NPC — a combat `archetype` (brute / skirmisher / sniper / caster / leader / minion) and a
+  challenge rating — and `packages/rules/src/guide/npc-stats.ts` (`deriveNpcStatBlock`) derives the
+  concrete abilities, HP, AC, proficiency bonus, save/skill modifiers, and a signature attack (the
+  same 5e math the character sheet uses). The editor exposes CR / archetype / attack-name controls
+  that re-derive the block on change; abilities/HP/AC/saves/skills render read-only. This is
+  deliberately lighter than full PC authoring (no class/spell/equipment surface) — bosses just take
+  a higher CR (floored at CR 2) and, via Stage 5, `tactics_profile` + `boss_phases` on top.
 - Voice per NPC: same picker/upload as narrator voice.
 - "Add NPC" (blank or "generate one for chapter N" quick action).
 
@@ -113,13 +218,24 @@ Header: adventure title, status, pipeline progress (while generating), "Start Ad
   - **Background image:** editable prompt textarea + "Generate image" button (manual trigger only); preview with panning simulation; regenerate keeps last 3.
   - **Battle map:** grid preview (1024×1024, 32×32 tiles). v1 map generation: image-gen with top-down prompt template onto the grid template, plus a simple editor: place/remove obstacle tiles (blocked movement), spawn markers, and sample tokens from a starter token set in Storage. (Full map authoring tools are out of scope; DMs can upload their own 1024×1024 map image.)
 
-### 5.4 (implicit) Ingredients drawer
+### 5.4 Endings
+
+- Hidden DM-only tab (players never see it — same as scenes/hidden descriptions). Top of tab:
+  the **story dials** list (key, name, description — editable). Card per candidate ending: title,
+  tone chip, editable description (canonical premise) + climax sketch (labeled illustrative), and
+  a **trigger-signals** editor — each signal row picks its kind (Objective / NPC / Dial), then an
+  objective picker + outcome, an NPC picker + state, or a dial + threshold; plus signed weight and
+  note. Add/delete/regenerate per ending; "Add ending" (blank or "generate one").
+- Stage 8 distinctness warnings shown inline. Live-play status (`leading`/`committed`) is
+  read-only here and only populated once the adventure is running (F8).
+
+### 5.5 (implicit) Ingredients drawer
 
 Collapsible right drawer available on all tabs: ingredient list filterable by chapter/type/objective; inline edit; add. Kept as a drawer rather than a tab so DMs encounter it as a toy box, not homework.
 
 ## 6. Save & activation
 
-Everything persists as edited (row-level autosave). "Start Adventure" → validates (≥1 objective per chapter, all objectives have predicates, min 1 location), embeds guide content (F13), sets `status: active`, first objective of chapter 1 → `reveal_state: active`, opens the lobby (F5).
+Everything persists as edited (row-level autosave). "Start Adventure" → validates (≥1 objective per chapter, all objectives have predicates, min 1 location, **≥ 2 candidate endings**), embeds guide content (F13), sets `status: active`, first objective of chapter 1 → `reveal_state: active`, opens the lobby (F5).
 
 ## 7. Acceptance criteria
 
@@ -131,6 +247,14 @@ Everything persists as edited (row-level autosave). "Start Adventure" → valida
 - [ ] "Start Adventure" validation catches missing predicates.
 - [ ] With min_players ≥ 2, each chapter contains ≥ 1 cooperative set; split-clue affinities bind to **distinct** characters at session start (fixture: 3-PC party) and degrade to `any_pc` when unbindable (fixture: 1-PC party on the same guide).
 - [ ] Coop-demand density guardrail enforced in generated output (schema-level count check).
+- [ ] Every entity in a chapter's registry list lands as an NPC/location row (stage 4 hard check;
+      fixture: a response missing a required entity is rejected with the entity named).
+- [ ] Stage 7 warns on global registry entities that never reached any chapter or content row.
+- [ ] Stage 8 generates 3-5 distinct candidate endings + 2-4 story dials; every trigger signal's
+      `when` ref resolves to a real objective/NPC/dial (hard validation, dangling ref = stage
+      failure); distinctness warnings fire on near-duplicate or no-positive-signal endings.
+      "Start Adventure" validation catches < 2 endings.
+- [ ] Per-ending regeneration proposes a diff on human-edited endings (same as other rows).
 
 ## 8. Open questions
 

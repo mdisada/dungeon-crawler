@@ -1,0 +1,65 @@
+// Party composition profile (F05 SS3): computed at first session start and recomputed on any
+// membership change; stored on adventures.party_profile and consumed by Encounter Designer,
+// Ingredient Generator, Beat Planner, and NPC Agent. Deterministic - backstory tags need the
+// LLM Hook Weaver pass, which is deferred to Phase 6 (F08 SS6), so they stay empty here.
+
+export interface PartyCharacter {
+  id: string
+  name: string
+  classKey: string | null
+  level: number
+  skillProficiencies: string[]
+  toolProficiencies: string[]
+}
+
+export interface PartyProfile {
+  size: number
+  levels: number[]
+  classes: string[]
+  skills: string[]
+  tools: string[]
+  /** 0-1 normalized per pillar: how well the party covers it. */
+  pillarStrengths: { combat: number; social: number; exploration: number }
+  /** Filled by the Hook Weaver LLM pass (Phase 6). */
+  backstoryTags: string[]
+}
+
+const SOCIAL_SKILLS = ['persuasion', 'deception', 'intimidation', 'performance', 'insight']
+const EXPLORATION_SKILLS = [
+  'perception', 'survival', 'investigation', 'stealth', 'nature',
+  'arcana', 'history', 'religion', 'athletics', 'acrobatics',
+]
+// Class chassis whose primary job is fighting (SRD 5.2 baseline).
+const MARTIAL_CLASSES = ['barbarian', 'fighter', 'monk', 'paladin', 'ranger', 'rogue']
+const CASTER_CLASSES = ['bard', 'cleric', 'druid', 'sorcerer', 'warlock', 'wizard']
+
+function coverage(present: string[], pool: string[]): number {
+  if (present.length === 0) return 0
+  const hits = pool.filter((s) => present.includes(s)).length
+  // Half the pool covered = full strength; more than that saturates.
+  return Math.min(1, hits / Math.ceil(pool.length / 2))
+}
+
+export function computePartyProfile(characters: PartyCharacter[]): PartyProfile {
+  const skills = [...new Set(characters.flatMap((c) => c.skillProficiencies))].sort()
+  const tools = [...new Set(characters.flatMap((c) => c.toolProficiencies))].sort()
+  const classes = [...new Set(characters.map((c) => c.classKey ?? 'unknown'))].sort()
+
+  const combatants = characters.filter(
+    (c) => c.classKey !== null && (MARTIAL_CLASSES.includes(c.classKey) || CASTER_CLASSES.includes(c.classKey)),
+  ).length
+
+  return {
+    size: characters.length,
+    levels: characters.map((c) => c.level).sort((a, b) => a - b),
+    classes,
+    skills,
+    tools,
+    pillarStrengths: {
+      combat: characters.length === 0 ? 0 : Math.min(1, combatants / characters.length),
+      social: coverage(skills, SOCIAL_SKILLS),
+      exploration: coverage(skills, EXPLORATION_SKILLS),
+    },
+    backstoryTags: [],
+  }
+}

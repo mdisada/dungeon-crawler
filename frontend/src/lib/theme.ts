@@ -17,6 +17,10 @@ function applyTheme(theme: Theme) {
   document.documentElement.classList.toggle('dark', theme === 'dark')
 }
 
+export function initTheme() {
+  applyTheme(getStoredTheme() ?? getSystemTheme())
+}
+
 export function useTheme() {
   const [theme, setTheme] = useState<Theme>(() => getStoredTheme() ?? getSystemTheme())
 

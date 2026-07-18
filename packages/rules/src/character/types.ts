@@ -1,0 +1,54 @@
+// Shared types for the character engine (F02). `Ruleset` is a seam, not a feature: only
+// 'srd-5.2.1' is implemented, but call sites already thread it through so a second ruleset can be
+// added later without changing signatures - see docs/DECISIONS.md 2026-07-17 "F2 build".
+
+export type Ruleset = 'srd-5.2.1'
+
+export type AbilityKey = 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha'
+
+export const ABILITY_KEYS: readonly AbilityKey[] = ['str', 'dex', 'con', 'int', 'wis', 'cha']
+
+export type AbilityScores = Record<AbilityKey, number>
+
+export type SkillName =
+  | 'Acrobatics'
+  | 'Animal Handling'
+  | 'Arcana'
+  | 'Athletics'
+  | 'Deception'
+  | 'History'
+  | 'Insight'
+  | 'Intimidation'
+  | 'Investigation'
+  | 'Medicine'
+  | 'Nature'
+  | 'Perception'
+  | 'Performance'
+  | 'Persuasion'
+  | 'Religion'
+  | 'Sleight of Hand'
+  | 'Stealth'
+  | 'Survival'
+
+// Fixed 5e skill -> governing-ability map. Identical across the 2014 and 2024 SRDs, so this is
+// not gated behind `Ruleset` (unlike ASI sourcing, which does vary - see abilities.ts).
+export const SKILL_ABILITY: Record<SkillName, AbilityKey> = {
+  Acrobatics: 'dex',
+  'Animal Handling': 'wis',
+  Arcana: 'int',
+  Athletics: 'str',
+  Deception: 'cha',
+  History: 'int',
+  Insight: 'wis',
+  Intimidation: 'cha',
+  Investigation: 'int',
+  Medicine: 'wis',
+  Nature: 'int',
+  Perception: 'wis',
+  Performance: 'cha',
+  Persuasion: 'cha',
+  Religion: 'int',
+  'Sleight of Hand': 'dex',
+  Stealth: 'dex',
+  Survival: 'wis',
+}

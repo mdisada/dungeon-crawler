@@ -1,0 +1,85 @@
+// Stage 6 - Hook Weaver, whole guide: cross-links NPC<->objective hooks, location<->ingredient
+// placement hooks, and backstory hook SLOTS (bound to real characters at session start by F05's
+// deferred pass) - F04 SS2. Entities are addressed by short handles ("npc#3") because the model
+// never sees row UUIDs; the pipeline resolves handles back to ids.
+
+import { Check, extractJsonObject } from '../json.ts'
+import type { HookDraft, ParseResult } from '../types.ts'
+
+export interface GuideDigest {
+  /** Handle -> one-line description, e.g. "npc#1" -> "Volgarth (boss, chapter 2): ...". */
+  objectives: Map<string, string>
+  npcs: Map<string, string>
+  locations: Map<string, string>
+  ingredients: Map<string, string>
+}
+
+export const HOOK_KINDS = ['npc_objective', 'location_placement', 'backstory_slot'] as const
+
+function digestLines(entries: Map<string, string>): string {
+  return [...entries.entries()].map(([handle, line]) => `${handle}: ${line}`).join('\n')
+}
+
+export function buildStage6Prompt(digest: GuideDigest): { system: string; user: string; maxTokens: number } {
+  const system = `You are the Hook Weaver for a tabletop RPG platform. Given a complete adventure guide digest, weave the connective tissue that directs players toward objectives without railroading.
+
+Produce three kinds of hooks:
+- "npc_objective": an NPC's wants/knowledge points at an objective ("from" is an npc# handle).
+- "location_placement": a location detail that surfaces an ingredient toward an objective ("from" is a loc# or ing# handle).
+- "backstory_slot": an open slot tying a FUTURE player character's backstory to an objective ("from" is null; describe what kind of backstory would bind here).
+
+Rules:
+- Every chapter's first objective needs at least one hook pointing at it.
+- hook_text is 1-2 sentences of DM-usable connective tissue, concrete, spoiler-aware.
+- 1-3 backstory_slot hooks total for the whole adventure.
+
+Respond with ONLY a JSON object, no prose, in exactly this shape:
+{ "hooks": [ { "from": "npc#1" | null, "to_objective": "obj#3", "hook_text": "...", "kind": "npc_objective"|"location_placement"|"backstory_slot" } ] }`
+
+  const user = `Objectives:
+${digestLines(digest.objectives)}
+
+NPCs:
+${digestLines(digest.npcs)}
+
+Locations:
+${digestLines(digest.locations)}
+
+Ingredients:
+${digestLines(digest.ingredients)}`
+
+  return { system, user, maxTokens: 3000 }
+}
+
+export function parseStage6(raw: string, digest: GuideDigest): ParseResult<HookDraft[]> {
+  const extracted = extractJsonObject(raw)
+  if (!extracted.ok) return extracted
+
+  const c = new Check()
+  const fromHandles = new Set([...digest.npcs.keys(), ...digest.locations.keys(), ...digest.ingredients.keys()])
+
+  const hooks: HookDraft[] = c.arr(extracted.data.hooks, '$.hooks', 1, 60).map((raw, i) => {
+    const path = `$.hooks[${i}]`
+    const h = c.obj(raw, path)
+    const kind = c.oneOf(h.kind, `${path}.kind`, HOOK_KINDS)
+
+    let fromHandle: string | null = null
+    if (kind === 'backstory_slot') {
+      if (h.from != null) c.errors.push(`${path}.from: must be null for backstory_slot hooks`)
+    } else {
+      fromHandle = c.str(h.from, `${path}.from`)
+      if (fromHandle && !fromHandles.has(fromHandle)) {
+        c.errors.push(`${path}.from: unknown handle "${fromHandle}"`)
+      }
+    }
+
+    const toObjectiveHandle = c.str(h.to_objective, `${path}.to_objective`)
+    if (toObjectiveHandle && !digest.objectives.has(toObjectiveHandle)) {
+      c.errors.push(`${path}.to_objective: unknown handle "${toObjectiveHandle}"`)
+    }
+
+    return { fromHandle, toObjectiveHandle, hookText: c.str(h.hook_text, `${path}.hook_text`), kind }
+  })
+
+  return c.result(hooks)
+}

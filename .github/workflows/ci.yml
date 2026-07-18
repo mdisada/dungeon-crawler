@@ -24,12 +24,8 @@ jobs:
       - run: npm run test
       - run: npm run build
 
-  # Placeholder until the first engine lands (Phase 5 Dice/Check or Phase 7 Combat/Effects/
-  # Budget/Progression - see DEVELOPMENT-PLAN.md). packages/rules is deliberately source-empty
-  # (see its README) - `tsc --noEmit` errors on an empty `src` (no inputs) and `vitest run` fails
-  # outright on zero test files, so both are intentionally omitted rather than faked with a
-  # placeholder source file or masked with passWithNoTests (the red flag root CLAUDE.md warns
-  # about). This job only verifies deps install cleanly; add typecheck + test once src/ exists.
+  # The first engine (F02 character-math: abilities, ability-generation, saves/skills/AC/HP)
+  # landed in Phase 2, so src/ is no longer empty - typecheck + test now run for real.
   rules:
     runs-on: ubuntu-latest
     defaults:
@@ -43,6 +39,13 @@ jobs:
           cache: npm
           cache-dependency-path: packages/rules/package-lock.json
       - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # Fails if packages/rules/src/guide and supabase/functions/_shared/guide have drifted
+      # (approved at the Phase 3b design review - docs/CHECKPOINTS/PHASE3B.md).
+      - name: Check _shared/guide mirror is in sync
+        run: node scripts/sync-guide-shared.mjs --check
+        working-directory: ${{ github.workspace }}
 
   # Runs on GitHub's hosted runner, which has Docker regardless of the dev machine (which has
   # none - see docs/DECISIONS.md 2026-07-17). This is the "migrations apply cleanly from an

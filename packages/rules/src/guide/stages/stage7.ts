@@ -1,0 +1,99 @@
+// Stage 7 - Consistency pass, whole guide: plot-hole scan across the hidden descriptions.
+// Output is WARNINGS ONLY, surfaced as editor badges - the pass never rewrites content
+// (F04 SS2: "never silent rewrites"). An empty warning list is a valid, good result.
+
+import { Check, extractJsonObject } from '../json.ts'
+import { entityNameMatches } from './stage4.ts'
+import type { GuideDigest } from './stage6.ts'
+import type { EntityRef, ParseResult, WarningDraft } from '../types.ts'
+
+/**
+ * F04 SS2.1: deterministic (non-LLM) check run alongside the consistency pass - flags every
+ * GLOBAL registry entity that never landed in any chapter's entity list nor as a content row.
+ * Warnings, not failures: chapter coverage is stage 4's hard check; this catches globals the
+ * chapter lists dropped.
+ */
+export function validateRegistryCoverage(
+  globalEntities: EntityRef[],
+  chapterEntities: EntityRef[],
+  npcNames: string[],
+  locationNames: string[],
+): string[] {
+  const warnings: string[] = []
+  for (const entity of globalEntities) {
+    const rowPool = entity.kind === 'npc' ? npcNames : locationNames
+    const covered =
+      rowPool.some((name) => entityNameMatches(name, entity.name)) ||
+      chapterEntities.some((e) => e.kind === entity.kind && entityNameMatches(e.name, entity.name))
+    if (!covered) {
+      warnings.push(
+        `Registry ${entity.kind} "${entity.name}" (${entity.note}) is named in the story spine but never appears in any chapter or content row.`,
+      )
+    }
+  }
+  return warnings
+}
+
+export function buildStage7Prompt(
+  digest: GuideDigest,
+  metaLoopArc: string,
+): { system: string; user: string; maxTokens: number } {
+  const system = `You are the Consistency Checker for a tabletop RPG platform. Scan an adventure guide's hidden scaffolding for plot holes and contradictions. You NEVER rewrite content - you only flag problems.
+
+Look for:
+- Contradictions between chapter arcs, objective hidden descriptions, and the meta loop.
+- Objectives whose completion predicates reference NPCs/locations/flags that nothing establishes.
+- Dead-end knowledge: information the players can never plausibly reach.
+- Timeline impossibilities (an NPC in two places, an event before its cause).
+- Spoiling titles: objective titles that give away a twist their hidden description relies on.
+
+Report each problem against the most specific handle you can. If the guide is coherent, return an empty list - do not invent problems.
+
+Respond with ONLY a JSON object, no prose, in exactly this shape:
+{ "warnings": [ { "target": "obj#3" | "npc#1" | null, "message": "one-sentence problem statement" } ] }`
+
+  const lines = (m: Map<string, string>) => [...m.entries()].map(([h, l]) => `${h}: ${l}`).join('\n')
+  const user = `Meta loop arc: ${metaLoopArc}
+
+Objectives:
+${lines(digest.objectives)}
+
+NPCs:
+${lines(digest.npcs)}
+
+Locations:
+${lines(digest.locations)}
+
+Ingredients:
+${lines(digest.ingredients)}`
+
+  return { system, user, maxTokens: 2500 }
+}
+
+export function parseStage7(raw: string, digest: GuideDigest): ParseResult<WarningDraft[]> {
+  const extracted = extractJsonObject(raw)
+  if (!extracted.ok) return extracted
+
+  const c = new Check()
+  const known = new Set([
+    ...digest.objectives.keys(),
+    ...digest.npcs.keys(),
+    ...digest.locations.keys(),
+    ...digest.ingredients.keys(),
+  ])
+
+  const warnings: WarningDraft[] = c.arr(extracted.data.warnings ?? [], '$.warnings', 0, 40).map((raw, i) => {
+    const path = `$.warnings[${i}]`
+    const w = c.obj(raw, path)
+    let targetHandle: string | null = null
+    if (w.target != null) {
+      targetHandle = c.str(w.target, `${path}.target`)
+      // An unknown handle degrades to a guide-level warning rather than failing the stage - the
+      // message is still useful even when the model fumbles the pointer.
+      if (targetHandle && !known.has(targetHandle)) targetHandle = null
+    }
+    return { targetHandle, message: c.str(w.message, `${path}.message`) }
+  })
+
+  return c.result(warnings)
+}

@@ -1,0 +1,343 @@
+// Stage 4 - Ingredient Generator, per chapter: NPCs (incl. bosses), locations, and ingredients
+// (clues/secrets/events/items/rumors), pillar-tagged and objective-linked (F04 SS2). When
+// min_players > 1 it must also produce cooperative sets per SS4.1, within the coop-demand
+// density guardrail (checked by validateCoopConformance below - also used by tests).
+
+import { Check, extractJsonObject } from '../json.ts'
+import type { NpcStatSeed } from '../npc-stats.ts'
+import type {
+  AdventureSeed,
+  AffinityRef,
+  ChapterSketch,
+  CoopSetDraft,
+  EntityRef,
+  IngredientDraft,
+  LocationDraft,
+  MetaLoop,
+  NpcDraft,
+  ObjectiveDraft,
+  ParseResult,
+  SceneSketch,
+} from '../types.ts'
+
+export interface Stage4Context {
+  seed: AdventureSeed
+  metaLoop: MetaLoop
+  chapter: ChapterSketch
+  chapterNumber: number
+  scenes: SceneSketch[]
+  objectives: ObjectiveDraft[]
+  /** The chapter's entity list (F04 SS2.1): every entry MUST come back as a row or reuse. */
+  requiredEntities: EntityRef[]
+  /** NPCs/locations already generated for earlier chapters, reusable by key. */
+  existingNpcs: { key: string; name: string }[]
+  existingLocations: { key: string; name: string }[]
+}
+
+export interface Stage4Output {
+  npcs: NpcDraft[]
+  locations: LocationDraft[]
+  coopSets: CoopSetDraft[]
+  ingredients: IngredientDraft[]
+}
+
+export const INGREDIENTS_PER_CHAPTER = { min: 4, max: 12, defaultMin: 6, defaultMax: 10 }
+export const PILLAR_TAGS = ['combat', 'social', 'exploration'] as const
+export const INGREDIENT_TYPES = ['clue', 'secret', 'event', 'item', 'rumor'] as const
+
+/** F04 SS4.1 density guardrail: at most 1 coop-demanding obstacle per 3 objectives. */
+export function maxCoopDemanding(objectiveCount: number): number {
+  return Math.floor(objectiveCount / 3)
+}
+
+export function buildStage4Prompt(ctx: Stage4Context): { system: string; user: string; maxTokens: number } {
+  const coopRules =
+    ctx.seed.minPlayers > 1
+      ? `
+Cooperative content (REQUIRED - this adventure has ${ctx.seed.minPlayers}+ players):
+- Produce at least one coop_set. "split_knowledge": decompose one deduction across 2-3 clue ingredients; each member clue gets a reveals_to affinity ({"skill": "religion"} or {"class": "rogue"} or {"background_tag": "criminal"}); the combined conclusion goes in the SET's "reveals" text, never on a single clue.
+- "complementary_obstacle": an obstacle needing two proficiencies at the same time (hold the gate with Athletics while the lock is picked). At most ${maxCoopDemanding(ctx.objectives.length)} of these for this chapter's ${ctx.objectives.length} objectives - everything else must reward cooperation, not demand it.`
+      : `
+This can be played solo: do not create content that REQUIRES multiple simultaneous characters.`
+
+  const system = `You are the Ingredient Generator for a tabletop RPG platform. For one chapter, produce NPCs, locations, and ingredients - the toys the DM places in the world.
+
+Rules:
+- REQUIRED ENTITIES: the chapter's registry (listed below) names the NPCs/locations the story already established. Every one of them MUST appear in your response as an npc/location row with the EXACT same name (or be reused by existing key). Missing one is a validation failure.
+- Ingredients are TOYS, not railroads: each one is something players can find, use, ignore, or subvert. Never a mandatory step.
+- ${INGREDIENTS_PER_CHAPTER.defaultMin}-${INGREDIENTS_PER_CHAPTER.defaultMax} ingredients for this chapter, each linked to at least one objective (by objective number) and tagged with the pillars it serves ("combat", "social", "exploration").
+- Every scene's cast and places must exist: create the NPCs and locations the scene sketches imply. Mark the chapter's main villain (if present here) as role "boss".
+- Reuse existing NPCs/locations by their key instead of duplicating them.
+- Keys are short lowercase slugs unique in this response, e.g. "npc:volgarth", "loc:sunken-chapel".
+- image_prompt fields describe the visual for later image generation (style-neutral, concrete).
+- Every NPC gets a lightweight "combat" block so it can appear in combat: pick an "archetype"
+  (brute = melee bruiser, skirmisher = mobile fighter, sniper = ranged, caster = spellcaster,
+  leader = commander/social, minion = weak mook) and a challenge rating "cr" from
+  "0","1/8","1/4","1/2","1","2","3","4","5" (bosses roughly 2-5, common NPCs 0-1). Optionally give
+  0-2 "skills" (proper-case skill names) and a signature "attack" name. Abilities/HP/AC are derived
+  from archetype + cr - do NOT supply them.
+- BE CONCISE: every description, ingredient text, and reveals field is 1-2 sentences. Depth comes
+  from connections, not word count.
+${coopRules}
+
+Respond with ONLY a JSON object, no prose, in exactly this shape:
+{
+  "npcs": [ { "key": "npc:...", "name": "...", "role": "npc"|"boss", "personality": { "traits": "...", "voice": "...", "wants": "..." }, "faction": "...", "description": "...", "image_prompt": "...", "combat": { "cr": "1/4", "archetype": "brute"|"skirmisher"|"sniper"|"caster"|"leader"|"minion", "skills": ["Perception"], "attack": "Rusty Cutlass" } } ],
+  "locations": [ { "key": "loc:...", "name": "...", "description": "...", "image_prompt": "..." } ],
+  "coop_sets": [ { "key": "coop:...", "kind": "split_knowledge"|"complementary_obstacle", "reveals": "the combined conclusion once pooled" } ],
+  "ingredients": [ { "type": "clue"|"secret"|"event"|"item"|"rumor", "content": { "text": "..." }, "placement": { "location_key": "...", "npc_key": "...", "condition": "..." }, "reveals": "...", "pillar_tags": ["social"], "reveals_to": null | {"skill":"..."} | {"class":"..."} | {"background_tag":"..."}, "coop_set_key": null | "coop:...", "objective_numbers": [1] } ]
+}`
+
+  const objectiveList = ctx.objectives
+    .map((o, i) => `${i + 1}. ${o.title} - ${o.hiddenDescription}`)
+    .join('\n')
+  const sceneList = ctx.scenes.map((s, i) => `Scene ${i + 1}: ${s.sketch}`).join('\n')
+  const existing = [
+    ctx.existingNpcs.length > 0
+      ? `Existing NPCs (reuse by key): ${ctx.existingNpcs.map((n) => `${n.key} (${n.name})`).join(', ')}`
+      : '',
+    ctx.existingLocations.length > 0
+      ? `Existing locations (reuse by key): ${ctx.existingLocations.map((l) => `${l.key} (${l.name})`).join(', ')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  const required = ctx.requiredEntities
+    .map((e) => `- [${e.kind}] ${e.name}: ${e.note}`)
+    .join('\n')
+
+  const user = `Meta loop antagonist: ${ctx.metaLoop.antagonist}
+
+Chapter ${ctx.chapterNumber}: ${ctx.chapter.title}
+Arc summary: ${ctx.chapter.arcSummary}
+
+REQUIRED entities (every one must become a row, exact names):
+${required || '(none)'}
+
+Scene sketches:
+${sceneList}
+
+Objectives:
+${objectiveList}
+${existing ? `\n${existing}` : ''}`
+
+  // Capped so a stage-4 response stays well inside one edge invocation's wall clock (the free
+  // tier kills at 150s; a 6k-token deepseek response alone ran ~120s in the live smoke test).
+  return { system, user, maxTokens: 4000 }
+}
+
+/**
+ * Read the optional NPC "combat" seed leniently: unknown/garbage values become undefined rather
+ * than stage errors, because deriveNpcStatBlock coerces them to role-appropriate defaults - a
+ * stray archetype typo should never fail an entire chapter's generation.
+ */
+function parseCombatSeed(value: unknown): NpcStatSeed {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const o = value as Record<string, unknown>
+  const seed: NpcStatSeed = {}
+  if (typeof o.cr === 'string') seed.cr = o.cr
+  if (typeof o.archetype === 'string') seed.archetype = o.archetype
+  if (typeof o.attack === 'string') seed.attack = o.attack
+  if (Array.isArray(o.skills)) seed.skills = o.skills.filter((s): s is string => typeof s === 'string')
+  return seed
+}
+
+function parseAffinity(c: Check, value: unknown, path: string): AffinityRef | null {
+  if (value === null || value === undefined) return null
+  const o = c.obj(value, path)
+  const keys = Object.keys(o)
+  const allowed = ['class', 'skill', 'background_tag']
+  if (keys.length !== 1 || !allowed.includes(keys[0])) {
+    c.errors.push(`${path}: expected exactly one of {"class"|"skill"|"background_tag": string}`)
+    return null
+  }
+  const key = keys[0] as keyof AffinityRef
+  return { [key]: c.str(o[keys[0]], `${path}.${keys[0]}`) }
+}
+
+export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4Output> {
+  const extracted = extractJsonObject(raw)
+  if (!extracted.ok) return extracted
+
+  const c = new Check()
+  const root = extracted.data
+
+  const npcs: NpcDraft[] = c.arr(root.npcs, '$.npcs', 0, 20).map((raw, i) => {
+    const path = `$.npcs[${i}]`
+    const n = c.obj(raw, path)
+    return {
+      key: c.str(n.key, `${path}.key`),
+      name: c.str(n.name, `${path}.name`),
+      role: c.oneOf(n.role, `${path}.role`, ['npc', 'boss'] as const),
+      personality: c.obj(n.personality ?? {}, `${path}.personality`) as NpcDraft['personality'],
+      faction: c.str(n.faction ?? '', `${path}.faction`, { allowEmpty: true }),
+      description: c.str(n.description, `${path}.description`),
+      imagePrompt: c.str(n.image_prompt, `${path}.image_prompt`),
+      combat: parseCombatSeed(n.combat),
+    }
+  })
+
+  const locations: LocationDraft[] = c.arr(root.locations, '$.locations', 0, 15).map((raw, i) => {
+    const path = `$.locations[${i}]`
+    const l = c.obj(raw, path)
+    return {
+      key: c.str(l.key, `${path}.key`),
+      name: c.str(l.name, `${path}.name`),
+      description: c.str(l.description, `${path}.description`),
+      imagePrompt: c.str(l.image_prompt, `${path}.image_prompt`),
+    }
+  })
+
+  const coopSets: CoopSetDraft[] = c.arr(root.coop_sets ?? [], '$.coop_sets', 0, 10).map((raw, i) => {
+    const path = `$.coop_sets[${i}]`
+    const s = c.obj(raw, path)
+    return {
+      key: c.str(s.key, `${path}.key`),
+      kind: c.oneOf(s.kind, `${path}.kind`, ['split_knowledge', 'complementary_obstacle'] as const),
+      reveals: c.str(s.reveals, `${path}.reveals`),
+    }
+  })
+
+  const npcKeys = new Set([...ctx.existingNpcs.map((n) => n.key), ...npcs.map((n) => n.key)])
+  const locationKeys = new Set([...ctx.existingLocations.map((l) => l.key), ...locations.map((l) => l.key)])
+  const coopKeys = new Set(coopSets.map((s) => s.key))
+
+  const ingredients: IngredientDraft[] = c
+    .arr(root.ingredients, '$.ingredients', INGREDIENTS_PER_CHAPTER.min, INGREDIENTS_PER_CHAPTER.max)
+    .map((raw, i) => {
+      const path = `$.ingredients[${i}]`
+      const ing = c.obj(raw, path)
+      const placementRaw = c.obj(ing.placement ?? {}, `${path}.placement`)
+      const placement: IngredientDraft['placement'] = {}
+      if (placementRaw.location_key != null) {
+        placement.locationKey = c.str(placementRaw.location_key, `${path}.placement.location_key`)
+        if (placement.locationKey && !locationKeys.has(placement.locationKey)) {
+          c.errors.push(`${path}.placement.location_key: unknown key "${placement.locationKey}"`)
+        }
+      }
+      if (placementRaw.npc_key != null) {
+        placement.npcKey = c.str(placementRaw.npc_key, `${path}.placement.npc_key`)
+        if (placement.npcKey && !npcKeys.has(placement.npcKey)) {
+          c.errors.push(`${path}.placement.npc_key: unknown key "${placement.npcKey}"`)
+        }
+      }
+      if (placementRaw.condition != null) {
+        placement.condition = c.str(placementRaw.condition, `${path}.placement.condition`)
+      }
+
+      const pillarTags = c.arr(ing.pillar_tags, `${path}.pillar_tags`, 1, 3).map((t, j) =>
+        c.oneOf(t, `${path}.pillar_tags[${j}]`, PILLAR_TAGS),
+      )
+
+      let coopSetKey: string | null = null
+      if (ing.coop_set_key != null) {
+        coopSetKey = c.str(ing.coop_set_key, `${path}.coop_set_key`)
+        if (coopSetKey && !coopKeys.has(coopSetKey)) {
+          c.errors.push(`${path}.coop_set_key: unknown key "${coopSetKey}"`)
+        }
+      }
+
+      const objectiveIndexes = c
+        .arr(ing.objective_numbers, `${path}.objective_numbers`, 1, ctx.objectives.length)
+        .map((n, j) => c.int(n, `${path}.objective_numbers[${j}]`, 1, ctx.objectives.length) - 1)
+
+      return {
+        type: c.oneOf(ing.type, `${path}.type`, INGREDIENT_TYPES),
+        content: c.obj(ing.content, `${path}.content`) as IngredientDraft['content'],
+        placement,
+        reveals: c.str(ing.reveals ?? '', `${path}.reveals`, { allowEmpty: true }),
+        pillarTags,
+        revealsTo: parseAffinity(c, ing.reveals_to, `${path}.reveals_to`),
+        coopSetKey,
+        objectiveIndexes,
+      }
+    })
+
+  c.errors.push(...validateCoopConformance({ coopSets, ingredients }, ctx.seed.minPlayers, ctx.objectives.length))
+  c.errors.push(
+    ...validateEntityCoverage(
+      ctx.requiredEntities,
+      [...npcs.map((n) => n.name), ...ctx.existingNpcs.map((n) => n.name)],
+      [...locations.map((l) => l.name), ...ctx.existingLocations.map((l) => l.name)],
+    ),
+  )
+
+  return c.result({ npcs, locations, coopSets, ingredients })
+}
+
+function normalizeEntityName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+/** Lenient name match: exact after normalization, or one contains the other ("Lyra" vs "High Priestess Lyra"). */
+export function entityNameMatches(a: string, b: string): boolean {
+  const na = normalizeEntityName(a)
+  const nb = normalizeEntityName(b)
+  if (!na || !nb) return false
+  return na === nb || na.includes(nb) || nb.includes(na)
+}
+
+/** F04 SS2.1 must-cover check: every registry entity must land as a row (or reuse). Hard errors. */
+export function validateEntityCoverage(
+  required: EntityRef[],
+  npcNames: string[],
+  locationNames: string[],
+): string[] {
+  const errors: string[] = []
+  for (const entity of required) {
+    const pool = entity.kind === 'npc' ? npcNames : locationNames
+    if (!pool.some((name) => entityNameMatches(name, entity.name))) {
+      errors.push(`required ${entity.kind} "${entity.name}" (${entity.note}) is missing from the response - every registry entity must become a row`)
+    }
+  }
+  return errors
+}
+
+/**
+ * F04 SS4.1 conformance, shared between the stage parser and the test suite:
+ * - min_players > 1 => at least one coop set per chapter, and split-knowledge sets decompose
+ *   across 2-3 member clues that each carry a reveals_to affinity.
+ * - density guardrail: coop-DEMANDING (complementary_obstacle) sets capped at 1 per 3 objectives.
+ */
+export function validateCoopConformance(
+  output: Pick<Stage4Output, 'coopSets' | 'ingredients'>,
+  minPlayers: number,
+  objectiveCount: number,
+): string[] {
+  const errors: string[] = []
+  const { coopSets, ingredients } = output
+
+  const demanding = coopSets.filter((s) => s.kind === 'complementary_obstacle')
+  const cap = maxCoopDemanding(objectiveCount)
+  if (demanding.length > cap) {
+    errors.push(
+      `coop density guardrail: ${demanding.length} coop-demanding obstacle(s) but at most ${cap} allowed for ${objectiveCount} objectives`,
+    )
+  }
+
+  if (minPlayers > 1 && coopSets.length === 0) {
+    errors.push('min_players > 1 requires at least one coop_set in every chapter')
+  }
+
+  for (const set of coopSets) {
+    const members = ingredients.filter((i) => i.coopSetKey === set.key)
+    if (set.kind === 'split_knowledge') {
+      if (members.length < 2 || members.length > 3) {
+        errors.push(`coop set "${set.key}": split_knowledge needs 2-3 member ingredients, has ${members.length}`)
+      }
+      for (const [i, member] of members.entries()) {
+        if (member.type !== 'clue') {
+          errors.push(`coop set "${set.key}" member ${i}: split_knowledge members must be clues`)
+        }
+        if (!member.revealsTo) {
+          errors.push(`coop set "${set.key}" member ${i}: split_knowledge members need a reveals_to affinity`)
+        }
+      }
+    } else if (members.length === 0) {
+      errors.push(`coop set "${set.key}": has no member ingredients`)
+    }
+  }
+
+  return errors
+}

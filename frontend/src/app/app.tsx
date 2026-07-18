@@ -2,11 +2,14 @@ import './app.css'
 
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 
-import { ThemeToggle } from '@/components/ui/theme-toggle'
-import { AuthScreen, SignOutButton, useSession } from '@/features/auth'
-import { CampaignPage, DmPage, PlayerPage } from '@/features/campaign-session'
+import { Navbar } from '@/components/navbar'
+import { AdventurePage, NewAdventurePage } from '@/features/adventures'
+import { AuthScreen, useSession } from '@/features/auth'
+import { CharacterCreatorPage, CharactersPage } from '@/features/characters'
+import { GuidePage } from '@/features/guide'
 import { HomePage } from '@/features/home'
-import { NewCampaignPage } from '@/features/new-campaign'
+import { JoinPage, PlayPage } from '@/features/play'
+import { SettingsPage } from '@/features/settings'
 
 function App() {
   const { session, isLoading } = useSession()
@@ -14,29 +17,31 @@ function App() {
   return (
     <BrowserRouter>
       <div id="app">
-        <header className="flex items-center justify-between py-6">
-          <span className="text-lg font-medium text-[var(--text-h)]">Dungeon Crawler</span>
-          <div className="flex items-center gap-2">
-            {session && <SignOutButton />}
-            <ThemeToggle />
-          </div>
-        </header>
+        {session && <Navbar />}
 
-        <main className="flex flex-1 flex-col items-center justify-center gap-16 py-16">
+        <main className="flex w-full flex-1 flex-col items-center py-8 sm:py-12">
           {isLoading ? null : session ? (
             <Routes>
               <Route path="/" element={<HomePage />} />
-              <Route path="/campaigns/new" element={<NewCampaignPage />} />
-              <Route path="/campaigns/:id" element={<CampaignPage />} />
-              <Route path="/campaigns/:id/dm" element={<DmPage />} />
-              <Route path="/campaigns/:id/player" element={<PlayerPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/characters" element={<CharactersPage />} />
+              <Route path="/characters/new" element={<CharacterCreatorPage />} />
+              <Route path="/characters/:id/edit" element={<CharacterCreatorPage />} />
+              <Route path="/characters/:id" element={<CharactersPage />} />
+              <Route path="/adventures/new" element={<NewAdventurePage />} />
+              <Route path="/adventures/:id" element={<AdventurePage />} />
+              <Route path="/adventures/:id/guide" element={<GuidePage />} />
+              <Route path="/adventures/:id/play" element={<PlayPage />} />
+              <Route path="/join/:code" element={<JoinPage />} />
             </Routes>
           ) : (
             <AuthScreen />
           )}
         </main>
 
-        <footer className="py-6 text-sm">Dungeon Crawler — built for the table.</footer>
+        <footer className="py-6 text-center text-sm text-muted-foreground">
+          Dungeon Crawler — built for the table.
+        </footer>
       </div>
     </BrowserRouter>
   )

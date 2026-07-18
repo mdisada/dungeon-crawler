@@ -7,7 +7,9 @@
 User identity, per-user configuration, and the single gateway through which every AI call (text, image, TTS, embeddings) flows — whether served by OpenRouter or the user's local Python server.
 
 ## 2. Auth
-- Supabase Auth: email/password + OAuth (Google, Discord) — Discord recommended given the audience.
+- Supabase Auth: email/password. **OAuth (Google, Discord) deferred to backlog for v1** — see
+  `docs/DECISIONS.md` 2026-07-16. Because there's no OAuth identity layer as a second factor,
+  protected-route/page guards carry more weight than they would otherwise — see that entry.
 - Row-Level Security on every table: users read/write own rows; adventure content readable by adventure members (see `adventure_members` in F5).
 - `profiles` table: `id (fk auth.users)`, `display_name`, `avatar_url`, `created_at`.
 

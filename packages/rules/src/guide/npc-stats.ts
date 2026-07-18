@@ -1,0 +1,203 @@
+// Lightweight NPC combat stat block (F04 SS3 npcs.stat_block; F02 SS9 "NPCs reuse the
+// character/statblock shape so they can be combat-ready"). NPCs are simpler than player
+// characters: instead of full SRD authoring choices they carry an archetype + challenge rating,
+// and this module derives the same combat-relevant numbers a character sheet exposes - abilities,
+// AC, HP, proficiency bonus, save/skill modifiers, and a signature attack - so F09 combat and the
+// F04 editor read one shape.
+//
+// The 5e formulas here (ability modifier, proficiency-by-level/CR, skill/save modifier) are the
+// ruleset-invariant twins of packages/rules/src/character/character-math.ts. They are re-declared
+// rather than imported because this file is mirrored into the edge bundle by
+// scripts/sync-guide-shared.mjs, which only copies guide/ (the character module is not synced).
+
+export const NPC_ARCHETYPES = ['brute', 'skirmisher', 'sniper', 'caster', 'leader', 'minion'] as const
+export type NpcArchetype = (typeof NPC_ARCHETYPES)[number]
+
+// Lightweight CR ladder (0..5). Enough range for the named cast and chapter bosses; full-CR
+// monster math is out of scope for v1.
+export const NPC_CR_LADDER = ['0', '1/8', '1/4', '1/2', '1', '2', '3', '4', '5'] as const
+export type NpcCr = (typeof NPC_CR_LADDER)[number]
+
+const CR_VALUE: Record<NpcCr, number> = {
+  '0': 0,
+  '1/8': 0.125,
+  '1/4': 0.25,
+  '1/2': 0.5,
+  '1': 1,
+  '2': 2,
+  '3': 3,
+  '4': 4,
+  '5': 5,
+}
+
+export type NpcAbilityKey = 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha'
+const ABILITY_KEYS: readonly NpcAbilityKey[] = ['str', 'dex', 'con', 'int', 'wis', 'cha']
+export type NpcAbilities = Record<NpcAbilityKey, number>
+
+export const NPC_SKILL_NAMES = [
+  'Acrobatics', 'Animal Handling', 'Arcana', 'Athletics', 'Deception', 'History', 'Insight',
+  'Intimidation', 'Investigation', 'Medicine', 'Nature', 'Perception', 'Performance', 'Persuasion',
+  'Religion', 'Sleight of Hand', 'Stealth', 'Survival',
+] as const
+export type NpcSkillName = (typeof NPC_SKILL_NAMES)[number]
+
+// Skill -> governing ability (fixed across 2014/2024 SRD). Twin of character/types SKILL_ABILITY.
+const SKILL_ABILITY: Record<NpcSkillName, NpcAbilityKey> = {
+  Acrobatics: 'dex', 'Animal Handling': 'wis', Arcana: 'int', Athletics: 'str', Deception: 'cha',
+  History: 'int', Insight: 'wis', Intimidation: 'cha', Investigation: 'int', Medicine: 'wis',
+  Nature: 'int', Perception: 'wis', Performance: 'cha', Persuasion: 'cha', Religion: 'int',
+  'Sleight of Hand': 'dex', Stealth: 'dex', Survival: 'wis',
+}
+
+interface ArchetypeProfile {
+  abilities: NpcAbilities
+  /** The two abilities that scale with CR and back saving throws. */
+  primaries: [NpcAbilityKey, NpcAbilityKey]
+  attackAbility: NpcAbilityKey
+  attackName: string
+  baseAc: number
+  hpFactor: number
+  skills: [NpcSkillName, NpcSkillName]
+}
+
+const ARCHETYPES: Record<NpcArchetype, ArchetypeProfile> = {
+  brute: { abilities: { str: 16, dex: 11, con: 15, int: 8, wis: 10, cha: 9 }, primaries: ['str', 'con'], attackAbility: 'str', attackName: 'Slam', baseAc: 14, hpFactor: 1.2, skills: ['Athletics', 'Intimidation'] },
+  skirmisher: { abilities: { str: 12, dex: 16, con: 13, int: 10, wis: 12, cha: 11 }, primaries: ['dex', 'con'], attackAbility: 'dex', attackName: 'Blade', baseAc: 14, hpFactor: 0.95, skills: ['Acrobatics', 'Stealth'] },
+  sniper: { abilities: { str: 10, dex: 16, con: 12, int: 11, wis: 14, cha: 9 }, primaries: ['dex', 'wis'], attackAbility: 'dex', attackName: 'Bow', baseAc: 13, hpFactor: 0.85, skills: ['Perception', 'Stealth'] },
+  caster: { abilities: { str: 9, dex: 12, con: 13, int: 16, wis: 13, cha: 12 }, primaries: ['int', 'con'], attackAbility: 'int', attackName: 'Eldritch Bolt', baseAc: 12, hpFactor: 0.85, skills: ['Arcana', 'Insight'] },
+  leader: { abilities: { str: 12, dex: 12, con: 14, int: 13, wis: 12, cha: 16 }, primaries: ['cha', 'con'], attackAbility: 'str', attackName: 'Sword', baseAc: 15, hpFactor: 1.0, skills: ['Persuasion', 'Insight'] },
+  minion: { abilities: { str: 11, dex: 12, con: 10, int: 8, wis: 10, cha: 8 }, primaries: ['dex', 'con'], attackAbility: 'dex', attackName: 'Club', baseAc: 11, hpFactor: 0.5, skills: ['Perception', 'Survival'] },
+}
+
+// Monster HP by CR (rounded, DMG-style), before the archetype factor.
+const BASE_HP: Record<NpcCr, number> = {
+  '0': 5, '1/8': 10, '1/4': 15, '1/2': 25, '1': 35, '2': 55, '3': 80, '4': 105, '5': 135,
+}
+
+export function abilityModifier(score: number): number {
+  return Math.floor((score - 10) / 2)
+}
+
+// Proficiency bonus by CR: +2 through CR 4, +3 at CR 5 (SRD monster table). Ladder caps at 5.
+function proficiencyBonusForCr(crValue: number): number {
+  return crValue >= 5 ? 3 : 2
+}
+
+function attackDamageDie(crValue: number): string {
+  if (crValue < 1) return '1d6'
+  if (crValue < 3) return '1d8'
+  if (crValue < 5) return '1d10'
+  return '2d6'
+}
+
+function signedSuffix(mod: number): string {
+  if (mod === 0) return ''
+  return mod > 0 ? `+${mod}` : `${mod}`
+}
+
+/** LLM-provided seed for a stat block; every field optional, coerced by deriveNpcStatBlock. */
+export interface NpcStatSeed {
+  cr?: string
+  archetype?: string
+  skills?: string[]
+  attack?: string
+}
+
+export interface NpcAttack {
+  name: string
+  toHit: number
+  damage: string
+}
+
+export interface NpcStatBlock {
+  cr: NpcCr
+  crValue: number
+  archetype: NpcArchetype
+  abilities: NpcAbilities
+  abilityModifiers: NpcAbilities
+  proficiencyBonus: number
+  hpMax: number
+  ac: number
+  speed: number
+  skillProficiencies: NpcSkillName[]
+  skillModifiers: Partial<Record<NpcSkillName, number>>
+  savingThrowProficiencies: NpcAbilityKey[]
+  attack: NpcAttack
+}
+
+function normalizeCr(cr: string | undefined, role: 'npc' | 'boss'): NpcCr {
+  const known = (NPC_CR_LADDER as readonly string[]).includes(cr ?? '') ? (cr as NpcCr) : undefined
+  if (known) {
+    // Bosses are never trivial: floor a boss at CR 2 so it survives a party.
+    return role === 'boss' && CR_VALUE[known] < 2 ? '2' : known
+  }
+  return role === 'boss' ? '3' : '1/4'
+}
+
+function normalizeArchetype(archetype: string | undefined, role: 'npc' | 'boss'): NpcArchetype {
+  if ((NPC_ARCHETYPES as readonly string[]).includes(archetype ?? '')) return archetype as NpcArchetype
+  return role === 'boss' ? 'leader' : 'skirmisher'
+}
+
+function normalizeSkills(skills: string[] | undefined, fallback: readonly NpcSkillName[]): NpcSkillName[] {
+  const valid = (skills ?? []).filter((s): s is NpcSkillName => (NPC_SKILL_NAMES as readonly string[]).includes(s))
+  const unique = [...new Set(valid)].slice(0, 4)
+  return unique.length > 0 ? unique : [...fallback]
+}
+
+/**
+ * Derive a full lightweight combat stat block from a (possibly sparse) seed. Never throws:
+ * unknown archetypes/CRs coerce to role-appropriate defaults so a stray LLM value never fails a
+ * whole pipeline stage. The math mirrors the character engine so NPCs and PCs read alike in combat.
+ */
+export function deriveNpcStatBlock(seed: NpcStatSeed | null | undefined, role: 'npc' | 'boss' = 'npc'): NpcStatBlock {
+  const s = seed ?? {}
+  const cr = normalizeCr(s.cr, role)
+  const crValue = CR_VALUE[cr]
+  const archetype = normalizeArchetype(s.archetype, role)
+  const profile = ARCHETYPES[archetype]
+
+  // Primary abilities scale with CR so higher-CR NPCs (and bosses) hit harder and hold up longer.
+  const bump = crValue >= 5 ? 4 : crValue >= 3 ? 2 : 0
+  const abilities = { ...profile.abilities }
+  for (const key of profile.primaries) {
+    abilities[key] = Math.min(20, abilities[key] + bump)
+  }
+
+  const abilityModifiers = {} as NpcAbilities
+  for (const key of ABILITY_KEYS) abilityModifiers[key] = abilityModifier(abilities[key])
+
+  const proficiencyBonus = proficiencyBonusForCr(crValue)
+  const acCrBump = crValue >= 5 ? 2 : crValue >= 3 ? 1 : 0
+  const ac = profile.baseAc + acCrBump
+  const hpMax = Math.max(1, Math.round(BASE_HP[cr] * profile.hpFactor))
+
+  const skillProficiencies = normalizeSkills(s.skills, profile.skills)
+  const skillModifiers: Partial<Record<NpcSkillName, number>> = {}
+  for (const skill of skillProficiencies) {
+    skillModifiers[skill] = abilityModifiers[SKILL_ABILITY[skill]] + proficiencyBonus
+  }
+
+  const atkMod = abilityModifiers[profile.attackAbility]
+  const attack: NpcAttack = {
+    name: (s.attack ?? '').trim() || profile.attackName,
+    toHit: atkMod + proficiencyBonus,
+    damage: `${attackDamageDie(crValue)}${signedSuffix(atkMod)}`,
+  }
+
+  return {
+    cr,
+    crValue,
+    archetype,
+    abilities,
+    abilityModifiers,
+    proficiencyBonus,
+    hpMax,
+    ac,
+    speed: 30,
+    skillProficiencies,
+    skillModifiers,
+    savingThrowProficiencies: [...profile.primaries],
+    attack,
+  }
+}

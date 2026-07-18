@@ -4,6 +4,9 @@
     "lib": ["ES2023"],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // guide/ modules import with explicit .ts extensions so the Deno edge runtime can consume
+    // them directly (supabase/functions/guide-pipeline imports this package by relative path).
+    "allowImportingTsExtensions": true,
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
