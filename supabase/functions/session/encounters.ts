@@ -28,6 +28,7 @@ import {
 import type { CharacterRow } from './orchestrate.ts'
 import { evaluateStoryProgress } from './progress.ts'
 import { recordProposal } from './proposals.ts'
+import type { ChallengeCheckStash } from './stashes.ts'
 import { commitDiffs, loadState, logEvent } from './util.ts'
 
 export function activeEncounter(state: GameState): EncounterState | null {
@@ -305,19 +306,6 @@ export async function runCombatPlaceholderEncounter(
 }
 
 // --- Skill challenge (Slice 2) ---------------------------------------------------------------
-
-export interface ChallengeCheckStash {
-  flow: 'challenge'
-  utterance: string
-  actorCharacterId: string
-  actorName: string
-  interpretation: string
-  consequencesHint: string
-  skill: string
-  dc: number
-  /** Per-option DCs (repeat-skill escalation differs per skill); rollPending picks by choice. */
-  dcBySkill?: Record<string, number>
-}
 
 function challengeFromEncounter(encounter: EncounterState): SkillChallengeState {
   const p = (typeof encounter.progress === 'object' && encounter.progress !== null && !Array.isArray(encounter.progress)

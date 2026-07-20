@@ -15,7 +15,7 @@ import {
 } from './encounters.ts'
 import type { StoredBeatSpec } from './encounters.ts'
 import { narrationBeat } from './narration.ts'
-import { endEncounter, startSocial } from './npc-dialogue.ts'
+import { endEncounter, startSocial } from './social-staging.ts'
 import { openPuzzleFromSpec } from './puzzle-encounter.ts'
 import {
   appendLinesDiff, characterProfiles, loadPartyCharacters, newLine, partyProfileLines,

@@ -13,8 +13,8 @@ import type { Json, PendingPromptState } from '../_shared/state/index.ts'
 import { runAdjudicator } from './agents.ts'
 import type { AgentEnv, SceneEffects } from './agents.ts'
 import { narrationBeat } from './narration.ts'
-import { endEncounter, handleSay, startSocial } from './npc-dialogue.ts'
-import type { SayUtterance } from './npc-dialogue.ts'
+import { handleSay } from './npc-dialogue.ts'
+import { endEncounter, startSocial } from './social-staging.ts'
 import { maybeSpawnEncounter } from './danger.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { handleCutsceneIntent } from './entry.ts'
@@ -36,20 +36,8 @@ import { expireStaleProposals, recordProposal } from './proposals.ts'
 import { applySceneEffects } from './scene-director.ts'
 import { completeQuest, journalPatch, maybeHandleOfferResponse, stageOfferByContractId } from './story.ts'
 import { antagonistTurn, noteSuspicion } from './steward.ts'
+import type { DoCheckStash, SayUtterance } from './stashes.ts'
 import { commitDiffs, loadState, logEvent } from './util.ts'
-
-export interface DoCheckStash {
-  flow: 'do'
-  utterance: string
-  actorCharacterId: string
-  actorName: string
-  interpretation: string
-  consequencesHint: string
-  spec: CheckSpec
-  assistResult: { success: boolean; margin: number } | null
-  /** Applied on check success only (full-AI); absent in pre-slice stashes. */
-  sceneEffects?: SceneEffects | null
-}
 
 const mustPickCharacter = { status: 403, body: { error: 'Pick a character before acting' } }
 

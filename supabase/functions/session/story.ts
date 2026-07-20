@@ -46,15 +46,6 @@ interface OfferRow {
 }
 
 /** Negotiation check context parked in dm.conversation.pendingContext while the die is out. */
-export interface NegotiateStash {
-  flow: 'negotiate'
-  offerId: string
-  npcId: string | null
-  utterance: { actorCharacterId: string; actorName: string; text: string }
-  skill: string
-  dc: number
-}
-
 const CONTRACT_COLUMNS = 'id, label, giver_npc_id, is_entry, reward, stakes, deadline, objective_ids'
 
 function termsOf(offer: OfferRow): OfferTerms {

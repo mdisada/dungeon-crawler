@@ -11,16 +11,15 @@ import {
 import type { CheckResult } from '../_shared/play/index.ts'
 import type { GameState, Json, PendingPromptState, PendingReviewState } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
-import type { ChallengeCheckStash } from './encounters.ts'
-import type { DoCheckStash } from './intent.ts'
 import { continueAfterCheck } from './npc-dialogue.ts'
-import type { SocialCheckStash } from './npc-dialogue.ts'
 import { narrationBeat } from './narration.ts'
 import {
   appendLinesDiff, loadCharacter, loadPlayContext, newLine, pendingDiffs, skillModifierFor,
   typingDiff,
 } from './orchestrate.ts'
-import type { NegotiateStash } from './story.ts'
+import type {
+  ChallengeCheckStash, DoCheckStash, NegotiateStash, SocialCheckStash,
+} from './stashes.ts'
 import { commitDiffs, loadState, logEvent } from './util.ts'
 
 type Stash = DoCheckStash | SocialCheckStash | NegotiateStash | ChallengeCheckStash
