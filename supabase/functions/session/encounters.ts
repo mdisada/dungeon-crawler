@@ -19,6 +19,7 @@ import { maybeSpawnEncounter } from './danger.ts'
 import type { SpawnInstantiator } from './danger.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { writeMemoryFragment } from './memory.ts'
+import { recordSceneLedger } from './ledger.ts'
 import { applyMilestones } from './milestones.ts'
 import { narrationBeat } from './narration.ts'
 import {
@@ -162,6 +163,9 @@ export async function resolveOpenEncounter(
     'Encounter resolved',
     'exposition',
   )
+  // Record what the encounter established BEFORE evaluating progress, so any milestone the
+  // ledger notices is picked up by this same pass rather than waiting for the next one.
+  await recordSceneLedger(service, env, sessionId, 'encounter', encounter.label)
   await evaluateStoryProgress(service, env, sessionId)
 
   const isSpawned = typeof spec.params === 'object' && spec.params !== null && !Array.isArray(spec.params) &&

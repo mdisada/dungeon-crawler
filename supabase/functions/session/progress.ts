@@ -14,6 +14,7 @@ import { runConsistency } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { loadLoops, planAndOpenBeat } from './beats.ts'
 import { runDialPass } from './dials.ts'
+import { recordSceneLedger } from './ledger.ts'
 import { narrationBeat, publishNarration } from './narration.ts'
 import { appendLinesDiff, newLine, typingDiff } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
@@ -99,6 +100,7 @@ async function completeObjective(
   completed: ObjectiveRow,
   ordered: ObjectiveRow[],
 ): Promise<boolean> {
+  await recordSceneLedger(service, env, sessionId, 'objective', completed.title)
   await service.from('objectives').update({ reveal_state: 'completed' }).eq('id', completed.id)
   await logEvent(service, env.adventureId, sessionId, 'objective_completed', {
     objective_id: completed.id, title: completed.title, evaluated: true,

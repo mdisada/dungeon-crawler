@@ -7,6 +7,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import type { Json, SpeakerSlot } from '../_shared/state/index.ts'
 import { runGenericNpc, runInteractionSummary } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
+import { recordSceneLedger } from './ledger.ts'
 import { writeMemoryFragment } from './memory.ts'
 import { recordProposal } from './proposals.ts'
 import { detectSocialExit, resolveSocialExit } from './social-encounter.ts'
@@ -160,6 +161,8 @@ export async function endEncounter(
       },
     },
   ])
+  await recordSceneLedger(service, env, state.session.id ?? '', 'scene',
+    `conversation at ${state.scene.locationName || 'an unknown place'}`)
   await logEvent(service, adventureId, state.session.id, 'social_ended', {
     npc_ids: state.dialogue.speakers.map((s) => s.npcId),
   })

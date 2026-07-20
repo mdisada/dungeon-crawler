@@ -478,3 +478,96 @@ export async function runSuspicionJudge(
     return [] // a judgement failure must never invent an antagonist
   }
 }
+
+const ARCHIVIST_SYSTEM =
+  'You are the Archivist of a tabletop RPG session. You do NOT write prose - you record what ' +
+  'just became true, so the game engine can act on it. Reply with ONLY JSON: ' +
+  '{"milestones": ["exact text from the authored list"], "digest": "1-2 sentences: what ' +
+  'changed and who did it", "npc_states": [{"name": "exact NPC name", "state": "dead"|"absent"}], ' +
+  '"contributions": [{"name": "exact PC name", "did": "one clause"}], ' +
+  '"contradictions": ["a claim in this scene that contradicts the established facts"]}.\n' +
+  'Rules: milestones MUST be copied verbatim from the authored list - never invent one, and ' +
+  'return an empty array if nothing on that list actually happened. Only report an npc_state ' +
+  'the scene plainly established. Only report a contradiction you can point at. When in doubt, ' +
+  'return empty arrays - a missed record is recoverable, a false one corrupts the story.'
+
+export interface ArchivistContext {
+  /** What closed: 'encounter' | 'scene' | 'objective', plus its label. */
+  phase: string
+  label: string
+  /** The authored milestone vocabulary - the ONLY milestones that may be claimed. */
+  vocabulary: string[]
+  /** Established facts the scene must not contradict. */
+  facts: string[]
+  transcript: string[]
+  npcNames: string[]
+  pcNames: string[]
+}
+
+export interface ArchivistOutput {
+  milestones: string[]
+  digest: string
+  npcStates: { name: string; state: 'dead' | 'absent' }[]
+  contributions: { name: string; did: string }[]
+  contradictions: string[]
+}
+
+const EMPTY_LEDGER: ArchivistOutput = {
+  milestones: [], digest: '', npcStates: [], contributions: [], contradictions: [],
+}
+
+/**
+ * The Archivist pass (scene ledger): runs at PHASE EXITS only - a handful of calls per session,
+ * never per turn. It exists because progression had only two writers (outcome maps and the
+ * adjudicator's scene_effects), so objectives almost never completed: 1 in 26 turns live.
+ *
+ * It cannot invent progress. Milestones are matched against the authored vocabulary by
+ * applyMilestones, which drops anything off-list, so the worst a bad reply can do is nothing.
+ */
+export async function runArchivist(env: AgentEnv, ctx: ArchivistContext): Promise<ArchivistOutput> {
+  if (ctx.vocabulary.length === 0 && ctx.transcript.length === 0) return EMPTY_LEDGER
+  if (env.demo) {
+    return {
+      ...EMPTY_LEDGER,
+      digest: `[demo] ${ctx.phase} "${ctx.label}" concluded.`,
+    }
+  }
+  try {
+    const raw = await agentJson(env, 'summarizer', ARCHIVIST_SYSTEM, [
+      `Closed ${ctx.phase}: ${ctx.label}`,
+      `Authored milestones (copy verbatim, or return none): ${ctx.vocabulary.join(' | ') || 'none'}`,
+      `Established facts: ${ctx.facts.join(' | ') || 'none'}`,
+      `NPCs: ${ctx.npcNames.join(', ') || 'none'}`,
+      `PCs: ${ctx.pcNames.join(', ') || 'none'}`,
+      `What happened:\n${ctx.transcript.join('\n')}`,
+    ].join('\n'), 500)
+    if (typeof raw !== 'object' || raw === null) return EMPTY_LEDGER
+    const obj = raw as Record<string, unknown>
+    const strings = (v: unknown) =>
+      Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string' && s.trim().length > 0) : []
+    const known = new Set(ctx.npcNames.map((n) => n.toLowerCase()))
+    const pcs = new Set(ctx.pcNames.map((n) => n.toLowerCase()))
+    return {
+      milestones: strings(obj.milestones),
+      digest: typeof obj.digest === 'string' ? obj.digest.slice(0, 400) : '',
+      npcStates: (Array.isArray(obj.npc_states) ? obj.npc_states : []).flatMap((s) => {
+        if (typeof s !== 'object' || s === null) return []
+        const row = s as Record<string, unknown>
+        const name = typeof row.name === 'string' ? row.name : ''
+        const state = row.state === 'dead' || row.state === 'absent' ? row.state : null
+        // An unknown name means the model invented someone - drop it rather than guess.
+        return name && state && known.has(name.toLowerCase()) ? [{ name, state }] : []
+      }),
+      contributions: (Array.isArray(obj.contributions) ? obj.contributions : []).flatMap((c) => {
+        if (typeof c !== 'object' || c === null) return []
+        const row = c as Record<string, unknown>
+        const name = typeof row.name === 'string' ? row.name : ''
+        const did = typeof row.did === 'string' ? row.did.slice(0, 160) : ''
+        return name && did && pcs.has(name.toLowerCase()) ? [{ name, did }] : []
+      }),
+      contradictions: strings(obj.contradictions).slice(0, 5),
+    }
+  } catch {
+    return EMPTY_LEDGER // a failed ledger must never block the phase from closing
+  }
+}
