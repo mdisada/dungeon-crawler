@@ -81,6 +81,8 @@ export type SocialClassification =
   | { kind: 'insight'; skill: 'insight' }
   /** A physical action or maneuver, not talk - the caller re-routes it out of the NPC pipeline. */
   | { kind: 'action' }
+  /** A question about the world, aimed at the DM - answered as narration, not NPC speech. */
+  | { kind: 'ask_dm' }
 
 /** A social opening (F10 SS3.7): PC A's insight success eases a linked influence attempt by PC B. */
 export interface OpeningView {

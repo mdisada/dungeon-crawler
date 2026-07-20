@@ -10,9 +10,11 @@ export {
 export type { PivotAssessment, PivotHandling } from './classifier.ts'
 export {
   applyDialNudge, COMMIT_MIN_EVENTS, COMMIT_MIN_MARGIN, commitmentReady, DIAL_MAX, DIAL_MIN,
-  parseEndingSignals, scoreEndings,
+  ladderReady, parseEndingSignals, scoreEndings, SHORT_LADDER_MAX,
 } from './endings.ts'
-export type { EndingCandidate, EndingScores, EndingSignal, EndingSignalWhen, EndingWorld } from './endings.ts'
+export type {
+  EndingCandidate, EndingScores, EndingSignal, EndingSignalWhen, EndingWorld, ObjectiveLadder,
+} from './endings.ts'
 export { evaluatePredicate, listMilestoneAtoms } from './evaluate.ts'
 export type { MilestoneAtoms, WorldFacts } from './evaluate.ts'
 export {

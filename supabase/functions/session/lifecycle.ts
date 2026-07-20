@@ -6,11 +6,10 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { bindCoopSet } from '../_shared/guide/affinity.ts'
 import { AgentCallError, callAgentText } from '../_shared/llm.ts'
 import type { DmState, Json, StateDiff } from '../_shared/state/index.ts'
-import { applyDialNudge } from '../_shared/story/index.ts'
 import type { AgentEnv } from './agents.ts'
+import { applyDialMoves } from './dials.ts'
 import { recomputePartyProfile } from './membership.ts'
 import { entryContract, journalViews, stageEntryOfferIfNeeded } from './story.ts'
-import { runDialSummarizer } from './story-agents.ts'
 import { antagonistTurn } from './steward.ts'
 import {
   applyAndBroadcast, assertOk, broadcast, loadContext, loadState, logEvent, resolveMediaUrl, writeCheckpoint,
@@ -409,27 +408,8 @@ export async function endSession(service: SupabaseClient, adventureId: string, u
     const env: AgentEnv = {
       service, adventureId, creatorId: ctx.adventure.creator_id, demo: ctx.adventure.demo, mode: ctx.adventure.mode,
     }
-    const { data: adventureRow } = await service
-      .from('adventures')
-      .select('story_dials, dial_values')
-      .eq('id', adventureId)
-      .single()
-    const dials = ((adventureRow?.story_dials ?? []) as { key: string; name: string; description: string }[])
-    if (dials.length > 0) {
-      const transcript = stateRow.state.dialogue.lines.slice(-30).map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`)
-      const moves = await runDialSummarizer(env, dials, transcript)
-      if (moves.length > 0) {
-        const values = { ...((adventureRow?.dial_values ?? {}) as Record<string, number>) }
-        for (const move of moves) {
-          const next = applyDialNudge(values[move.dial] ?? 0, move.delta)
-          await logEvent(service, adventureId, session.id, 'dial_nudged', {
-            dial: move.dial, from: values[move.dial] ?? 0, to: next, why: move.why,
-          })
-          values[move.dial] = next
-        }
-        await service.from('adventures').update({ dial_values: values as unknown as Json }).eq('id', adventureId)
-      }
-    }
+    const transcript = stateRow.state.dialogue.lines.slice(-30).map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`)
+    await applyDialMoves(service, env, session.id, transcript)
     await antagonistTurn(service, env, session.id, 'session_end')
   } catch (err) {
     console.error('session-end story passes failed', err)

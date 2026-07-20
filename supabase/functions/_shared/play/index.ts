@@ -51,14 +51,21 @@ export type { RouterScene } from './router.ts'
 export {
   actionAutoAllowed,
   canConsumeOpening,
+  cappedSceneDelta,
   clampDisposition,
   clampDispositionDelta,
   dispositionBand,
+  effectiveDispositionDelta,
+  filterLocationReveals,
   filterReveals,
+  locationRevealVerdict,
   openingDcMod,
   revealVerdict,
+  SCENE_DISPOSITION_DRIFT_MAX,
 } from './social.ts'
-export type { DispositionBand, RevealContext, RevealVerdict } from './social.ts'
+export type {
+  DispositionBand, DispositionTrigger, LocationRevealContext, RevealContext, RevealVerdict,
+} from './social.ts'
 export type {
   AdjudicationOutput,
   AdjudicationResolution,

@@ -112,6 +112,7 @@ export function parseSocialClassification(raw: unknown): SocialClassification {
   if (!isObject(raw)) return { kind: 'conversation' }
   if (raw.kind === 'insight') return { kind: 'insight', skill: 'insight' }
   if (raw.kind === 'action') return { kind: 'action' }
+  if (raw.kind === 'ask_dm') return { kind: 'ask_dm' }
   if (raw.kind === 'influence') {
     const skill = INFLUENCE_SKILLS.find((s) => s === raw.skill) ?? 'persuasion'
     const magnitude = MAGNITUDES.find((m) => m === raw.magnitude) ?? 'reasonable'

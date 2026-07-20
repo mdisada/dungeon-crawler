@@ -17,6 +17,7 @@ import { runAdjudicator } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { maybeSpawnEncounter } from './danger.ts'
 import type { SpawnInstantiator } from './danger.ts'
+import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { writeMemoryFragment } from './memory.ts'
 import { applyMilestones } from './milestones.ts'
 import { narrationBeat } from './narration.ts'
@@ -643,12 +644,21 @@ async function applyChallengeAttempt(
     status,
   })
 
+  // A successful attempt in a room holding authored evidence finds it (investigation pillar).
+  const found = discoveryNote(
+    await discoverAtLocation(service, env, sessionId, {
+      locationId: state.scene.locationId,
+      actorCharacterId: attempt.characterId,
+      checkPassed: attempt.success,
+    }),
+  )
+
   const note = progressNote(next, encounter.label)
   if (status === 'ongoing') {
     await narrationBeat(
       service, env, sessionId,
       `Narrate this skill-challenge attempt. ${attempt.actorName} attempts: ${attempt.interpretation}. ` +
-        `It ${attempt.success ? 'SUCCEEDS' : 'FAILS'} (${attempt.detail}). ${attempt.consequencesHint} ` +
+        `It ${attempt.success ? 'SUCCEEDS' : 'FAILS'} (${attempt.detail}). ${attempt.consequencesHint}${found} ` +
         `${note} The challenge is not over - keep the situation live and demanding the party's next move.`,
       'Challenge attempt',
       'outcome',
@@ -658,7 +668,7 @@ async function applyChallengeAttempt(
   await resolveOpenEncounter(
     service, env, sessionId, status as ResolutionTier,
     `The final attempt: ${attempt.actorName} - ${attempt.interpretation}, which ` +
-      `${attempt.success ? 'succeeded' : 'failed'} (${attempt.detail}). ${note}`,
+      `${attempt.success ? 'succeeded' : 'failed'} (${attempt.detail}). ${note}${found}`,
   )
   return status
 }

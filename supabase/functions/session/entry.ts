@@ -144,9 +144,23 @@ async function executeEntry(
   })
 
   // World movement rides on the reply (travel to the site, drawing NPCs in, time passing).
+  // A non-social encounter is about to open, though, and a staged speaker takes absolute
+  // routing priority over it - every subsequent input would become NPC dialogue and starve
+  // the challenge (seen live: an NPC staged into a solo search scene). Travel and time still
+  // apply; only the staging is dropped.
   let sceneNote = ''
   if (mapping.sceneEffects) {
-    const applied = await applySceneEffects(service, env, sessionId, mapping.sceneEffects, {
+    const opensNonSocial = entry === 'adhoc' ||
+      (entry === 'offered' && spec !== null && ['combat', 'skill_challenge', 'puzzle'].includes(spec.kind))
+    const effects = opensNonSocial && mapping.sceneEffects.stageNpcs.length > 0
+      ? { ...mapping.sceneEffects, stageNpcs: [] }
+      : mapping.sceneEffects
+    if (effects !== mapping.sceneEffects) {
+      await logEvent(service, env.adventureId, sessionId, 'scene_effect_rejected', {
+        effect: 'stage_npcs', proposed: mapping.sceneEffects.stageNpcs, reason: 'non-social encounter opening',
+      })
+    }
+    const applied = await applySceneEffects(service, env, sessionId, effects, {
       stageNpcs: (npcIds) => startSocial(service, env.adventureId, env.creatorId, npcIds),
       endScene: () => endEncounter(service, env.adventureId, env.creatorId),
     })

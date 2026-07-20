@@ -16,6 +16,7 @@ import { narrationBeat } from './narration.ts'
 import { endEncounter, handleSay, startSocial } from './npc-dialogue.ts'
 import type { SayUtterance } from './npc-dialogue.ts'
 import { maybeSpawnEncounter } from './danger.ts'
+import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { handleCutsceneIntent } from './entry.ts'
 import {
   handleChallengeIntent, handleEncounterTalk, openEncounterCommand, spawnInstantiator,
@@ -126,12 +127,16 @@ export async function playerIntent(
   const narrativeMode = ['narration', 'roleplay', 'downtime', 'puzzle'].includes(row.state.scene.mode)
   if (narrativeMode && (kind === 'say' || kind === 'do' || (kind === 'roll' && !skill))) {
     const conversational = row.state.dialogue.speakers.length > 0 && kind !== 'roll'
-    if (conversational) {
-      route = 'dialogue'
-    } else if (row.state.encounter?.kind === 'skill_challenge') {
+    // An open challenge/puzzle outranks a staged speaker (defense in depth behind the entry
+    // mapper's staging guard): a leftover speaker used to swallow every input and starve the
+    // encounter. Genuine questions still get answered - both handlers forward talk to
+    // handleEncounterTalk.
+    if (row.state.encounter?.kind === 'skill_challenge') {
       route = 'challenge'
     } else if (row.state.encounter?.kind === 'puzzle') {
       route = 'puzzle'
+    } else if (conversational) {
+      route = 'dialogue'
     } else if (row.state.encounter?.kind === 'social') {
       route = 'encounter_talk'
     } else if (play.adventure.mode === 'full_ai') {
@@ -196,6 +201,11 @@ export async function playerIntent(
       const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
       const utterance: SayUtterance = { actorCharacterId: character.id, actorName: character.name, text }
       result = await handleSay(service, env, play.sessionId, utterance, targetId)
+      // A question about the world, not to the NPC: answer it as grounded narration.
+      if (result.status === 200 && result.body.resolved === 'ask_dm') {
+        result = await handleEncounterTalk(service, env, play.sessionId, character, text, { lineAlreadyStaged: true })
+        break
+      }
       // The social classifier escaped a physical action out of the conversation (unified
       // input): the line is committed and typing is on - continue in the right action flow.
       if (result.status === 200 && result.body.resolved === 'action') {
@@ -377,6 +387,17 @@ async function adjudicate(
       if (applied.staged.length > 0) sceneNote += ` Present and in conversation now: ${applied.staged.join(', ')}.`
       if (applied.dayAdvanced !== null) sceneNote += ' Meaningful time passes during this - let the narration carry it.'
       if (applied.combatWon) sceneNote += ` A fight broke out ("${applied.combatWon}") and the party won decisively - narrate the clash and its immediate aftermath.`
+    }
+    // An auto-success in a room holding authored evidence finds it (investigation pillar).
+    if (resolution.type === 'auto_success') {
+      const scene = (await loadState(service, adventureId)).state.scene
+      sceneNote += discoveryNote(
+        await discoverAtLocation(service, env, play.sessionId, {
+          locationId: scene.locationId,
+          actorCharacterId: character.id,
+          checkPassed: true,
+        }),
+      )
     }
     await narrationBeat(
       service, env, play.sessionId,

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  actionAutoAllowed, canConsumeOpening, clampDisposition, clampDispositionDelta,
-  dispositionBand, filterReveals, openingDcMod, revealVerdict,
+  actionAutoAllowed, canConsumeOpening, cappedSceneDelta, clampDisposition, clampDispositionDelta,
+  dispositionBand, effectiveDispositionDelta, filterLocationReveals, locationRevealVerdict,
+  openingDcMod, revealVerdict, SCENE_DISPOSITION_DRIFT_MAX, filterReveals,
 } from './social.ts'
 import type { OpeningView, RevealCandidate } from './types.ts'
 
@@ -95,5 +96,66 @@ describe('proposed-action auto policy (full-AI, conservative)', () => {
     expect(actionAutoAllowed({ type: 'join_combat' }, 0)).toBe(false)
     expect(actionAutoAllowed({ type: 'join_combat' }, 3)).toBe(true)
     expect(actionAutoAllowed({ type: 'canonize_theory', theory: 'x' }, 10)).toBe(false)
+  })
+})
+
+describe('location reveal gate (searching a scene finds what is authored there)', () => {
+  const atScene: RevealCandidate = {
+    id: 'ing-1', npcId: null, locationId: 'loc-1', condition: null,
+    discovered: false, boundCharacterId: null, anyPc: true,
+  }
+  const ctx = { locationId: 'loc-1', actorCharacterId: 'pc-a', checkPassed: true }
+
+  it('allows an undiscovered clue placed in the current scene on a successful attempt', () => {
+    expect(locationRevealVerdict(atScene, ctx)).toEqual({ allowed: true })
+  })
+
+  it('refuses everything it should', () => {
+    const deny = (candidate: Partial<RevealCandidate>, override = {}) =>
+      locationRevealVerdict({ ...atScene, ...candidate }, { ...ctx, ...override })
+    expect(deny({ discovered: true }).allowed).toBe(false)
+    expect(deny({ locationId: null }).allowed).toBe(false)
+    expect(deny({}, { locationId: 'loc-2' }).allowed).toBe(false)
+    expect(deny({}, { locationId: null }).allowed).toBe(false)
+    // A failed search finds nothing - the check IS the entitlement.
+    expect(deny({}, { checkPassed: false }).allowed).toBe(false)
+    expect(deny({ anyPc: false, boundCharacterId: 'pc-b' }).allowed).toBe(false)
+    expect(deny({ anyPc: false, boundCharacterId: 'pc-a' }).allowed).toBe(true)
+  })
+
+  // Live 2026-07-20: stage 4 placed 15 of 35 clues on an NPC *and* at a location. Refusing
+  // those made searching the room they sit in useless.
+  it('still finds a clue that is also placed on an NPC', () => {
+    expect(locationRevealVerdict({ ...atScene, npcId: 'npc-1' }, ctx)).toEqual({ allowed: true })
+  })
+
+  it('filterLocationReveals splits the batch and explains each refusal', () => {
+    const { allowed, blocked } = filterLocationReveals(
+      [atScene, { ...atScene, id: 'ing-2', locationId: 'loc-2' }, { ...atScene, id: 'ing-3', discovered: true }],
+      ctx,
+    )
+    expect(allowed).toEqual(['ing-1'])
+    expect(blocked.map((b) => b.id)).toEqual(['ing-2', 'ing-3'])
+  })
+})
+
+describe('disposition damping (talk alone is not a relationship)', () => {
+  const nothing = { checkResolved: false, revealed: false, proposedAction: false }
+
+  it('zeroes plain conversation and keeps concrete outcomes', () => {
+    expect(effectiveDispositionDelta(1, nothing)).toBe(0)
+    expect(effectiveDispositionDelta(-2, nothing)).toBe(0)
+    expect(effectiveDispositionDelta(1, { ...nothing, checkResolved: true })).toBe(1)
+    expect(effectiveDispositionDelta(1, { ...nothing, revealed: true })).toBe(1)
+    expect(effectiveDispositionDelta(1, { ...nothing, proposedAction: true })).toBe(1)
+    expect(effectiveDispositionDelta(9, { ...nothing, revealed: true })).toBe(2)
+  })
+
+  it('caps per-scene drift in the direction already spent, but allows correction back', () => {
+    expect(cappedSceneDelta(2, 0)).toBe(2)
+    expect(cappedSceneDelta(2, SCENE_DISPOSITION_DRIFT_MAX - 1)).toBe(1)
+    expect(cappedSceneDelta(2, SCENE_DISPOSITION_DRIFT_MAX)).toBe(0)
+    expect(cappedSceneDelta(-2, SCENE_DISPOSITION_DRIFT_MAX)).toBe(-2)
+    expect(cappedSceneDelta(-2, -SCENE_DISPOSITION_DRIFT_MAX)).toBe(0)
   })
 })

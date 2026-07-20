@@ -92,6 +92,7 @@ describe('parseSocialClassification', () => {
       kind: 'influence', skill: 'persuasion', magnitude: 'reasonable',
     })
     expect(parseSocialClassification({ kind: 'insight' })).toEqual({ kind: 'insight', skill: 'insight' })
+    expect(parseSocialClassification({ kind: 'ask_dm' })).toEqual({ kind: 'ask_dm' })
   })
 })
 

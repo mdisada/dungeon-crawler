@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  applyDialNudge, COMMIT_MIN_EVENTS, commitmentReady, parseEndingSignals, scoreEndings,
+  applyDialNudge, COMMIT_MIN_EVENTS, commitmentReady, ladderReady, parseEndingSignals, scoreEndings,
 } from './endings.ts'
 import type { EndingCandidate, EndingWorld } from './endings.ts'
 
@@ -75,11 +75,30 @@ describe('dial nudges', () => {
 })
 
 describe('commitmentReady (late + decisive only)', () => {
+  const longLadder = { total: 8, remaining: 1 }
+
   it('requires the margin, a positive leader, and enough recorded play', () => {
-    expect(commitmentReady({ a: 5, b: 1 }, 'a', COMMIT_MIN_EVENTS)).toBe(true)
-    expect(commitmentReady({ a: 5, b: 3 }, 'a', COMMIT_MIN_EVENTS)).toBe(false)
-    expect(commitmentReady({ a: 5, b: 1 }, 'a', COMMIT_MIN_EVENTS - 1)).toBe(false)
-    expect(commitmentReady({ a: 0, b: 0 }, 'a', COMMIT_MIN_EVENTS)).toBe(false)
+    expect(commitmentReady({ a: 5, b: 1 }, 'a', COMMIT_MIN_EVENTS, longLadder)).toBe(true)
+    expect(commitmentReady({ a: 5, b: 3 }, 'a', COMMIT_MIN_EVENTS, longLadder)).toBe(false)
+    expect(commitmentReady({ a: 5, b: 1 }, 'a', COMMIT_MIN_EVENTS - 1, longLadder)).toBe(false)
+    expect(commitmentReady({ a: 0, b: 0 }, 'a', COMMIT_MIN_EVENTS, longLadder)).toBe(false)
+  })
+
+  it('will not commit off a short ladder until every objective is done', () => {
+    expect(commitmentReady({ a: 5, b: 1 }, 'a', COMMIT_MIN_EVENTS, { total: 3, remaining: 1 })).toBe(false)
+    expect(commitmentReady({ a: 5, b: 1 }, 'a', COMMIT_MIN_EVENTS, { total: 3, remaining: 0 })).toBe(true)
+  })
+})
+
+describe('ladderReady (how late is late)', () => {
+  it('measures "near the climax" against the ladder\'s own length', () => {
+    // A one-shot's 3-4 objectives: one left can still be Act 1.
+    expect(ladderReady({ total: 4, remaining: 1 })).toBe(false)
+    expect(ladderReady({ total: 4, remaining: 0 })).toBe(true)
+    // A long campaign ladder: one left IS the finale.
+    expect(ladderReady({ total: 9, remaining: 1 })).toBe(true)
+    expect(ladderReady({ total: 9, remaining: 2 })).toBe(false)
+    expect(ladderReady({ total: 0, remaining: 0 })).toBe(false)
   })
 })
 

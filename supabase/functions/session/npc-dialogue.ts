@@ -6,8 +6,9 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import {
-  actionAutoAllowed, canConsumeOpening, clampDisposition, dialogueGateActive, dmSettings,
-  filterReveals, openingDcMod, promptDeadline, socialDc, SOLO_PROMPT_WINDOW_S,
+  actionAutoAllowed, canConsumeOpening, cappedSceneDelta, clampDisposition, dialogueGateActive,
+  dmSettings, effectiveDispositionDelta, filterReveals, openingDcMod, promptDeadline, socialDc,
+  SOLO_PROMPT_WINDOW_S,
 } from '../_shared/play/index.ts'
 import type { CheckResult, OpeningView, RevealCandidate } from '../_shared/play/index.ts'
 import type {
@@ -19,6 +20,7 @@ import {
 import type { AgentEnv, NpcContext } from './agents.ts'
 import { activeLoop } from '../_shared/story/index.ts'
 import { loadLoops } from './beats.ts'
+import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { challengeCheckResolved } from './encounters.ts'
 import type { ChallengeCheckStash } from './encounters.ts'
 import type { DoCheckStash } from './intent.ts'
@@ -59,6 +61,17 @@ async function loadNpc(service: SupabaseClient, adventureId: string, npcId: stri
   return data as NpcRow | null
 }
 
+/** Authored state at session start - a murder victim is 'dead' before anyone rolls a die. */
+async function npcInitialState(service: SupabaseClient, adventureId: string, npcId: string): Promise<string> {
+  const { data } = await service
+    .from('npcs')
+    .select('initial_state')
+    .eq('id', npcId)
+    .eq('adventure_id', adventureId)
+    .maybeSingle()
+  return (data?.initial_state as string | undefined) ?? 'alive'
+}
+
 function npcImage(images: Json): string | null {
   if (typeof images !== 'object' || images === null || Array.isArray(images)) return null
   const set = images as Record<string, Json>
@@ -81,10 +94,19 @@ export async function startSocial(service: SupabaseClient, adventureId: string, 
   if (!ctx?.isDm) return { status: 403, body: { error: 'Only the DM (or creator in Full-AI) can start a scene' } }
   if (npcIds.length === 0 || npcIds.length > 3) return { status: 400, body: { error: 'Pick 1-3 NPCs' } }
 
+  // The dead do not hold conversations. Blocking the STAGING is the real guard - leaving it to
+  // the Consistency Checker only catches the corpse after it has already spoken (live
+  // 2026-07-20). Both sources count: authored start state (the murder victim) and anyone who
+  // has died since (dm.facts.npcStates).
+  const liveStates = (await loadState(service, adventureId)).state.dm?.facts.npcStates ?? {}
   const npcs: NpcRow[] = []
   for (const id of npcIds) {
     const npc = await loadNpc(service, adventureId, id)
     if (!npc) return { status: 404, body: { error: `NPC ${id} not found` } }
+    const npcState = liveStates[id] ?? (await npcInitialState(service, adventureId, id))
+    if (npcState === 'dead' || npcState === 'absent') {
+      return { status: 409, body: { error: `${npc.name} is ${npcState} and cannot be staged` } }
+    }
     npcs.push(npc)
   }
   const speakers: SpeakerSlot[] = []
@@ -225,15 +247,45 @@ async function dispositionMap(service: SupabaseClient, npcId: string): Promise<R
   return Object.fromEntries((data ?? []).map((d) => [d.character_id as string, Number(d.value)]))
 }
 
+/** Signed disposition movement already spent on this PC/NPC pair since the scene opened. */
+async function sceneDispositionDrift(
+  service: SupabaseClient,
+  adventureId: string,
+  npcId: string,
+  characterId: string,
+): Promise<number> {
+  const { data: sceneStart } = await service
+    .from('event_log')
+    .select('id')
+    .eq('adventure_id', adventureId)
+    .eq('type', 'social_started')
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const { data } = await service
+    .from('event_log')
+    .select('payload')
+    .eq('adventure_id', adventureId)
+    .eq('type', 'disposition_changed')
+    .gt('id', (sceneStart?.id as number | undefined) ?? 0)
+  return ((data ?? []) as { payload: Record<string, Json> }[])
+    .filter((e) => e.payload.npc_id === npcId && e.payload.character_id === characterId)
+    .reduce((sum, e) => sum + (Number(e.payload.to ?? 0) - Number(e.payload.from ?? 0)), 0)
+}
+
 async function applyDispositionDelta(
   service: SupabaseClient,
   adventureId: string,
   sessionId: string | null,
   npcId: string,
   characterId: string,
-  delta: number,
+  proposed: number,
   reason: string,
 ): Promise<void> {
+  if (proposed === 0) return
+  const delta = cappedSceneDelta(
+    proposed, await sceneDispositionDrift(service, adventureId, npcId, characterId),
+  )
   if (delta === 0) return
   const current = (await dispositionMap(service, npcId))[characterId] ?? 0
   const next = clampDisposition(current + delta)
@@ -419,9 +471,16 @@ export async function npcReply(
     })
   }
 
+  // Disposition only moves on something concrete (F10 guardrail): plain chat used to buy +1
+  // a line, so any PC who kept talking reached devoted.
   await applyDispositionDelta(
-    service, env.adventureId, sessionId, npcId,
-    utterance.actorCharacterId, output.dispositionDelta.value, output.dispositionDelta.reason,
+    service, env.adventureId, sessionId, npcId, utterance.actorCharacterId,
+    effectiveDispositionDelta(output.dispositionDelta.value, {
+      checkResolved: checkResult !== null,
+      revealed: gate.allowed.length > 0,
+      proposedAction: output.proposedActions.length > 0,
+    }),
+    output.dispositionDelta.reason,
   )
 
   let newOpening: OpeningState | null = null
@@ -617,6 +676,11 @@ export async function handleSay(
       // dispatcher re-routes and continues the flow.
       return { status: 200, body: { ok: true, resolved: 'action' } }
     }
+    if (classification.kind === 'ask_dm') {
+      // A question about the world, not to the NPC: the dispatcher answers it as narration.
+      // Turning it into NPC speech let the room's contents come out of a character's mouth.
+      return { status: 200, body: { ok: true, resolved: 'ask_dm' } }
+    }
     if (classification.kind === 'conversation') {
       const resolved = await npcBeat(service, env, npcId, utterance, null)
       return { status: 200, body: { ok: true, resolved } }
@@ -720,6 +784,17 @@ export async function continueAfterCheck(
     if (applied.staged.length > 0) sceneNote += ` Present and in conversation now: ${applied.staged.join(', ')}.`
     if (applied.dayAdvanced !== null) sceneNote += ' Meaningful time passes during this - let the narration carry it.'
     if (applied.combatWon) sceneNote += ` A fight broke out ("${applied.combatWon}") and the party won decisively - narrate the clash and its immediate aftermath.`
+  }
+  // A successful `do` in a room holding authored evidence finds it (investigation pillar).
+  if (result.success) {
+    const scene = (await loadState(service, env.adventureId)).state.scene
+    sceneNote += discoveryNote(
+      await discoverAtLocation(service, env, sessionId, {
+        locationId: scene.locationId,
+        actorCharacterId: stash.actorCharacterId,
+        checkPassed: true,
+      }),
+    )
   }
   await narrationBeat(
     service, env, sessionId,

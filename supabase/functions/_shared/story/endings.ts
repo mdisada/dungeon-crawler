@@ -77,13 +77,32 @@ export function scoreEndings(candidates: EndingCandidate[], world: EndingWorld):
 /** Commitment gate (F08 SS8.1): decisive margin + enough recorded play, near the climax. */
 export const COMMIT_MIN_MARGIN = 3
 export const COMMIT_MIN_EVENTS = 30
+/** At or below this, "one objective left" is still Act 1 - a one-shot ladder is 3-4 rungs. */
+export const SHORT_LADDER_MAX = 4
+
+export interface ObjectiveLadder {
+  total: number
+  remaining: number
+}
+
+/**
+ * "Near the climax" measured against the ladder's own length. On a long ladder one open
+ * objective is the finale; on a one-shot's 3-4 it can be the second scene, so nothing commits
+ * until the ladder is actually finished.
+ */
+export function ladderReady(ladder: ObjectiveLadder): boolean {
+  if (ladder.total <= 0) return false
+  return ladder.total <= SHORT_LADDER_MAX ? ladder.remaining === 0 : ladder.remaining <= 1
+}
 
 export function commitmentReady(
   scoresByEnding: Record<string, number>,
   leadingId: string | null,
   eventCount: number,
+  ladder: ObjectiveLadder,
 ): boolean {
   if (!leadingId || eventCount < COMMIT_MIN_EVENTS) return false
+  if (!ladderReady(ladder)) return false
   const leading = scoresByEnding[leadingId] ?? 0
   if (leading <= 0) return false
   const runnerUp = Math.max(
