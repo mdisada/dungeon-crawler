@@ -73,6 +73,13 @@ export interface BudgetVerdict {
   verdict: 'under' | 'within' | 'over'
 }
 
+/**
+ * Past this multiple of the target the fight is not "hard", it is unsurvivable, and shipping it
+ * is worse than regenerating the stage. Stage 5 authored 3700 adjusted XP against a 150 XP
+ * target for one level-3 PC (live 2026-07-20) and only warned.
+ */
+export const LETHAL_BUDGET_MULTIPLE = 3
+
 /** "within" is a generous band (60%-140% of target) - outside it becomes an editor warning. */
 export function validateEncounterBudget(
   enemies: { cr: string; count: number }[],

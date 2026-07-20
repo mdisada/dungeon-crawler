@@ -112,6 +112,14 @@ export async function runStage3(env: StageEnv, chapterId: string): Promise<void>
   const chapter = chapters.find((c) => c.id === chapterId)
   if (!chapter) throw new Error('chapter not found')
   const scenes = await loadChapterScenes(env, chapterId)
+  // Stage 3 runs once per chapter, so only the caller can stop chapter N re-authoring what
+  // chapter N-1 already covers.
+  const { data: priorRows } = await env.db
+    .from('objectives')
+    .select('title, chapter_id')
+    .eq('adventure_id', env.adventure.id)
+    .neq('chapter_id', chapterId)
+  const priorObjectiveTitles = ((priorRows ?? []) as { title: string }[]).map((o) => o.title).filter(Boolean)
 
   const objectives = await env.generate(
     'story_director',
@@ -121,6 +129,7 @@ export async function runStage3(env: StageEnv, chapterId: string): Promise<void>
       chapterNumber: chapter.index + 1,
       scenes,
       adventureType: env.adventure.type ?? undefined,
+      priorObjectiveTitles,
     }),
     parseStage3,
   )

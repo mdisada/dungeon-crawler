@@ -88,6 +88,7 @@ export async function runStage4(env: StageEnv, chapterId: string): Promise<void>
           chapter_id: chapterId,
           name: n.name,
           role: n.role,
+          initial_state: n.initialState,
           personality: n.personality,
           faction: n.faction,
           description: n.description,

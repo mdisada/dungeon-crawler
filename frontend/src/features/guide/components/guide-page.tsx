@@ -66,6 +66,13 @@ export function GuidePage() {
       })),
       npcIds: data.npcs.map((n) => n.id),
       objectiveIds: data.objectives.map((o) => o.id),
+      adventureType: data.adventure.type,
+      endings: data.endings.map((e) => ({
+        title: e.title,
+        objectiveIds: e.triggerConditions.signals
+          .map((s) => ('objective_id' in s.when ? s.when.objective_id : null))
+          .filter((objectiveId): objectiveId is string => objectiveId !== null),
+      })),
     })
     setValidationErrors(errors)
     if (errors.length > 0 || !id) return

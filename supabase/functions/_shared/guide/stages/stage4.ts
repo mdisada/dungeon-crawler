@@ -72,6 +72,7 @@ Rules:
 - Ingredients are TOYS, not railroads: each one is something players can find, use, ignore, or subvert. Never a mandatory step.
 - ${INGREDIENTS_PER_CHAPTER.defaultMin}-${INGREDIENTS_PER_CHAPTER.defaultMax} ingredients for this chapter, each linked to at least one objective (by objective number) and tagged with the pillars it serves ("combat", "social", "exploration").
 - Every scene's cast and places must exist: create the NPCs and locations the scene sketches imply. Mark the chapter's main villain (if present here) as role "boss".
+- "initial_state" is where the NPC stands when play BEGINS: "alive" (default), "dead", or "absent" (alive but not reachable yet). A murder victim, or anyone the premise says is already dead or missing, MUST NOT be "alive" - the live game will otherwise stage them and have them speak.
 - Reuse existing NPCs/locations by their key instead of duplicating them.
 - Keys are short lowercase slugs unique in this response, e.g. "npc:volgarth", "loc:sunken-chapel".
 - image_prompt fields describe the visual for later image generation (style-neutral, concrete).
@@ -87,7 +88,7 @@ ${coopRules}
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
 {
-  "npcs": [ { "key": "npc:...", "name": "...", "role": "npc"|"boss", "personality": { "traits": "...", "voice": "...", "wants": "..." }, "faction": "...", "description": "...", "image_prompt": "...", "combat": { "cr": "1/4", "archetype": "brute"|"skirmisher"|"sniper"|"caster"|"leader"|"minion", "skills": ["Perception"], "attack": "Rusty Cutlass" } } ],
+  "npcs": [ { "key": "npc:...", "name": "...", "role": "npc"|"boss", "initial_state": "alive"|"dead"|"absent", "personality": { "traits": "...", "voice": "...", "wants": "..." }, "faction": "...", "description": "...", "image_prompt": "...", "combat": { "cr": "1/4", "archetype": "brute"|"skirmisher"|"sniper"|"caster"|"leader"|"minion", "skills": ["Perception"], "attack": "Rusty Cutlass" } } ],
   "locations": [ { "key": "loc:...", "name": "...", "description": "...", "image_prompt": "..." } ],
   "coop_sets": [ { "key": "coop:...", "kind": "split_knowledge"|"complementary_obstacle", "reveals": "the combined conclusion once pooled" } ],
   "ingredients": [ { "type": "clue"|"secret"|"event"|"item"|"rumor", "content": { "text": "..." }, "placement": { "location_key": "...", "npc_key": "...", "condition": "..." }, "reveals": "...", "pillar_tags": ["social"], "reveals_to": null | {"skill":"..."} | {"class":"..."} | {"background_tag":"..."}, "coop_set_key": null | "coop:...", "objective_numbers": [1] } ]
@@ -175,6 +176,10 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
       key: c.str(n.key, `${path}.key`),
       name: c.str(n.name, `${path}.name`),
       role: c.oneOf(n.role, `${path}.role`, ['npc', 'boss'] as const),
+      // Default alive: an omitted state must never silently kill someone off.
+      initialState: n.initial_state === undefined
+        ? 'alive'
+        : c.oneOf(n.initial_state, `${path}.initial_state`, ['alive', 'dead', 'absent'] as const),
       personality: c.obj(n.personality ?? {}, `${path}.personality`) as NpcDraft['personality'],
       faction: c.str(n.faction ?? '', `${path}.faction`, { allowEmpty: true }),
       description: c.str(n.description, `${path}.description`),

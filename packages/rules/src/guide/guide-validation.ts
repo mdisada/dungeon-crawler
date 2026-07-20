@@ -14,6 +14,12 @@ export interface ContractForValidation {
   objectiveIds: string[]
 }
 
+export interface EndingForValidation {
+  title: string
+  /** Objective ids this ending's trigger signals reference (nulls dropped by the caller). */
+  objectiveIds: string[]
+}
+
 export interface GuideForValidation {
   chapters: {
     title: string
@@ -26,7 +32,13 @@ export interface GuideForValidation {
   /** Known ids for contract ref validation. */
   npcIds: string[]
   objectiveIds: string[]
+  adventureType?: 'one_shot' | 'multi_chapter' | null
+  /** Omit to skip ending-reachability checks (callers that don't load signals). */
+  endings?: EndingForValidation[]
 }
+
+/** A one-shot still needs a three-act ladder: setup, complication, climax. */
+export const ONE_SHOT_MIN_OBJECTIVES = 3
 
 export function validateGuideReady(guide: GuideForValidation): string[] {
   const errors: string[] = []
@@ -59,12 +71,28 @@ export function validateGuideReady(guide: GuideForValidation): string[] {
     errors.push('The guide needs at least two candidate endings.')
   }
 
+  // A one-shot that stops after setup leaves its endings demanding proof nothing in the
+  // ladder can produce (seen live in "The Gilded Cage").
+  const totalObjectives = guide.chapters.reduce((sum, c) => sum + c.objectives.length, 0)
+  if (guide.adventureType === 'one_shot' && totalObjectives < ONE_SHOT_MIN_OBJECTIVES) {
+    errors.push(
+      `A one-shot needs at least ${ONE_SHOT_MIN_OBJECTIVES} objectives ending in a climax - this one has ${totalObjectives}.`,
+    )
+  }
+
+  const knownObjectiveIds = new Set(guide.objectiveIds)
+  guide.endings?.forEach((ending, i) => {
+    const label = ending.title || `ending ${i + 1}`
+    if (!ending.objectiveIds.some((objectiveId) => knownObjectiveIds.has(objectiveId))) {
+      errors.push(`"${label}" references no existing objective - nothing the party does can reach it.`)
+    }
+  })
+
   const entries = guide.contracts.filter((c) => c.isEntry)
   if (entries.length !== 1) {
     errors.push('The guide needs exactly one entry quest contract (the opening offer).')
   }
   const npcIds = new Set(guide.npcIds)
-  const objectiveIds = new Set(guide.objectiveIds)
   guide.contracts.forEach((contract) => {
     const label = contract.label || (contract.isEntry ? 'the entry contract' : 'a quest contract')
     if (!contract.giverNpcId || !npcIds.has(contract.giverNpcId)) {
@@ -73,7 +101,7 @@ export function validateGuideReady(guide: GuideForValidation): string[] {
     if (contract.goldCeiling < contract.goldFloor) {
       errors.push(`${label}: reward ceiling is below the floor.`)
     }
-    if (contract.objectiveIds.length === 0 || contract.objectiveIds.some((id) => !objectiveIds.has(id))) {
+    if (contract.objectiveIds.length === 0 || contract.objectiveIds.some((id) => !knownObjectiveIds.has(id))) {
       errors.push(`${label}: must cover at least one existing objective.`)
     }
   })

@@ -5,7 +5,7 @@
 // Budget-Engine-validated against the expected party level (F04 SS2). Encounters are candidate
 // routes, never gates - objectives still complete only via predicates.
 
-import { validateEncounterBudget, type BudgetVerdict, type DifficultyPreset } from '../budget.ts'
+import { LETHAL_BUDGET_MULTIPLE, validateEncounterBudget, type BudgetVerdict, type DifficultyPreset } from '../budget.ts'
 import { Check, extractJsonObject } from '../json.ts'
 import type {
   BossUpdateDraft,
@@ -101,6 +101,15 @@ export function parseStage5(raw: string, ctx: Stage5Context): ParseResult<Stage5
       type === 'battle' && enemies
         ? validateEncounterBudget(enemies, ctx.partyLevel, ctx.partySize, ctx.difficultyPreset)
         : null
+    // Over-budget is an editor warning; wildly over-budget is a broken encounter. Reject it so
+    // the repair pass re-rolls with the numbers in hand, rather than shipping a guaranteed TPK.
+    if (budget && budget.adjustedXp > budget.xpBudget * LETHAL_BUDGET_MULTIPLE) {
+      c.errors.push(
+        `${path}.enemies: ${budget.adjustedXp} adjusted XP is over ${LETHAL_BUDGET_MULTIPLE}x the ` +
+        `${budget.xpBudget} XP target for ${ctx.partySize} level-${ctx.partyLevel} character(s) - ` +
+        'cut the count or the CR',
+      )
+    }
 
     return {
       type,

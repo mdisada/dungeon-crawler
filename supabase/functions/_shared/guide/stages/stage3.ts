@@ -16,10 +16,33 @@ export interface Stage3Context {
   scenes: SceneSketch[]
   /** 'one_shot' keeps the objective ladder short; longer forms may use the full range. */
   adventureType?: string
+  /** Titles already authored for earlier chapters - stage 3 runs per chapter and would
+   *  otherwise re-author the same objective ("Secure the forged deed" twice, live 2026-07-20). */
+  priorObjectiveTitles?: string[]
 }
 
 export const OBJECTIVE_TITLE_MAX_WORDS = 6
 export const OBJECTIVES_PER_CHAPTER = { min: 1, max: 6 }
+/**
+ * Per chapter of a multi-chapter adventure. The open 1-6 range let a 4-chapter mystery author
+ * 16 objectives for a solo level-1 party (live 2026-07-20) - at the observed rate of roughly
+ * one objective per 26 turns that is a ~400-turn story nobody finishes.
+ */
+export const MULTI_CHAPTER_OBJECTIVES = { min: 2, max: 4 }
+/** A one-shot is a whole story in one chapter, so its ladder must carry all three acts. */
+export const ONE_SHOT_OBJECTIVES = { min: 3, max: 4 }
+
+/**
+ * One-shots used to be told "AT MOST 2-3 objectives", which authored Act 1 and stopped: both
+ * objectives were setup, and the endings then demanded proof nothing in the ladder could
+ * produce. The ladder now has to reach a climax, authored against the promised endings.
+ */
+function oneShotArcRules(ctx: Stage3Context): string {
+  const premises = (ctx.metaLoop.endingPremises ?? []).filter(Boolean)
+  return `- This is a ONE-SHOT adventure: author ${ONE_SHOT_OBJECTIVES.min}-${ONE_SHOT_OBJECTIVES.max} objectives forming a complete three-act spine - setup, escalation/complication, then a CLIMAX.
+- The LAST objective is the climax: a confrontation or decisive act that resolves the story, not more investigation or setup. Its completion is what earns an ending.
+${premises.length > 0 ? `- The climax objective must make one of these promised endings reachable: ${premises.join(' | ')}.\n` : ''}`
+}
 
 export function buildStage3Prompt(ctx: Stage3Context): { system: string; user: string; maxTokens: number } {
   const system = `You are the Story Director for a tabletop RPG platform. Turn a chapter's scene sketches into an ORDERED list of ${OBJECTIVES_PER_CHAPTER.min}-${OBJECTIVES_PER_CHAPTER.max} player-facing objectives.
@@ -34,7 +57,14 @@ Rules:
 - NEVER use "fact" atoms - live play does not write them (NPC status is tracked by internal id, not by name).
 - Prefer "any" combinators that honor multiple resolutions (kill OR ally OR outwit); keep any "all" chain to at most 2 atoms.${''}
 
-${ctx.adventureType === 'one_shot' ? '- This is a ONE-SHOT adventure: author AT MOST 2-3 objectives, each completable within a few scenes of live play.\n' : ''}
+${ctx.adventureType === 'one_shot'
+  ? oneShotArcRules(ctx)
+  : `- Author ${MULTI_CHAPTER_OBJECTIVES.min}-${MULTI_CHAPTER_OBJECTIVES.max} objectives for THIS chapter - each one a distinct step the party must actually finish, not a restatement of a neighbouring step.
+`}${
+  (ctx.priorObjectiveTitles ?? []).length > 0
+    ? `- Earlier chapters already cover these - do NOT repeat or re-word any of them: ${(ctx.priorObjectiveTitles ?? []).join(' | ')}.
+`
+    : ''}
 Respond with ONLY a JSON object, no prose, in exactly this shape:
 { "objectives": [ { "title": "...", "hidden_description": "...", "completion_predicates": { ... } } ] }`
 
@@ -87,6 +117,14 @@ export function parseStage3(raw: string): ParseResult<ObjectiveDraft[]> {
         completionPredicates: (o.completion_predicates ?? null) as ObjectiveDraft['completionPredicates'],
       }
     })
+
+  const seen = new Set<string>()
+  for (const objective of objectives) {
+    const key = objective.title.trim().toLowerCase()
+    if (!key) continue
+    if (seen.has(key)) c.errors.push(`$.objectives: duplicate objective title "${objective.title}"`)
+    seen.add(key)
+  }
 
   return c.result(objectives)
 }

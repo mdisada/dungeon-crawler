@@ -60,6 +60,8 @@ export interface NpcDraft {
   key: string
   name: string
   role: 'npc' | 'boss'
+  /** State when play begins. A murder victim must be 'dead' or the NPC agent will voice them. */
+  initialState: 'alive' | 'dead' | 'absent'
   personality: Record<string, Json>
   faction: string
   description: string

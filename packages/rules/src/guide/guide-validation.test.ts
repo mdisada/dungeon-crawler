@@ -69,6 +69,38 @@ describe('validateGuideReady (Start Adventure)', () => {
     )
   })
 
+  it('requires a one-shot to author a full three-act ladder', () => {
+    const twoObjectives = baseGuide({
+      adventureType: 'one_shot',
+      chapters: [{
+        title: 'One night',
+        objectives: [
+          { title: 'Identify the suspects', completionPredicates: VALID_PREDICATE },
+          { title: 'Search the chambers', completionPredicates: VALID_PREDICATE },
+        ],
+      }],
+    })
+    expect(validateGuideReady(twoObjectives)).toEqual([
+      'A one-shot needs at least 3 objectives ending in a climax - this one has 2.',
+    ])
+    // Multi-chapter guides keep the old rule.
+    expect(validateGuideReady({ ...twoObjectives, adventureType: 'multi_chapter' })).toEqual([])
+  })
+
+  it('rejects endings no objective can reach', () => {
+    const errors = validateGuideReady(baseGuide({
+      endings: [
+        { title: 'Justice done', objectiveIds: ['obj-1'] },
+        { title: 'Vibes only', objectiveIds: [] },
+        { title: 'Dangling', objectiveIds: ['obj-gone'] },
+      ],
+    }))
+    expect(errors).toEqual([
+      '"Vibes only" references no existing objective - nothing the party does can reach it.',
+      '"Dangling" references no existing objective - nothing the party does can reach it.',
+    ])
+  })
+
   it('catches a dangling giver, inverted reward, and dangling objective refs', () => {
     const errors = validateGuideReady(baseGuide({
       contracts: [{

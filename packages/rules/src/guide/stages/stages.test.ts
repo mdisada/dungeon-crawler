@@ -21,12 +21,12 @@ import {
 } from '../__fixtures__/stage-fixtures.ts'
 import { parseStage1, stage1ChapterBounds } from './stage1.ts'
 import { parseStage2 } from './stage2.ts'
-import { parseStage3 } from './stage3.ts'
+import { buildStage3Prompt, MULTI_CHAPTER_OBJECTIVES, ONE_SHOT_OBJECTIVES, parseStage3 } from './stage3.ts'
 import { entityNameMatches, maxCoopDemanding, parseStage4, validateCoopConformance, validateEntityCoverage } from './stage4.ts'
 import { parseStage5 } from './stage5.ts'
 import { parseStage6 } from './stage6.ts'
 import { parseStage7, validateRegistryCoverage } from './stage7.ts'
-import { parseStage8, validateEndingDistinctness } from './stage8.ts'
+import { parseStage8, validateEndingDistinctness, validateEndingReachability } from './stage8.ts'
 
 const parseStage8Fixture = (raw: string) => parseStage8(raw, STAGE8_OBJECTIVE_COUNT, STAGE8_NPC_COUNT)
 
@@ -120,6 +120,51 @@ describe('stage 3 (objectives + predicates)', () => {
     if (result.ok) return
     expect(result.errors.some((e) => e.includes('over 6 words'))).toBe(true)
     expect(result.errors.some((e) => e.includes('completion_predicates'))).toBe(true)
+  })
+
+  it('demands a three-act ladder ending in a climax for one-shots', () => {
+    const ctx = {
+      metaLoop: { premise: 'p', antagonist: 'a', stakes: 's', arc: 'x', endingPremises: ['The killer walks free'] },
+      chapter: { title: 'One night', arcSummary: 'a murder' },
+      chapterNumber: 1,
+      scenes: [{ sketch: 'the body is found' }],
+      adventureType: 'one_shot',
+    }
+    const { system } = buildStage3Prompt(ctx)
+    expect(system).toContain(`${ONE_SHOT_OBJECTIVES.min}-${ONE_SHOT_OBJECTIVES.max} objectives`)
+    expect(system).toContain('CLIMAX')
+    expect(system).toContain('The killer walks free')
+    // Multi-chapter chapters get their own, tighter cap.
+    const multi = buildStage3Prompt({ ...ctx, adventureType: 'multi_chapter' }).system
+    expect(multi).not.toContain('CLIMAX')
+    expect(multi).toContain(`${MULTI_CHAPTER_OBJECTIVES.min}-${MULTI_CHAPTER_OBJECTIVES.max} objectives`)
+  })
+
+  it('tells a later chapter not to re-author earlier objectives', () => {
+    const system = buildStage3Prompt({
+      metaLoop: { premise: 'p', antagonist: 'a', stakes: 's', arc: 'x' },
+      chapter: { title: 'Ch2', arcSummary: 'more' },
+      chapterNumber: 2,
+      scenes: [{ sketch: 'a scene' }],
+      adventureType: 'multi_chapter',
+      priorObjectiveTitles: ['Secure the forged deed'],
+    }).system
+    expect(system).toContain('do NOT repeat')
+    expect(system).toContain('Secure the forged deed')
+  })
+
+  it('rejects a chapter that authors the same objective twice', () => {
+    const objective = (title: string) => ({
+      title,
+      hidden_description: 'why it matters',
+      completion_predicates: { flag: 'deed_secured', eq: true },
+    })
+    const result = parseStage3(JSON.stringify({
+      objectives: [objective('Secure the forged deed'), objective('Secure the forged deed')],
+    }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some((e) => e.includes('duplicate objective title'))).toBe(true)
   })
 })
 
@@ -457,5 +502,36 @@ describe('stage 8 (ending designer)', () => {
     const warnings = validateEndingDistinctness([a, noPositive, duplicate])
     expect(warnings.some((w) => w.includes('argue FOR'))).toBe(true)
     expect(warnings.some((w) => w.includes('duplicates'))).toBe(true)
+  })
+
+  it('reachability: flags dial-only endings and a climax that decides nothing', () => {
+    const parsed = parseStage8Fixture(STAGE8_RESPONSE)
+    if (!parsed.ok) throw new Error('fixture must parse')
+    const [a, b] = parsed.data.endings
+
+    const dialOnly = {
+      ...b,
+      triggerConditions: {
+        summary: '',
+        signals: [{ when: { dial: 'mercy', gte: 3 }, weight: 3, note: '' }],
+      },
+    }
+    const warnings = validateEndingReachability([a, dialOnly], STAGE8_OBJECTIVE_COUNT)
+    expect(warnings.some((w) => w.includes('no objective signal'))).toBe(true)
+
+    const climaxRef = {
+      ...a,
+      triggerConditions: {
+        summary: '',
+        signals: [{ when: { objective: STAGE8_OBJECTIVE_COUNT, outcome: 'completed' as const }, weight: 3, note: '' }],
+      },
+    }
+    expect(validateEndingReachability([climaxRef], STAGE8_OBJECTIVE_COUNT)).toEqual([])
+    expect(
+      validateEndingReachability(
+        [{ ...a, triggerConditions: { summary: '', signals: [{ when: { objective: 1, outcome: 'completed' as const }, weight: 3, note: '' }] } }],
+        STAGE8_OBJECTIVE_COUNT,
+      ).some((w) => w.includes('final objective')),
+    ).toBe(true)
   })
 })

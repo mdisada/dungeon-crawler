@@ -50,6 +50,7 @@ Rules:
   {"npc": <number from the list>, "state": "dead"|"alive"|"allied"|"hostile"}
   {"dial": "<dial key>", "gte" or "lte": <${DIAL_RANGE.min}..${DIAL_RANGE.max}>}
   Nothing else - no free-form flags or facts. "weight" is a signed nonzero number in [-5, 5] (negative = this condition argues AGAINST the ending). Use negative weights as counter-signals.
+- EVERY ending needs at least one positively-weighted OBJECTIVE signal, and it should reference the FINAL objective in the list - the climax. Dials alone must never be able to land an ending: dials describe how the party played, objectives are what they actually did.
 - Everything here is DM-only. Never reveal endings to players.
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
@@ -253,5 +254,29 @@ export function validateEndingDistinctness(endings: EndingDraft[]): string[] {
       }
     }
   })
+  return warnings
+}
+
+/**
+ * An ending reachable by dials alone can never be earned: dials are a summarizer's read on how
+ * the party played, while the commitment gate only opens once the objective ladder is done.
+ * Every ending needs an objective signal, and the climax must decide something.
+ */
+export function validateEndingReachability(endings: EndingDraft[], objectiveCount: number): string[] {
+  const warnings: string[] = []
+  let climaxReferenced = false
+  endings.forEach((ending, i) => {
+    const label = ending.title || `ending ${i + 1}`
+    const objectiveSignals = ending.triggerConditions.signals.filter((s) => 'objective' in s.when)
+    if (objectiveSignals.length === 0) {
+      warnings.push(`"${label}" has no objective signal - only dials could ever land it, which live play cannot guarantee.`)
+    }
+    if (objectiveSignals.some((s) => 'objective' in s.when && s.when.objective === objectiveCount)) {
+      climaxReferenced = true
+    }
+  })
+  if (objectiveCount > 0 && endings.length > 0 && !climaxReferenced) {
+    warnings.push(`No ending references the final objective (#${objectiveCount}) - the climax decides nothing.`)
+  }
   return warnings
 }

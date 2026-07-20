@@ -8,6 +8,7 @@ import {
   parseStage8,
   signalWhenToStored,
   validateEndingDistinctness,
+  validateEndingReachability,
   type Stage8Context,
 } from '../_shared/guide/stages/stage8.ts'
 import type { StageEnv } from './stage-env.ts'
@@ -94,7 +95,10 @@ export async function runStage8(env: StageEnv): Promise<void> {
     .eq('stage', 8)
   assertOk(warnClearError, 'stage-8 warning cleanup failed')
 
-  const warnings = validateEndingDistinctness(output.endings)
+  const warnings = [
+    ...validateEndingDistinctness(output.endings),
+    ...validateEndingReachability(output.endings, sortedObjectives.length),
+  ]
   if (warnings.length > 0) {
     const { error } = await env.db.from('guide_warnings').insert(
       warnings.map((message) => ({
