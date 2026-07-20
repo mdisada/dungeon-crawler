@@ -100,6 +100,42 @@ function situation(state: GameState): string {
 }
 
 /**
+ * Server-driven stall sweep, run after a turn resolves. The ladder used to engage only when a
+ * CLIENT swept for it, so a table whose client never polls (or a headless run) could grind
+ * indefinitely - the multi-chapter playtest took 26 turns with zero nudges (2026-07-21).
+ *
+ * decideHint is the guard: it returns null unless the no-progress streak has earned the next
+ * rung, so calling this every turn is cheap and cannot repeat a rung.
+ */
+export async function maybeAutoHint(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+): Promise<void> {
+  if (env.mode !== 'full_ai') return // assist: the human DM drives pacing
+  // Demo adventures are scripted fixtures: an unsolicited nudge only corrupts their assertions,
+  // the same reason the ledger is canned and the progress tail is not deferred there.
+  if (env.demo) return
+  const state = (await loadState(service, env.adventureId)).state
+  if (!['narration', 'roleplay', 'downtime', 'puzzle'].includes(state.scene.mode)) return
+  if (state.dialogue.pending || state.dialogue.typing || state.dm?.pendingReview) return
+
+  const { noProgressTurns, hintsSinceProgress } = await stuckWindow(service, env.adventureId)
+  const { rung } = decideHint({
+    noProgressTurns,
+    hintsSinceProgress,
+    requested: false,
+    turnsThreshold: dmSettings(state).hintTurns ?? DEFAULT_HINT_TURNS,
+    allowFailForward: true,
+  })
+  if (rung === null) return
+  await deliverHint(service, env, sessionId, state, rung, false)
+  await logEvent(service, env.adventureId, sessionId, 'hint_given', {
+    rung, source: 'auto_turn', no_progress_turns: noProgressTurns,
+  })
+}
+
+/**
  * The shared ladder entry. `requested` = the player asked; otherwise the client auto-sweep.
  * Guards mirror the idle nudge (narrative mode, table not busy). Returns 409 when there is
  * nothing to hint (not stuck / already at this rung) - the normal case for the auto sweep.

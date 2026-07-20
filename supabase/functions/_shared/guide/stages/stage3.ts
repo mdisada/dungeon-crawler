@@ -19,6 +19,8 @@ export interface Stage3Context {
   /** Titles already authored for earlier chapters - stage 3 runs per chapter and would
    *  otherwise re-author the same objective ("Secure the forged deed" twice, live 2026-07-20). */
   priorObjectiveTitles?: string[]
+  /** Chapters in the adventure, so the remaining total can be shared out sensibly. */
+  chapterCount?: number
 }
 
 export const OBJECTIVE_TITLE_MAX_WORDS = 6
@@ -29,6 +31,12 @@ export const OBJECTIVES_PER_CHAPTER = { min: 1, max: 6 }
  * one objective per 26 turns that is a ~400-turn story nobody finishes.
  */
 export const MULTI_CHAPTER_OBJECTIVES = { min: 2, max: 4 }
+/**
+ * The cap that actually binds. Capping per chapter still allowed 4 x 4 = 16 across a
+ * multi-chapter guide (observed 15), because the driver is chapter count, not chapter size.
+ * Later chapters get whatever of this total is left.
+ */
+export const MULTI_CHAPTER_TOTAL_OBJECTIVES = 10
 /** A one-shot is a whole story in one chapter, so its ladder must carry all three acts. */
 export const ONE_SHOT_OBJECTIVES = { min: 3, max: 4 }
 
@@ -42,6 +50,26 @@ function oneShotArcRules(ctx: Stage3Context): string {
   return `- This is a ONE-SHOT adventure: author ${ONE_SHOT_OBJECTIVES.min}-${ONE_SHOT_OBJECTIVES.max} objectives forming a complete three-act spine - setup, escalation/complication, then a CLIMAX.
 - The LAST objective is the climax: a confrontation or decisive act that resolves the story, not more investigation or setup. Its completion is what earns an ending.
 ${premises.length > 0 ? `- The climax objective must make one of these promised endings reachable: ${premises.join(' | ')}.\n` : ''}`
+}
+
+/**
+ * Multi-chapter chapters share ONE ladder budget. Live play completes roughly one objective per
+ * 26 turns, so a 15-16 rung ladder is a story nobody reaches the end of.
+ */
+const FINAL_CHAPTER_RULE =
+  '- This is the FINAL chapter: its last objective is the climax, the decisive act that earns ' +
+  'an ending.\n'
+
+function multiChapterArcRules(ctx: Stage3Context): string {
+  const used = (ctx.priorObjectiveTitles ?? []).length
+  const chapters = Math.max(ctx.chapterCount ?? 1, 1)
+  const remainingChapters = Math.max(chapters - (ctx.chapterNumber - 1), 1)
+  const remaining = Math.max(MULTI_CHAPTER_TOTAL_OBJECTIVES - used, MULTI_CHAPTER_OBJECTIVES.min)
+  // Leave room for the chapters after this one; the last chapter may spend what is left.
+  const fairShare = Math.max(Math.floor(remaining / remainingChapters), MULTI_CHAPTER_OBJECTIVES.min)
+  const max = Math.min(fairShare, MULTI_CHAPTER_OBJECTIVES.max, remaining)
+  return `- Author ${MULTI_CHAPTER_OBJECTIVES.min}-${max} objectives for THIS chapter - each a distinct step the party must actually finish, not a restatement of a neighbouring step. The whole adventure gets at most ${MULTI_CHAPTER_TOTAL_OBJECTIVES} objectives across all ${chapters} chapters and ${used} are already authored, so spend this chapter's share and no more.
+${ctx.chapterNumber >= chapters ? FINAL_CHAPTER_RULE : ''}`
 }
 
 export function buildStage3Prompt(ctx: Stage3Context): { system: string; user: string; maxTokens: number } {
@@ -59,8 +87,7 @@ Rules:
 
 ${ctx.adventureType === 'one_shot'
   ? oneShotArcRules(ctx)
-  : `- Author ${MULTI_CHAPTER_OBJECTIVES.min}-${MULTI_CHAPTER_OBJECTIVES.max} objectives for THIS chapter - each one a distinct step the party must actually finish, not a restatement of a neighbouring step.
-`}${
+  : multiChapterArcRules(ctx)}${
   (ctx.priorObjectiveTitles ?? []).length > 0
     ? `- Earlier chapters already cover these - do NOT repeat or re-word any of them: ${(ctx.priorObjectiveTitles ?? []).join(' | ')}.
 `

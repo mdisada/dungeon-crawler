@@ -21,7 +21,10 @@ import {
 } from '../__fixtures__/stage-fixtures.ts'
 import { parseStage1, stage1ChapterBounds } from './stage1.ts'
 import { parseStage2 } from './stage2.ts'
-import { buildStage3Prompt, MULTI_CHAPTER_OBJECTIVES, ONE_SHOT_OBJECTIVES, parseStage3 } from './stage3.ts'
+import {
+  buildStage3Prompt, MULTI_CHAPTER_OBJECTIVES, MULTI_CHAPTER_TOTAL_OBJECTIVES, ONE_SHOT_OBJECTIVES,
+  parseStage3,
+} from './stage3.ts'
 import { entityNameMatches, maxCoopDemanding, parseStage4, validateCoopConformance, validateEntityCoverage } from './stage4.ts'
 import { parseStage5 } from './stage5.ts'
 import { parseStage6 } from './stage6.ts'
@@ -138,6 +141,26 @@ describe('stage 3 (objectives + predicates)', () => {
     const multi = buildStage3Prompt({ ...ctx, adventureType: 'multi_chapter' }).system
     expect(multi).not.toContain('CLIMAX')
     expect(multi).toContain(`${MULTI_CHAPTER_OBJECTIVES.min}-${MULTI_CHAPTER_OBJECTIVES.max} objectives`)
+  })
+
+  it('shares ONE ladder budget across chapters, shrinking as it is spent', () => {
+    const chapter = (n: number, prior: string[]) => buildStage3Prompt({
+      metaLoop: { premise: 'p', antagonist: 'a', stakes: 's', arc: 'x' },
+      chapter: { title: `Ch${n}`, arcSummary: 'arc' },
+      chapterNumber: n,
+      scenes: [{ sketch: 'a scene' }],
+      adventureType: 'multi_chapter',
+      chapterCount: 4,
+      priorObjectiveTitles: prior,
+    }).system
+
+    // Chapter 1 of 4 may not spend the whole budget on itself.
+    expect(chapter(1, [])).toContain(`at most ${MULTI_CHAPTER_TOTAL_OBJECTIVES} objectives`)
+    expect(chapter(1, [])).toContain(`${MULTI_CHAPTER_OBJECTIVES.min}-2 objectives for THIS chapter`)
+    // With most of the ladder already authored, later chapters get the floor, never the max.
+    const nearlySpent = chapter(4, Array.from({ length: 9 }, (_, i) => `obj ${i}`))
+    expect(nearlySpent).toContain(`${MULTI_CHAPTER_OBJECTIVES.min}-${MULTI_CHAPTER_OBJECTIVES.min} objectives`)
+    expect(nearlySpent).toContain('FINAL chapter')
   })
 
   it('tells a later chapter not to re-author earlier objectives', () => {

@@ -18,6 +18,7 @@ import { endEncounter, startSocial } from './social-staging.ts'
 import { maybeSpawnEncounter } from './danger.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { handleCutsceneIntent } from './entry.ts'
+import { maybeAutoHint } from './hints.ts'
 import {
   handleChallengeIntent, handleEncounterTalk, openEncounterCommand, spawnInstantiator,
   specFromCommandBody,
@@ -230,6 +231,13 @@ export async function playerIntent(
   // classifier pivot narrates after the action, never interleaved with it.
   if (result.status === 200) {
     const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
+    // Pacing: a stalled table gets the ladder without waiting for a client sweep. Best-effort
+    // and self-guarding (decideHint holds unless the streak earned the next rung).
+    try {
+      await maybeAutoHint(service, env, play.sessionId)
+    } catch (err) {
+      console.error('auto hint pass failed', err)
+    }
     try {
       const classified = await noteIntentForClassifier(service, env, play.sessionId, pillarKind)
       if (classified?.body.resolved === 'pivoted') {
