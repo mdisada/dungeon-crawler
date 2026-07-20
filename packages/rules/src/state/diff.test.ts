@@ -52,6 +52,23 @@ describe('applyDiff', () => {
     const state = applyDiff(initialGameState(), { domain: 'dm', patch: null })
     expect(state.dm).toBeNull()
   })
+
+  it('encounter opens with a full patch, merges progress, and closes with null', () => {
+    let state = initialGameState()
+    state = applyDiff(state, {
+      domain: 'encounter',
+      patch: {
+        id: 'e1', kind: 'skill_challenge', label: 'Cross the rapids', stakes: 'The ferry sinks',
+        progress: { successes: 0, failures: 0 }, contributions: {}, startedAt: '2026-07-19T00:00:00Z',
+      },
+    })
+    expect(state.encounter?.kind).toBe('skill_challenge')
+    state = applyDiff(state, { domain: 'encounter', patch: { progress: { successes: 1 }, contributions: { c1: 1 } } })
+    expect(state.encounter?.progress).toEqual({ successes: 1, failures: 0 })
+    expect(state.encounter?.contributions).toEqual({ c1: 1 })
+    state = applyDiff(state, { domain: 'encounter', patch: null })
+    expect(state.encounter).toBeNull()
+  })
 })
 
 describe('mode transitions from scripted diff sequences', () => {

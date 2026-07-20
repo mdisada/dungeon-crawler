@@ -1,0 +1,92 @@
+// Puzzle engine (encounter-states Slice 5): authored secret solution + 2-4 progress steps,
+// each with an unlockable hint, and a bounded budget of mistakes. Pure counting - the server
+// feeds it the Puzzle Judge's scored attempt and acts on the returned status. Hints pace
+// teamwork: they unlock on step completion or when a DIFFERENT PC takes over.
+
+export type PuzzleAttemptResult = 'solves' | 'advances_step' | 'mistaken'
+export type PuzzleStatus = 'ongoing' | 'solved' | 'exhausted'
+
+export interface PuzzleProgress {
+  stepsTotal: number
+  stepsDone: number
+  /** Remaining mistaken attempts before the fail consequence executes. */
+  attemptsLeft: number
+  /** Hints revealed so far (never exceeds stepsTotal). */
+  hintsUnlocked: number
+  lastAttemptBy: string | null
+  contributions: Record<string, number>
+  /** Party roster at open time; the full tier requires each to attempt at least once. */
+  activePcIds: string[]
+}
+
+export interface PuzzleSeed {
+  stepsTotal: number
+  maxAttempts: number
+  activePcIds: string[]
+}
+
+const clampCount = (n: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(n)))
+
+export function newPuzzle(seed: PuzzleSeed): PuzzleProgress {
+  return {
+    stepsTotal: clampCount(seed.stepsTotal, 1, 4),
+    stepsDone: 0,
+    attemptsLeft: clampCount(seed.maxAttempts, 1, 10),
+    hintsUnlocked: 0,
+    lastAttemptBy: null,
+    contributions: {},
+    activePcIds: seed.activePcIds,
+  }
+}
+
+export interface PuzzleAttemptOutcome {
+  state: PuzzleProgress
+  status: PuzzleStatus
+  /** A hint became visible this attempt - the narration should work it in. */
+  newHintUnlocked: boolean
+}
+
+/**
+ * Records one judged attempt:
+ * - `solves` ends the puzzle immediately (the party enacted the solution).
+ * - `advances_step` completes the current step; completing every step also solves it. Each
+ *   completed step unlocks a hint.
+ * - `mistaken` costs one attempt; running out is `exhausted` (the fail consequence fires).
+ * A DIFFERENT PC taking over from the previous attempt also unlocks a hint (teamwork pacing).
+ */
+export function recordPuzzleAttempt(
+  state: PuzzleProgress,
+  characterId: string,
+  result: PuzzleAttemptResult,
+): PuzzleAttemptOutcome {
+  const handover = state.lastAttemptBy !== null && state.lastAttemptBy !== characterId
+  const stepsDone = result === 'advances_step' ? Math.min(state.stepsDone + 1, state.stepsTotal) : state.stepsDone
+  const attemptsLeft = result === 'mistaken' ? state.attemptsLeft - 1 : state.attemptsLeft
+  const hintsUnlocked = Math.min(
+    state.stepsTotal,
+    Math.max(
+      state.hintsUnlocked + (handover ? 1 : 0),
+      result === 'advances_step' ? stepsDone : state.hintsUnlocked,
+    ),
+  )
+  const next: PuzzleProgress = {
+    ...state,
+    stepsDone,
+    attemptsLeft,
+    hintsUnlocked,
+    lastAttemptBy: characterId,
+    contributions: { ...state.contributions, [characterId]: (state.contributions[characterId] ?? 0) + 1 },
+  }
+  const status: PuzzleStatus =
+    result === 'solves' || stepsDone >= state.stepsTotal
+      ? 'solved'
+      : attemptsLeft <= 0
+        ? 'exhausted'
+        : 'ongoing'
+  return { state: next, status, newHintUnlocked: hintsUnlocked > state.hintsUnlocked }
+}
+
+/** Solved tier: full only when every active PC attempted at least once (decision 9). */
+export function puzzleSolvedTier(state: PuzzleProgress): 'full' | 'partial' {
+  return state.activePcIds.every((id) => (state.contributions[id] ?? 0) > 0) ? 'full' : 'partial'
+}

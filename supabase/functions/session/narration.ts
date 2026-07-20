@@ -9,8 +9,11 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { dialogueGateActive, dmSettings } from '../_shared/play/index.ts'
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
 import { runConsistency, runNarrator, runNarratorOptions } from './agents.ts'
-import type { AgentEnv } from './agents.ts'
-import { appendLinesDiff, newLine, typingDiff } from './orchestrate.ts'
+import type { AgentEnv, NarrationStyle } from './agents.ts'
+import { retrieveMemories } from './memory.ts'
+import {
+  appendLinesDiff, loadPartyCharacters, newLine, partyProfileLines, typingDiff,
+} from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
 import { assertOk, commitDiffs, loadContext, loadState, logEvent } from './util.ts'
 
@@ -41,28 +44,50 @@ export async function publishNarration(
   sessionId: string,
   prompt: string,
   fallback: string = MECHANICAL_FALLBACK,
+  style: NarrationStyle = 'beat',
 ): Promise<string> {
   const state = (await loadState(service, env.adventureId)).state
   const npcs = await adventureNpcs(service, env.adventureId)
   const npcStates = state.dm?.facts.npcStates ?? {}
   const facts = factSheet(state)
+  // Retrieval memory (Slice 7): long-form cutscenes ground on what past sessions established.
+  const memories = style === 'exposition' ? await retrieveMemories(service, env, prompt) : []
+  const memoryLines = memories.length > 0
+    ? `\n\nEstablished earlier (carry these forward, never contradict them):\n${memories.map((m) => `- ${m}`).join('\n')}`
+    : ''
+  // Personalization (2026-07-20): the narrator sees who the party members ARE, not just names.
+  const profiles = await partyProfileLines(service, await loadPartyCharacters(service, env.adventureId))
+  const partyLines = profiles.length > 0
+    ? `\n\nThe party (weave their traits and quirks in when relevant):\n${profiles.map((p) => `- ${p}`).join('\n')}`
+    : ''
+  // The narrator must see the same facts the checker holds it to, or it invents scenes
+  // the checker then rightly blocks (seen live: every idle nudge fell back to mechanical).
+  const grounded = `${prompt}\n\nEstablished scene facts - stay consistent with these:\n${facts}${partyLines}${memoryLines}`
+  const checkerFacts = `${facts}\nThe draft was instructed to: ${prompt}`
 
-  let text = await runNarrator(env, prompt)
-  let verdict = await runConsistency(env, text, npcs, npcStates, facts)
-  if (!verdict.ok) {
-    const constraint = verdict.violations.map((v) => `${v.claim} (${v.conflictsWith})`).join('; ')
-    await logEvent(service, env.adventureId, sessionId, 'consistency_blocked', {
-      draft: text, violations: constraint, stage: 'first',
-    })
-    text = env.demo ? fallback : await runNarrator(env, prompt, `NEVER: ${constraint}`)
-    verdict = await runConsistency(env, text, npcs, npcStates, facts)
+  let text: string
+  try {
+    text = await runNarrator(env, grounded, undefined, style)
+    let verdict = await runConsistency(env, text, npcs, npcStates, checkerFacts)
     if (!verdict.ok) {
-      await logEvent(service, env.adventureId, sessionId, 'incident', {
-        kind: 'consistency_double_failure',
-        violations: verdict.violations as unknown as Json,
+      const constraint = verdict.violations.map((v) => `${v.claim} (${v.conflictsWith})`).join('; ')
+      await logEvent(service, env.adventureId, sessionId, 'consistency_blocked', {
+        draft: text, violations: constraint, stage: 'first',
       })
-      text = fallback
+      text = env.demo ? fallback : await runNarrator(env, grounded, `NEVER: ${constraint}`, style)
+      verdict = await runConsistency(env, text, npcs, npcStates, checkerFacts)
+      if (!verdict.ok) {
+        await logEvent(service, env.adventureId, sessionId, 'incident', {
+          kind: 'consistency_double_failure',
+          violations: verdict.violations as unknown as Json,
+        })
+        text = fallback
+      }
     }
+  } catch (err) {
+    // A narrator outage must not leave typing:true locking every future intent.
+    await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
+    throw err
   }
 
   await recordProposal(service, {
@@ -92,10 +117,11 @@ export async function narrationBeat(
   sessionId: string,
   prompt: string,
   label: string,
+  style: NarrationStyle = 'beat',
 ): Promise<'published' | 'review_staged'> {
   const state = (await loadState(service, env.adventureId)).state
   if (!dialogueGateActive({ mode: env.mode, autoDialogue: dmSettings(state).autoDialogue })) {
-    await publishNarration(service, env, sessionId, prompt)
+    await publishNarration(service, env, sessionId, prompt, MECHANICAL_FALLBACK, style)
     return 'published'
   }
   await stageNarrationReview(service, env, sessionId, prompt, label)
@@ -114,8 +140,14 @@ export async function stageNarrationReview(
   const optionsPrompt = opts?.rejected?.length
     ? `${prompt}\nThe DM rejected these directions - offer genuinely different ones: ${opts.rejected.join(' | ')}`
     : prompt
-  const options = opts?.options ?? (await runNarratorOptions(env, optionsPrompt))
-  if (options.length === 0) throw new Error('Narrator produced no options')
+  let options: string[]
+  try {
+    options = opts?.options ?? (await runNarratorOptions(env, optionsPrompt))
+    if (options.length === 0) throw new Error('Narrator produced no options')
+  } catch (err) {
+    await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
+    throw err
+  }
   const review: PendingReviewState = {
     id: crypto.randomUUID(),
     kind: 'narration',

@@ -11,15 +11,19 @@ import {
 import type { CheckResult } from '../_shared/play/index.ts'
 import type { GameState, Json, PendingPromptState, PendingReviewState } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
+import type { ChallengeCheckStash } from './encounters.ts'
 import type { DoCheckStash } from './intent.ts'
 import { continueAfterCheck } from './npc-dialogue.ts'
 import type { SocialCheckStash } from './npc-dialogue.ts'
 import { narrationBeat } from './narration.ts'
-import { loadCharacter, loadPlayContext, pendingDiffs, skillModifierFor, typingDiff } from './orchestrate.ts'
+import {
+  appendLinesDiff, loadCharacter, loadPlayContext, newLine, pendingDiffs, skillModifierFor,
+  typingDiff,
+} from './orchestrate.ts'
 import type { NegotiateStash } from './story.ts'
 import { commitDiffs, loadState, logEvent } from './util.ts'
 
-type Stash = DoCheckStash | SocialCheckStash | NegotiateStash
+type Stash = DoCheckStash | SocialCheckStash | NegotiateStash | ChallengeCheckStash
 
 function currentPrompt(state: GameState, promptId: string): PendingPromptState | null {
   const pending = state.dialogue.pending
@@ -28,6 +32,26 @@ function currentPrompt(state: GameState, promptId: string): PendingPromptState |
 
 function currentStash(state: GameState): Stash | null {
   return (state.dm?.conversation.pendingContext as Stash | null) ?? null
+}
+
+/**
+ * The table sees every die (2026-07-20 playtest): a transcript line per rolled check -
+ * "Kestrel rolls investigation: 7 (d20 5 +2) - failure". The DC stays the DM's secret.
+ */
+function rollLine(
+  name: string,
+  skill: string,
+  result: CheckResult,
+  advDis?: 'none' | 'advantage' | 'disadvantage',
+  suffix = '',
+) {
+  const sign = result.modifier >= 0 ? '+' : ''
+  const adv = advDis === 'advantage' ? ', advantage' : advDis === 'disadvantage' ? ', disadvantage' : ''
+  return newLine(
+    null, null,
+    `${name} rolls ${skill}: ${result.total} (d20 ${result.d20} ${sign}${result.modifier}${adv})${suffix} - ` +
+      `${result.success ? 'success' : 'failure'}`,
+  )
 }
 
 /**
@@ -48,7 +72,7 @@ async function resolveOutcome(
     const ruling: PendingReviewState = {
       id: crypto.randomUUID(),
       kind: 'check_ruling',
-      actorName: stash.flow === 'do' ? stash.actorName : stash.utterance.actorName,
+      actorName: stash.flow === 'do' || stash.flow === 'challenge' ? stash.actorName : stash.utterance.actorName,
       skill: result.skill,
       total: result.total,
       dc: result.dc,
@@ -66,11 +90,27 @@ async function resolveOutcome(
     })
     return
   }
-  await continueAfterCheck(service, env, sessionId, stash, result, detail)
+  try {
+    await continueAfterCheck(service, env, sessionId, stash, result, detail)
+  } catch (err) {
+    // An agent failure here must not leave typing:true locking every future intent.
+    await commitDiffs(service, env.adventureId, () => [typingDiff(false)])
+    throw err
+  }
 }
 
-/** The prompted actor (or a group member) rolls. Server-side dice, server-side modifiers. */
-export async function rollPending(service: SupabaseClient, adventureId: string, userId: string, promptId: string) {
+/**
+ * The prompted actor (or a group member) rolls. Server-side dice, server-side modifiers.
+ * `chosenSkill` picks among the prompt's offered skillOptions ("Does Investigation apply?"
+ * "Sure!") - anything outside the offer falls back to the prompt's primary skill.
+ */
+export async function rollPending(
+  service: SupabaseClient,
+  adventureId: string,
+  userId: string,
+  promptId: string,
+  chosenSkill?: string,
+) {
   const row = await loadState(service, adventureId)
   const guard = await loadPlayContext(service, adventureId, userId, row.state)
   if (!guard.ok) return { status: guard.status, body: { error: guard.error } }
@@ -82,20 +122,31 @@ export async function rollPending(service: SupabaseClient, adventureId: string, 
   const character = await loadCharacter(service, play.member.character_id)
   if (!character) return { status: 403, body: { error: 'Character not found' } }
   const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
-  const dc = stash.flow === 'do' ? stash.spec.dc : stash.dc
 
   if (prompt.kind === 'check') {
     if (prompt.actorCharacterId !== character.id) {
       return { status: 403, body: { error: 'This check belongs to another player' } }
     }
-    const modifier = skillModifierFor(character, prompt.skill)
+    const offered = prompt.skillOptions?.length ? prompt.skillOptions : [prompt.skill]
+    const skill = chosenSkill && offered.some((s) => s.toLowerCase() === chosenSkill.toLowerCase())
+      ? chosenSkill.toLowerCase()
+      : prompt.skill
+    const dc = stash.flow === 'challenge'
+      ? (stash.dcBySkill?.[skill] ?? stash.dc)
+      : stash.flow === 'do' ? stash.spec.dc : stash.dc
+    const modifier = skillModifierFor(character, skill)
     const result = rollCheck(liveRng(), modifier, dc, prompt.advDis ?? 'none')
     await logEvent(service, adventureId, play.sessionId, 'check_rolled', {
-      character_id: character.id, skill: prompt.skill, total: result.total, dc, success: result.success,
+      character_id: character.id, skill, total: result.total, dc, success: result.success,
+      ...(skill !== prompt.skill ? { picked_from: offered as unknown as Json } : {}),
     })
-    await resolveOutcome(service, env, play.sessionId, stash, { ...result, skill: prompt.skill }, `${result.total} vs DC ${dc}`)
-    return { status: 200, body: { ok: true, total: result.total, success: result.success } }
+    await commitDiffs(service, adventureId, (s) => [
+      appendLinesDiff(s, [rollLine(character.name, skill, result, prompt.advDis)]),
+    ])
+    await resolveOutcome(service, env, play.sessionId, stash, { ...result, skill }, `${result.total} vs DC ${dc}`)
+    return { status: 200, body: { ok: true, total: result.total, success: result.success, skill } }
   }
+  const dc = stash.flow === 'do' ? stash.spec.dc : stash.dc
 
   if (prompt.kind === 'group') {
     if (!(prompt.memberCharacterIds ?? []).includes(character.id)) {
@@ -110,6 +161,9 @@ export async function rollPending(service: SupabaseClient, adventureId: string, 
     await logEvent(service, adventureId, play.sessionId, 'check_rolled', {
       character_id: character.id, skill: prompt.skill, total: result.total, dc, success: result.success, group: true,
     })
+    await commitDiffs(service, adventureId, (s) => [
+      appendLinesDiff(s, [rollLine(character.name, prompt.skill, result)]),
+    ])
     if (rolled.length < (prompt.memberCharacterIds ?? []).length) {
       await commitDiffs(service, adventureId, () => [
         { domain: 'dialogue', patch: { pending: { ...prompt, rolled } as unknown as Json } },
@@ -168,6 +222,9 @@ export async function claimAssist(service: SupabaseClient, adventureId: string, 
     by: character.id, for: prompt.primaryCharacterId, skill: prompt.skill,
     effect: prompt.effect, total: assist.total, success: assist.success,
   })
+  await commitDiffs(service, adventureId, (s) => [
+    appendLinesDiff(s, [rollLine(character.name, `${prompt.skill} (assist)`, assist)]),
+  ])
 
   const { mayAttempt, primaryAdvDis } = applyAssist(prompt.effect ?? 'bonus', assist)
   if (!mayAttempt) {
@@ -177,6 +234,7 @@ export async function claimAssist(service: SupabaseClient, adventureId: string, 
       `Narrate a fail-forward: ${character.name}'s ${prompt.skill} assist for ${stash.actorName} fails, ` +
         `so the attempt (${stash.interpretation}) never gets its chance. ${stash.consequencesHint}`,
       'Action outcome',
+      'outcome',
     )
     return { status: 200, body: { ok: true, assist_success: false, resolved: 'fail_forward' } }
   }
@@ -218,6 +276,9 @@ export async function resolvePending(service: SupabaseClient, adventureId: strin
       character_id: prompt.actorCharacterId, skill: prompt.skill, total: result.total, dc,
       success: result.success, auto: true,
     })
+    await commitDiffs(service, adventureId, (s) => [
+      appendLinesDiff(s, [rollLine(actor?.name ?? 'Someone', prompt.skill, result, 'none', ' (auto)')]),
+    ])
     await resolveOutcome(service, env, play.sessionId, stash, { ...result, skill: prompt.skill }, `${result.total} vs DC ${dc}, auto-rolled`)
     return { status: 200, body: { ok: true, resolved: 'auto_rolled' } }
   }
@@ -234,6 +295,9 @@ export async function resolvePending(service: SupabaseClient, adventureId: strin
         character_id: characterId, skill: prompt.skill, total: result.total, dc, success: result.success,
         group: true, auto: true,
       })
+      await commitDiffs(service, adventureId, (s) => [
+        appendLinesDiff(s, [rollLine(idle?.name ?? 'Someone', prompt.skill, result, 'none', ' (auto)')]),
+      ])
     }
     await finishGroup(service, env, play.sessionId, stash, prompt, rolled)
     return { status: 200, body: { ok: true, resolved: 'group_auto_completed' } }
@@ -249,6 +313,7 @@ export async function resolvePending(service: SupabaseClient, adventureId: strin
       `Narrate a fail-forward: nobody stepped in to help, so ${stash.actorName}'s attempt ` +
         `(${stash.interpretation}) cannot proceed as planned. ${stash.consequencesHint}`,
       'Action outcome',
+      'outcome',
     )
     return { status: 200, body: { ok: true, resolved: 'fail_forward' } }
   }

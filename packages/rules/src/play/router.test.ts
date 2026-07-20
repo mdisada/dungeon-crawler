@@ -22,8 +22,14 @@ describe('classifyIntent (deterministic - the fast path never reaches an LLM)', 
     expect(classifyIntent({ kind: 'say', skill: null, targetId: 'npc-9' }, noNpcs)).toBe('dialogue')
   })
 
-  it('routes say with no NPC in scene to free chat (F10 SS8)', () => {
-    expect(classifyIntent({ kind: 'say', skill: null, targetId: null }, noNpcs)).toBe('chat')
+  it('routes say with no NPC in scene to the Adjudicator - the DM answers, not silence', () => {
+    expect(classifyIntent({ kind: 'say', skill: null, targetId: null }, noNpcs)).toBe('adjudicate')
+    expect(classifyIntent({ kind: 'say', skill: null, targetId: null }, { mode: 'downtime', stagedNpcIds: [] })).toBe('adjudicate')
+  })
+
+  it('keeps say as free table chat mid-encounter (battle/puzzle)', () => {
+    expect(classifyIntent({ kind: 'say', skill: null, targetId: null }, { mode: 'battle', stagedNpcIds: [] })).toBe('chat')
+    expect(classifyIntent({ kind: 'say', skill: null, targetId: null }, { mode: 'puzzle', stagedNpcIds: [] })).toBe('chat')
   })
 
   it('routes free-text do to the Adjudicator and dm_command to the command handler', () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { parseBeatPlan } from './beats.ts'
 
-const ctx = { partySize: 2, partySkills: ['athletics', 'stealth', 'persuasion'] }
+const ctx = { partySize: 2, partySkills: ['athletics', 'stealth', 'persuasion'], milestones: ['guide_saved'] }
 
 const validBeat = {
   beat: {
@@ -12,28 +12,41 @@ const validBeat = {
     ingredient_requests: [{ type: 'clue', purpose: 'tracks that reveal the beast is wounded', pillar_tags: ['exploration'] }],
     braided: [{ goal_pair: [0, 1], link: { kind: 'dc_mod' }, skills: ['athletics', 'stealth'] }],
     narration_seed: 'The trail bends into the treeline; somewhere ahead, the guide coughs blood.',
+    encounter: {
+      kind: 'skill_challenge',
+      label: 'The chase through the treeline',
+      stakes: 'Lose the trail and the guide bleeds out',
+      rationale: 'physical pursuit',
+      on_success: ['beast_found'],
+      on_partial: ['party entered the lair'],
+      on_failure: [],
+    },
   },
 }
 
+const clone = () => JSON.parse(JSON.stringify(validBeat)) as typeof validBeat
+
 describe('parseBeatPlan', () => {
-  it('parses a full beat with predicate exits and a braided pair', () => {
+  it('parses a full beat with predicate exits, a braided pair, and an encounter spec', () => {
     const result = parseBeatPlan(validBeat, ctx)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.plan.goals).toHaveLength(2)
     expect(result.plan.braided).toHaveLength(1)
+    expect(result.plan.encounter?.kind).toBe('skill_challenge')
+    expect(result.plan.encounter?.onSuccess).toEqual(['beast_found'])
     expect(result.dropped).toEqual([])
   })
 
   it('rejects invalid exit predicates (same atoms as F04)', () => {
-    const bad = JSON.parse(JSON.stringify(validBeat)) as typeof validBeat
+    const bad = clone()
     bad.beat.exit_conditions = { whenever: true } as never
     const result = parseBeatPlan(bad, ctx)
     expect(result.ok).toBe(false)
   })
 
   it('drops braided pairs for solo parties instead of failing the beat', () => {
-    const result = parseBeatPlan(validBeat, { partySize: 1, partySkills: ctx.partySkills })
+    const result = parseBeatPlan(validBeat, { ...ctx, partySize: 1 })
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.plan.braided).toEqual([])
@@ -41,7 +54,7 @@ describe('parseBeatPlan', () => {
   })
 
   it('drops braided pairs needing skills the party lacks (composition gate, F08 SS10)', () => {
-    const bad = JSON.parse(JSON.stringify(validBeat)) as typeof validBeat
+    const bad = clone()
     bad.beat.braided[0].skills = ['arcana', 'stealth']
     const result = parseBeatPlan(bad, ctx)
     expect(result.ok).toBe(true)
@@ -51,7 +64,7 @@ describe('parseBeatPlan', () => {
   })
 
   it('drops braided pairs with out-of-range goal indexes', () => {
-    const bad = JSON.parse(JSON.stringify(validBeat)) as typeof validBeat
+    const bad = clone()
     bad.beat.braided[0].goal_pair = [0, 5]
     const result = parseBeatPlan(bad, ctx)
     expect(result.ok).toBe(true)
@@ -59,10 +72,57 @@ describe('parseBeatPlan', () => {
     expect(result.plan.braided).toEqual([])
   })
 
-  it('requires name, goals, and narration seed', () => {
+  it('requires name, goals, narration seed, and an encounter spec', () => {
     const result = parseBeatPlan({ beat: { goals: [] } }, ctx)
     expect(result.ok).toBe(false)
     if (result.ok) return
-    expect(result.errors.length).toBeGreaterThanOrEqual(3)
+    expect(result.errors.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('accepts outcome maps drawn from the objective vocabulary too', () => {
+    const withObjective = clone()
+    withObjective.beat.encounter.on_success = ['guide_saved']
+    const result = parseBeatPlan(withObjective, ctx)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.plan.encounter?.onSuccess).toEqual(['guide_saved'])
+  })
+
+  it('rejects outcome-map entries that are not exact authored atoms', () => {
+    const bad = clone()
+    bad.beat.encounter.on_success = ['Beast_Found']
+    const result = parseBeatPlan(bad, ctx)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some((e) => e.includes('Beast_Found'))).toBe(true)
+  })
+
+  it('rejects a spec whose on_success maps nothing despite available vocabulary', () => {
+    const bad = clone()
+    bad.beat.encounter.on_success = []
+    const result = parseBeatPlan(bad, ctx)
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects unknown encounter kinds', () => {
+    const bad = clone()
+    ;(bad.beat.encounter as { kind: string }).kind = 'boss_fight'
+    const result = parseBeatPlan(bad, ctx)
+    expect(result.ok).toBe(false)
+  })
+
+  it('allows empty outcome maps when there is no vocabulary at all', () => {
+    const sparse = {
+      beat: {
+        name: 'drift',
+        goals: ['Decide where to go next'],
+        narration_seed: 'The road forks.',
+        encounter: { kind: 'combat', label: 'Roadside ambush', stakes: '', on_success: [], on_partial: [], on_failure: [] },
+      },
+    }
+    const result = parseBeatPlan(sparse, { partySize: 2, partySkills: [] })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.plan.encounter?.onSuccess).toEqual([])
   })
 })

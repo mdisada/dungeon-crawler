@@ -1,0 +1,293 @@
+{
+  "adventureId": "0376580b-7482-419a-a42c-d2456a75d28e",
+  "adventure": {
+    "creator_id": "3474c845-e7fe-4907-8f67-78947266adf5",
+    "status": "active",
+    "min_players": 1,
+    "ending_scores": {},
+    "committed_ending_id": null
+  },
+  "state": {
+    "state": {
+      "dm": {
+        "facts": {
+          "npcStates": {}
+        },
+        "settings": {
+          "autoChecks": true,
+          "autoDialogue": true
+        },
+        "proposals": [
+          {
+            "id": "6458bc7e-639b-4265-9d66-f184033232ad",
+            "type": "narration",
+            "status": "auto_applied",
+            "summary": "Your spell fizzles, the intricate runes of your incantation scattering like snow",
+            "createdAt": "2026-07-18T12:39:17.364258+00:00"
+          },
+          {
+            "id": "e35078c3-147f-4508-8ef8-b5ea92cd557d",
+            "type": "ruling",
+            "status": "auto_applied",
+            "summary": "check: The player character, Harry Pottah, wants to attack the Fros",
+            "createdAt": "2026-07-18T12:38:32.774622+00:00"
+          },
+          {
+            "id": "1fa6a315-e61f-413b-b03a-01fb8090f375",
+            "type": "narration",
+            "status": "auto_applied",
+            "summary": "A shiver, colder than the glacial air, races down your spine as you step into th",
+            "createdAt": "2026-07-18T12:37:11.656008+00:00"
+          },
+          {
+            "id": "bfea5444-18aa-411e-b222-0d129526188a",
+            "type": "narration_options",
+            "status": "auto_applied",
+            "summary": "options: Harry ventures into the glacier, immediately encountering a ...",
+            "createdAt": "2026-07-18T12:37:08.811007+00:00"
+          }
+        ],
+        "objectives": [
+          {
+            "id": "543f9431-be9c-4e40-88ce-301638035082",
+            "state": "active",
+            "title": "Seek the Luminescent Moss",
+            "hidden": false
+          },
+          {
+            "id": "eda3a05e-2a87-4da1-b767-55ac8748f16e",
+            "state": "hidden",
+            "title": "Journey into the Whispering Glacier",
+            "hidden": true
+          },
+          {
+            "id": "a5670f65-4218-4624-8837-37042b40259e",
+            "state": "hidden",
+            "title": "Survive the Glacier's Dangers",
+            "hidden": true
+          },
+          {
+            "id": "d044af99-2b78-4273-b179-5107db16a2e1",
+            "state": "hidden",
+            "title": "Reach the Sunken Caves",
+            "hidden": true
+          },
+          {
+            "id": "a3a93012-f1b9-432d-9614-77ac3ec289d4",
+            "state": "hidden",
+            "title": "Understand Kaelen's Influence",
+            "hidden": true
+          },
+          {
+            "id": "9a503321-a968-474b-95e1-22af668c6db7",
+            "state": "hidden",
+            "title": "Return to Oakhaven",
+            "hidden": true
+          }
+        ],
+        "conversation": {
+          "topicStack": [],
+          "revealedThisScene": []
+        }
+      },
+      "scene": {
+        "day": 1,
+        "mode": "narration",
+        "locationId": "a268e40d-6568-4674-a238-6c1107133cc7",
+        "musicTrack": null,
+        "activeVisual": "background",
+        "locationName": "New location"
+      },
+      "combat": null,
+      "players": {
+        "gold": 0,
+        "list": [
+          {
+            "hp": {
+              "max": 8,
+              "temp": 0,
+              "current": 8
+            },
+            "name": "Harry Pottah",
+            "userId": "b854aee4-ae36-46c2-88db-98334e18e0fd",
+            "connected": false,
+            "conditions": [],
+            "characterId": "f0e94a2d-48ac-4e21-8d98-b264c739f02e"
+          }
+        ]
+      },
+      "session": {
+        "id": "9c3cd02f-564c-48dd-a2bc-8dd4a637d0d2",
+        "index": 1,
+        "recap": "The biting wind howls a mournful song around Oakhaven. For months, an unnatural winter has gripped the land, its icy tendrils strangling the life from your village. Supplies dwindle, and the gnawing hunger is but one of many fears. Whispers speak of Kaelen, an ancient power slumbering deep within the encroaching glacier, whose displeasure has brought this eternal frost. A desperate plea echoes: venture into the perilous, frozen heart of the elemental's domain, for a chance at salvation.",
+        "status": "active"
+      },
+      "dialogue": {
+        "lines": [
+          {
+            "id": "recap-9c3cd02f-564c-48dd-a2bc-8dd4a637d0d2",
+            "text": "The biting wind howls a mournful song around Oakhaven. For months, an unnatural winter has gripped the land, its icy tendrils strangling the life from your village. Supplies dwindle, and the gnawing hunger is but one of many fears. Whispers speak of Kaelen, an ancient power slumbering deep within the encroaching glacier, whose displeasure has brought this eternal frost. A desperate plea echoes: venture into the perilous, frozen heart of the elemental's domain, for a chance at salvation.",
+            "npcId": null,
+            "speaker": null
+          },
+          {
+            "id": "aa0fdf3c-1752-45db-b973-9ae6fb5d0521",
+            "text": "A shiver, colder than the glacial air, races down your spine as you step into the cavern's glacial maw. Before you, a hulking figure of jagged ice and swirling snow coalesces, its eyes twin points of frigid blue light fixated solely on you. You can feel its raw, elemental power radiating outwards, a palpable force that promises to freeze the very marrow in your bones.",
+            "npcId": null,
+            "speaker": null
+          },
+          {
+            "id": "c8eb9ba5-1768-4b3a-ae64-0a8ffaa56077",
+            "text": "I attack it",
+            "npcId": null,
+            "speaker": "Harry Pottah"
+          },
+          {
+            "id": "e97ac34b-92a0-41cf-8542-4cdcd8f581e7",
+            "text": "Your spell fizzles, the intricate runes of your incantation scattering like snowflakes. The Frostheart Elemental seizes the moment, raw, frigid energy erupting from its core. An icy wave washes over you, and a brittle shell of frost encases your limbs, holding you fast.",
+            "npcId": null,
+            "speaker": null
+          }
+        ],
+        "typing": false,
+        "openings": [],
+        "speakers": [],
+        "activeLineId": "e97ac34b-92a0-41cf-8542-4cdcd8f581e7"
+      },
+      "objectives": {
+        "list": [
+          {
+            "id": "543f9431-be9c-4e40-88ce-301638035082",
+            "state": "active",
+            "title": "Seek the Luminescent Moss"
+          }
+        ],
+        "offers": [],
+        "quests": [],
+        "currentId": "543f9431-be9c-4e40-88ce-301638035082"
+      }
+    },
+    "state_version": 24
+  },
+  "objectives": [
+    {
+      "id": "d044af99-2b78-4273-b179-5107db16a2e1",
+      "reveal_state": "hidden"
+    },
+    {
+      "id": "a3a93012-f1b9-432d-9614-77ac3ec289d4",
+      "reveal_state": "hidden"
+    },
+    {
+      "id": "9a503321-a968-474b-95e1-22af668c6db7",
+      "reveal_state": "hidden"
+    },
+    {
+      "id": "eda3a05e-2a87-4da1-b767-55ac8748f16e",
+      "reveal_state": "hidden"
+    },
+    {
+      "id": "a5670f65-4218-4624-8837-37042b40259e",
+      "reveal_state": "hidden"
+    },
+    {
+      "id": "543f9431-be9c-4e40-88ce-301638035082",
+      "reveal_state": "active"
+    }
+  ],
+  "ingredients": [
+    {
+      "id": "8cbbfdd6-a96f-4038-9cfc-59967eb5c8d5",
+      "discovered": false
+    },
+    {
+      "id": "993d578c-08cc-462b-934d-2694d4fe8a61",
+      "discovered": false
+    },
+    {
+      "id": "59a609ae-4ab8-4894-83ae-d5e0dc8650d5",
+      "discovered": false
+    },
+    {
+      "id": "5717eb29-4baf-4a2e-bd8e-8ccfdb4dad4a",
+      "discovered": false
+    },
+    {
+      "id": "c048b2c1-b819-4af1-8c72-e41c33b8ee44",
+      "discovered": false
+    },
+    {
+      "id": "d22d0187-2568-41a2-963f-55555b8c853b",
+      "discovered": false
+    },
+    {
+      "id": "52891cd2-ce13-4f7e-a0b8-a679add52278",
+      "discovered": false
+    }
+  ],
+  "endings": [
+    {
+      "id": "50a08a67-80fd-41a0-be9b-76cb206cdcf9",
+      "status": "candidate"
+    },
+    {
+      "id": "da8f3032-58c3-48ad-9466-8c2117c49889",
+      "status": "candidate"
+    },
+    {
+      "id": "d96cfe66-63e2-46af-a024-270c52b53a76",
+      "status": "candidate"
+    },
+    {
+      "id": "3c39284a-9a62-49ab-aa8c-5d29707e2323",
+      "status": "candidate"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "9c3cd02f-564c-48dd-a2bc-8dd4a637d0d2",
+      "ended_at": null
+    }
+  ],
+  "core_loops": [],
+  "beats": [],
+  "npc_dispositions": [],
+  "meta_loop": null,
+  "ids": {
+    "quest_offers": [],
+    "hooks": [
+      "193e5ce9-be3e-439e-ac2d-973775382502",
+      "c22aad99-a120-4b8a-8a71-c13717c068db",
+      "42c8e399-b90d-49fe-b7d0-7ea58f6c7282",
+      "8d89fbf3-593a-417d-a354-d0b8c397fa63",
+      "582bb956-c2c0-4ccf-9b4f-2bee5843d099",
+      "318606f2-3c97-4e09-9497-a2b83a159296",
+      "89c226f2-5fc2-4d90-898d-06993c097854",
+      "9f5ab74a-2541-442f-b368-b1f3943406c3",
+      "852e5df1-3f6b-4c0c-9ffe-39ad53b82c6c",
+      "e6257458-b68e-44d3-bec0-4f1aeb6bea44"
+    ],
+    "proposals": [
+      "6458bc7e-639b-4265-9d66-f184033232ad",
+      "e35078c3-147f-4508-8ef8-b5ea92cd557d",
+      "1fa6a315-e61f-413b-b03a-01fb8090f375",
+      "bfea5444-18aa-411e-b222-0d129526188a"
+    ],
+    "npc_interactions": [],
+    "checkpoints": [
+      "2df72551-13aa-4269-9bd0-d50bdb906eac"
+    ],
+    "adventure_members": [
+      "aad08e17-8f14-47bd-95aa-3cbd3d2d864c",
+      "7214df8e-edca-4c54-a139-3589554aa76e"
+    ]
+  },
+  "eventWatermark": 564,
+  "created": {
+    "userId": "861c11d7-f273-4094-871e-b41563f5996f",
+    "email": "storysim-1784474436009@example.com",
+    "password": "Test-password-1784474433009!",
+    "characterId": "060ea3f6-1e3c-437e-838d-9e89f297c4e9",
+    "contractId": "2edad55c-4b11-4b81-b177-1bbde5579b30"
+  }
+}

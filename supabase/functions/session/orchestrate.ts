@@ -21,12 +21,19 @@ export interface CharacterRow {
   name: string
   level: number
   class_key: string | null
+  race_key: string | null
+  background_key: string | null
   abilities: AbilityScores
   ability_bonuses: Partial<Record<AbilityKey, number>>
   skill_proficiencies: string[]
+  personality: Json
+  freeform_text: string | null
+  background_narrative: string | null
 }
 
-export const CHARACTER_COLUMNS = 'id, user_id, name, level, class_key, abilities, ability_bonuses, skill_proficiencies'
+export const CHARACTER_COLUMNS =
+  'id, user_id, name, level, class_key, race_key, background_key, abilities, ability_bonuses, ' +
+  'skill_proficiencies, personality, freeform_text, background_narrative'
 
 export interface PlayContext {
   adventure: AdventureRow
@@ -75,6 +82,18 @@ export async function loadCharacter(service: SupabaseClient, characterId: string
   return data as CharacterRow | null
 }
 
+/** Non-spectator player character ids - the roster group prompts and encounters draw from. */
+export async function activePcIds(service: SupabaseClient, adventureId: string): Promise<string[]> {
+  const { data, error } = await service
+    .from('adventure_members')
+    .select('character_id, spectator, role')
+    .eq('adventure_id', adventureId)
+  assertOk(error, 'members load failed')
+  return (data ?? [])
+    .filter((m) => m.role === 'player' && !m.spectator && m.character_id)
+    .map((m) => m.character_id as string)
+}
+
 export async function loadPartyCharacters(service: SupabaseClient, adventureId: string): Promise<CharacterRow[]> {
   const { data: members, error } = await service
     .from('adventure_members')
@@ -100,6 +119,67 @@ export function skillModifierFor(character: CharacterRow, skill: string): number
 
 export function partySkillList(characters: CharacterRow[]): string[] {
   return [...new Set(characters.flatMap((c) => c.skill_proficiencies ?? []))]
+}
+
+const clean = (s: string) => s.replace(/\s+/g, ' ').trim()
+
+/** String leaves of the freeform personality jsonb, capped - quirks, not essays. */
+function personalityBits(personality: Json): string[] {
+  const bits: string[] = []
+  const walk = (value: Json) => {
+    if (bits.length >= 3) return
+    if (typeof value === 'string' && value.trim()) bits.push(clean(value).slice(0, 70))
+    else if (Array.isArray(value)) value.forEach(walk)
+    else if (typeof value === 'object' && value !== null) Object.values(value).forEach(walk)
+  }
+  walk(personality)
+  return bits
+}
+
+/**
+ * One personalization line per character (2026-07-20 playtest): species + traits (a dwarf's
+ * Darkvision must count when adjudicating darkness), background, and quirks - fed to the
+ * Adjudicator, Narrator, NPC bundle, and Beat Planner so play reads and rules personal.
+ */
+export async function characterProfiles(
+  service: SupabaseClient,
+  characters: CharacterRow[],
+): Promise<Record<string, string>> {
+  const raceKeys = [...new Set(characters.map((c) => c.race_key).filter((k): k is string => Boolean(k)))]
+  const { data } = raceKeys.length > 0
+    ? await service.from('srd_races').select('key, name, traits').in('key', raceKeys)
+    : { data: [] }
+  const races = new Map(
+    ((data ?? []) as { key: string; name: string; traits: Json }[]).map((r) => [r.key, r]),
+  )
+  const profiles: Record<string, string> = {}
+  for (const c of characters) {
+    const race = c.race_key ? races.get(c.race_key) : undefined
+    const traits = (Array.isArray(race?.traits) ? race!.traits : [])
+      .flatMap((t): string[] => {
+        if (typeof t !== 'object' || t === null || Array.isArray(t)) return []
+        const trait = t as { name?: Json; desc?: Json }
+        if (typeof trait.name !== 'string' || ['Size', 'Speed'].includes(trait.name)) return []
+        const desc = typeof trait.desc === 'string' ? ` (${clean(trait.desc).slice(0, 90)})` : ''
+        return [`${trait.name}${desc}`]
+      })
+      .slice(0, 4)
+    const quirks = personalityBits(c.personality ?? null)
+    if (c.freeform_text?.trim()) quirks.push(clean(c.freeform_text).slice(0, 100))
+    profiles[c.id] =
+      `${c.name} - ${race?.name ?? 'human'} ${c.class_key ?? 'adventurer'}` +
+      `${c.background_key ? ` (${c.background_key} background)` : ''}, level ${c.level}.` +
+      (traits.length > 0 ? ` Species traits: ${traits.join('; ')}.` : '') +
+      (quirks.length > 0 ? ` Personality/quirks: ${quirks.slice(0, 4).join('; ')}.` : '') +
+      (c.background_narrative?.trim() ? ` Backstory: ${clean(c.background_narrative).slice(0, 120)}.` : '')
+  }
+  return profiles
+}
+
+/** Convenience: the whole party's profile lines (order preserved). */
+export async function partyProfileLines(service: SupabaseClient, characters: CharacterRow[]): Promise<string[]> {
+  const profiles = await characterProfiles(service, characters)
+  return characters.map((c) => profiles[c.id]).filter(Boolean)
 }
 
 export function newLine(speaker: string | null, npcId: string | null, text: string): DialogueLine {

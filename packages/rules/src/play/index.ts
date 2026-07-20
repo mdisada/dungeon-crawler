@@ -28,6 +28,21 @@ export {
 export type { CheckGateContext, DialogueGateContext } from './review.ts'
 export { liveRng, rollDie, seededRng } from './rng.ts'
 export type { Rng } from './rng.ts'
+export {
+  DANGER_MAX, dangerScore, fallbackEncounterTable, parseEncounterTable, pickWeighted, rollSpawn,
+  spawnThreshold,
+} from './danger.ts'
+export type { DangerModifiers, EncounterTableEntry, SpawnRoll } from './danger.ts'
+export { DEFAULT_HINT_TURNS, decideHint } from './hints.ts'
+export type { HintDecisionInput, HintRung } from './hints.ts'
+export { newPuzzle, puzzleSolvedTier, recordPuzzleAttempt } from './puzzle.ts'
+export type {
+  PuzzleAttemptOutcome, PuzzleAttemptResult, PuzzleProgress, PuzzleSeed, PuzzleStatus,
+} from './puzzle.ts'
+export {
+  challengeStatus, DC_ESCALATION_PER_REPEAT, escalatedDc, newSkillChallenge, recordAttempt,
+} from './skill-challenge.ts'
+export type { AttemptOutcome, ChallengeSeed, ChallengeStatus, SkillChallengeState } from './skill-challenge.ts'
 export { classifyIntent } from './router.ts'
 export type { RouterScene } from './router.ts'
 export {

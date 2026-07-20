@@ -18,11 +18,12 @@ export function mergePatch(target: Json, patch: Json): Json {
   return base
 }
 
-const NULLABLE_DOMAINS: readonly DiffDomain[] = ['combat', 'dm']
+const NULLABLE_DOMAINS: readonly DiffDomain[] = ['combat', 'dm', 'encounter']
 
 /**
- * Applies one diff to a GameState. For nullable domains (combat, dm) a `null` patch clears
- * the domain outright; for the rest, null resets nothing (the writer never emits it).
+ * Applies one diff to a GameState. For nullable domains (combat, dm, encounter) a `null`
+ * patch clears the domain outright; for the rest, null resets nothing (the writer never
+ * emits it).
  */
 export function applyDiff(state: GameState, diff: StateDiff): GameState {
   const current = state[diff.domain] as Json

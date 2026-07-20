@@ -1,0 +1,1141 @@
+=== FULL-GAME SIMULATION on "Whispers from the Deep" (8e70fe49-7c0c-4b10-bbf6-d027699631af) - 2026-07-19T13:29:42.617Z ===
+LLM player (deepseek-v4-flash) vs the deployed full-AI DM. Max 30 turns / 7 min per segment.
+
+(playing as Harry Pottah, a cloned copy of an existing character)
+(seeded a temporary entry contract via Old Man Hemlock - the guide predates Stage 6 contracts)
+(closed lingering open session 29a98821-5980-4813-9b7e-219fa1659821 - will be restored)
+--- SETUP: session start ---
+DM: You stand on the damp, wooden planks of a remote dock. A thick, salty fog clings to the air, muffling the mournful creak of timber and the distant, unsettling whispers of the islanders. The chill of the Aethelian Archipelago seeps into your bones. The atmosphere is heavy with a sense of decay and quiet dread. As the oppressive silence settles, a figure emerges from the mist—an old man, his face a roadmap of worry, clutching a tattered map. He approaches your group with urgent, pleading eyes.
+DM: Offer: Navigate the Whispering Mists (Old Man Hemlock) - 40 gp
+DM: Hemlock unfurls the tattered map with trembling fingers, tracing a winding route through the fog-choked straits beyond the dock. "The Whispering Mists—they're choking the northern isles, getting worse by the day, and no sailor dares pass through them without a guide willing to chart a path." His voice cracks as his piercing gaze locks onto each of you in turn. "Forty gold pieces. That's what I can scrape together, but if this goes unanswered much longer, the whole archipelago suffers." His hand stays outstretched, the map quivering in the wind, waiting for one of you to speak.
+   [offer_staged]
+
+--- turn 1 ---
+>> HARRY POTTAH (say): I'll take the job, Mr. Hemlock. Forty gold's fair for a path through them mists—point me to your boat and I'll chart the way.
+Harry Pottah: I'll take the job, Mr. Hemlock. Forty gold's fair for a path through them mists—point me to your boat and I'll chart the way.
+DM: Contract accepted: Navigate the Whispering Mists (Old Man Hemlock) - 40 gp
+DM: Old Man Hemlock's weathered face crumples with a mixture of profound relief and deep-seated anxiety. He nods vigorously, pushing the tattered map into your hands. "The *Rising Star* is your vessel, just down the pier. The crew knows the basics, but they're... rattled. The whispers have been bad lately." His voice drops to a conspiratorial hush. "Whatever you do, don't let the fog get in their heads. It listens."
+
+The *Rising Star* cuts into a bank of thick, opalescent mist that muffles sound and swallows light. Disturbing whispers, seemingly sourced from the water itself, crawl into your minds. Ahead, the fog shimmers, revealing ghostly, jagged silhouettes of rock at impossible angles that shift when looked at directly. Crew members clutch their heads, murmuring about 'seeing their faces in the rocks.' As Testiclese notices the helmsman frozen at the wheel, muttering a forgotten sea shanty with fearful, glassy eyes, Harry Pottah spots an arcane sigil flickering faintly deep within the mist—a potential key to navigating this psychic labyrinth. The ship drifts, caught between a psychic hazard and a physical one.
+
+The ship is adrift in a treacherous fog that warps perception and feeds on fear. You must chart a course through the treacherous, psychically-charged mist before the *Rising Star* is wrecked on the rocks or the crew's sanity is completely eroded. Do you steer toward the flickering sigil, attempt to break the helmsman's trance, or try a different approach to guide the ship through?
+   [offer_accepted]
+   [beat_opened] name=The Piercing Veil trigger=quest_accepted
+
+--- turn 2 ---
+>> HARRY POTTAH (do): I stride to the helmsman, grab his shoulders firmly, and shout the first line of the shanty back at him—loud and clear—to snap him out of it. Then I spin the wheel hard toward the flickering sigil.
+Harry Pottah: I stride to the helmsman, grab his shoulders firmly, and shout the first line of the shanty back at him—loud and clear—to snap him out of it. Then I spin the wheel hard toward the flickering sigil.
+DM: Your voice slices through the murmuring fog like a gaff hook—gruff and raw and unmistakably *present*. The helmsman's glassy eyes snap wide, his fingers spasming on the wheel as recognition floods back. For a breath, the whispers recede. Harry yanks the wheel hard amidships, and the *Rising Star* groans, turning its bow toward the pulsing sigil just as the fog seems to *tighten* around it, the arcane light flickering faster—almost like a warning. The crew gasps, some with relief, others with a new, sharper terror: the rocks are shifting closer, and the sigil's glow is pulsing in a rhythm that might be a pattern… or a trap.
+   [entry_mapped]
+   [scene_travel] name=Aethelian Archipelago proposed=Aethelian Archipelago
+   [encounter_opened] label=Navigate the Psychic Mists
+
+--- turn 3 ---
+>> HARRY POTTAH (do): I squint at the pulsing sigil, counting the flickers—if it's a pattern, I'll time our approach between the pulses; if it's a trap, I'll shout for the crew to brace for impact and heave the wheel hard to starboard.
+Harry Pottah: I squint at the pulsing sigil, counting the flickers—if it's a pattern, I'll time our approach between the pulses; if it's a trap, I'll shout for the crew to brace for impact and heave the wheel hard to starboard.
+   [check_prompted] skill=investigation
+DM: Your eyes strain against the opalescent gloom, trying to parse the sigil's erratic pulse. The fog seems to drink the light, and the shifting rock formations in the periphery make your head swim. The pattern dissolves into meaningless, frantic flickering—you can't tell if the rhythm is a key or a countdown. As you hesitate, the ship's momentum carries you directly toward the brightest point of the glow. The water around the sigil suddenly boils, and a low, resonant hum vibrates through the hull, vibrating in your teeth and making the deck plates rattle. The helmsman screams, pointing at the water now churning with dark, swirling shapes beneath the surface.
+   [check_rolled] skill=investigation total=8 success=false
+   [encounter_attempt] skill=investigation success=false
+
+--- turn 4 ---
+>> HARRY POTTAH (do): I release the wheel and grab the tattered map from my pocket, holding it up to the sigil's glow—if the ink reacts to its pattern, it might show the true course, not the trap.
+Harry Pottah: I release the wheel and grab the tattered map from my pocket, holding it up to the sigil's glow—if the ink reacts to its pattern, it might show the true course, not the trap.
+   [check_prompted] skill=arcana
+DM: The ink on the tattered map does not glow with clarity. Instead, it bleeds into a dark, spreading stain that seems to pulsate against the sigil's light, mirroring its frantic, warning rhythm. A single, legible line of acid-stained text burns through the paper: ***"The depths remember the drowned."*** The *Rising Star* shudders violently as the churning shapes beneath the water rise—dark, slicked forms that scrape against the hull with a sound like grinding
+   [check_rolled] skill=arcana total=5 success=false
+   [encounter_attempt] skill=arcana success=false
+   [story_event] tag=party encountered fog
+   [milestone_reached] milestone=party encountered fog
+   [encounter_resolved] label=Navigate the Psychic Mists
+   [ending_leading_changed] to=0c30c583-2b05-452f-9c47-5c047a00b0cf
+
+--- turn 5 ---
+>> HARRY POTTAH (do): I shove the map back into my pocket and bellow for the crew to drop anchor and brace against the starboard rail, then I grab a lantern and hurl it over the bow toward the sigil—if it's a trap, the light might reveal the true threat beneath.
+Harry Pottah: I shove the map back into my pocket and bellow for the crew to drop anchor and brace against the starboard rail, then I grab a lantern and hurl it over the bow toward the sigil—if it's a trap, the light might reveal the true threat beneath.
+DM: The lantern arcs through the grey air, its flame guttering, then bursts against the water in a shower of sparks and oil-fire. For three heartbeats, the sigil's unnatural glow is outshone by honest flame—and in that blaze, you see them. *Bodies*. Scores of them, tangled together in a massive, writhing knot beneath the surface, their mouths open in silent screams, their eyes—every last one—staring directly up at the *Rising Star*. The anchor chain screams as someone heaves it overboard, but the dark mass is already surging upward, breaking the surface ten yards off the starboard bow, reaching with blackened fingers for the railing. The sigil above them goes dark. Testiclese stands frozen at the mast, hands white-knuckled on the rigging, while the crewThe request was rejected because it was considered high risk
+   [entry_mapped]
+   [encounter_opened] label=Navigate the Psychic Mists
+
+--- turn 6 ---
+>> HARRY POTTAH (do): We press on with the task at hand.
+Harry Pottah: We press on with the task at hand.
+   [check_prompted] skill=insight
+DM: You press forward through the psychic mists, but the mental effort recoils—the horrors you've witnessed crystallize into a vicious feedback loop. Drowned faces press against the glass of your mind's eye, mouths moving in silent accusation, and the mist thickens into near-total invisibility. Somewhere behind you, a crewman begins to laugh—a thin, broken sound that spirals upward into choking sobs. The *Rising Star* lurches as unseen currents drag it off course, and for a terrible moment you can hear the crunch of hull plating from below, something ancient and patient pulling at the ship's belly in the dark.
+   [check_rolled] skill=insight total=10 success=false
+   [encounter_attempt] skill=insight success=false
+
+--- turn 7 ---
+>> HARRY POTTAH (do): I grab a coil of rope, tie it to the mast, and hand the end to the nearest crewman, shouting for everyone to form a human chain along the port rail—then I bellow a direct command to the helmsman to steer hard toward the sound of the broken laughter, hoping the source of the madness is a weakness we can exploit.
+Harry Pottah: I grab a coil of rope, tie it to the mast, and hand the end to the nearest crewman, shouting for everyone to form a human chain along the port rail—then I bellow a direct command to the helmsman to steer hard toward the sound of the broken laughter, hoping the source of the madness is a weakness we can exploit.
+   [check_prompted] skill=investigation
+DM: The *Rising Star* groans, a deep, structural protest as unseen currents and the dragging weight below tear it off course. Your command to steer toward the laughter is answered only by a new, closer sound: the splintering crack of the starboard railing giving way as the first of the drowned hauls itself over the side, dripping brine and trailing kelp, its empty eyes fixed on the helmsman. The human chain strains, a living tether against the ship’s erratic lurch, but the crewman at its end is pulled screaming from his feet and dragged toward the gunwale. The psychic fog presses in, no longer just a veil but a palpable pressure, and the broken laughter you sought now seems to come from everywhere at once—from the mists, from the writhing shapes in the water, and from the mouth of the crewman convulsing on the deck. You are no longer navigating the mists; you are being swallowed by them, and the ship is coming apart. Do you rally to fight the boarding dead at the rail, cut the anchor chain to free the ship from the abyssal weight below, or try to silence the laughter that now echoes from your own crew's lips?
+   [check_rolled] skill=investigation total=8 success=false
+   [encounter_attempt] skill=investigation success=false
+   [encounter_resolved] label=Navigate the Psychic Mists
+
+--- turn 8 ---
+>> HARRY POTTAH (do): I draw my wand and cast Incendio at the mass of drowned clinging to the starboard rail, aiming the jet of flame to buy the crew time while I shout 'Cut the anchor chain—now!'
+Harry Pottah: I draw my wand and cast Incendio at the mass of drowned clinging to the starboard rail, aiming the jet of flame to buy the crew time while I shout 'Cut the anchor chain—now!'
+DM: The wand spat fire, a searing orange lance that licked across the mass of drowned clinging to the rail. They shrieked—a sound of wet, grinding stone—and recoiled, their forms smoldering and jerking back. The heat does not dispel the mist, but it buys a few precious seconds. The crewman you handed the rope to now staggers toward the anchor winch, his hands fumbling with the mechanism, his eyes wide and unfocused. The laughter echoes louder, closer, and the ship lurches again as something heavy and barnacled scrapes against the hull below. Do you hold the line with more fire, guard the crewman at the winch, or turn to face the helmsman, whose head has begun to tilt at an unnatural angle?
+   [entry_mapped]
+   [encounter_opened] label=Navigate the Psychic Mists
+
+!! time box reached - stopping at turn 9
+
+=== SEGMENT END: STORY STATE ===
+objective: Navigate the Whispering Mists [active]
+objective: Investigate Oakhaven Village [hidden]
+objective: Find the Derelict Vessel [hidden]
+objective: Explore the Phosphorescent Cove [hidden]
+ending: The Whispering Echo [leading]
+ending: The Chorus of Madness [candidate]
+ending: Sanity's Price [candidate]
+ending: The Abyssal Bargain [candidate]
+ending reached: false
+scene: Aethelian Archipelago (narration), day 1, gold 0
+
+=== SPEND (cumulative DM agents + this segment player) ===
+consistency_checker: 9 calls, $0.0010
+narrator: 11 calls, $0.0021
+adjudicator: 8 calls, $0.0014
+summarizer: 6 calls, $0.0000
+hook_weaver: 1 calls, $0.0006
+encounter_designer: 1 calls, $0.0002
+beat_planner: 2 calls, $0.0063
+player agent (this segment): $0.0014
+TOTAL DM spend: $0.0116
+
+=== RESUMED SEGMENT - 2026-07-19T13:39:15.464Z ===
+
+--- turn 1 ---
+>> HARRY POTTAH (do): I sprint to the winch, drawing my wand and aiming a cutting charm at the anchor chain to sever it instantly, then whirl to face the helmsman, ready to counter whatever possession is twisting his neck.
+Harry Pottah: I sprint to the winch, drawing my wand and aiming a cutting charm at the anchor chain to sever it instantly, then whirl to face the helmsman, ready to counter whatever possession is twisting his neck.
+   [check_prompted] skill=arcana
+DM: Your cutting charm sparks against the chain, but the metal resists—humming with a deep, almost living resonance, as though the anchor is bound to something far older and more deliberate than simple iron. The spell washes off the links like water, and the ship shudders as the invisible weight below drags it further off course. Behind
+   [check_rolled] skill=arcana total=11 success=false
+   [encounter_attempt] skill=arcana success=false
+
+--- turn 2 ---
+>> HARRY POTTAH (do): I abandon the anchor and cast a Summoning Charm on the helmsman, yanking him toward me to break the laughter's hold, then I grab the wheel and spin it hard to starboard, ordering the crew to raise sails and catch the wind—past the mists, past the dead.
+Harry Pottah: I abandon the anchor and cast a Summoning Charm on the helmsman, yanking him toward me to break the laughter's hold, then I grab the wheel and spin it hard to starboard, ordering the crew to raise sails and catch the wind—past the mists, past the dead.
+   [check_prompted] skill=arcana
+DM: The ship does not turn. The sails snap open, but the wind in the mists is a dead, psychic thing, and the wheel grinds in your hands as the anchor chain hums with a final, resonant groan before snapping. The *Rising Star* lurches, not forward, but down and sideways, its hull groaning as it is pulled onto a submerged reef. The helmsman, yanked from his post, collapses in a heap, the unnatural tilt of his head gone, replaced by a slack-jawed vacancy. The laughter stops, replaced by the shriek of tortured wood and the collective, terrified intake of breath from the crew as the ship lists heavily to port, listing like a wounded animal. The psychic fog does not lift, but it seems to condense, its pressure focusing on the deck, and from its swirling depths, a shape begins to coalesce—a towering, indistinct form of writhing kelp and glowing eyes that rises from the water beside the grounded ship.
+
+The deck is a chaos of terrified sailors, the starboard rail is gone, and the ship is taking on water. The shadow in the mists reaches a tendril of pure mist and shadow toward Testiclese. Do you try to seal the hull breach below decks, confront the mist-phantom directly with a powerful spell, or order an immediate evacuation into the lifeboats before the ship slips beneath the waves?
+   [check_rolled] skill=arcana total=10 success=false
+   [encounter_attempt] skill=arcana success=false
+   [encounter_resolved] label=Navigate the Psychic Mists
+
+--- turn 3 ---
+>> HARRY POTTAH (do): I raise my wand and shout 'Protego Maxima,' throwing a wide shield charm between the mist-phantom and Testiclese, then follow it with a Diffindo aimed at the glowing eyes—aim to blind the thing and buy us time to act.
+Harry Pottah: I raise my wand and shout 'Protego Maxima,' throwing a wide shield charm between the mist-phantom and Testiclese, then follow it with a Diffindo aimed at the glowing eyes—aim to blind the thing and buy us time to act.
+DM: Your shield flares brilliant and white, catching the tendril mid-reach—the mist-phantom recoils with a sound like tearing silk, its glowing eyes flickering as your Diffindo shears through one of them in a spray of luminous brine. The shape shrieks, a wet, bone-deep wail that makes the crew stagger, and it retreats a few feet, one eye now a weeping gash of pale light, but it does not flee—its remaining eye fixes on you with cold, ancient intelligence. Below decks, the ship groans as seawater floods the hold, and the reef grinds against the hull with every swell. Testiclese is at your side, the mist-phantom is wounded but still coiling in the fog, and the crew is screaming—do you press the attack on the phantom to drive it back, rush below to seal the breach before the ship sinks, or rally the crew to abandon ship and take your chances in the open water?
+   [entry_mapped]
+   [encounter_opened] label=Navigate the Psychic Mists
+
+--- turn 4 ---
+>> HARRY POTTAH (do): I brace my feet on the listing deck and fire a second Diffindo at the phantom’s remaining eye, then bellow for the crew to lower the lifeboats—we're getting off this ship before it drags us all down.
+Harry Pottah: I brace my feet on the listing deck and fire a second Diffindo at the phantom’s remaining eye, then bellow for the crew to lower the lifeboats—we're getting off this ship before it drags us all down.
+   [check_prompted] skill=arcana
+DM: The Diffindo whistles through the psychic fog and finds its mark—the phantom's remaining eye exploding in a cascade of pale, sizzling light. The creature screams, a hollow, abyssal sound that ripples across the water like a shockwave, and recoils into the mist, blinded and thrashing, its tendrils flailing blindly against the air. The psychic pressure in the mists staggers, and you feel the fog thin just slightly, just enough—the crewdash for the lifeboats, scrambling over the listing deck, and the ropes groan as the boats begin to lower. But the ship groans louder still, and from deep below in the flooded hold, something shifts—waterlogged wood splintering, and a new sound rises, something less like the phantom and more like the reef itself crying out.
+   [check_rolled] skill=arcana total=22 success=true
+   [encounter_attempt] skill=arcana success=true
+
+--- turn 5 ---
+>> HARRY POTTAH (do): I shout for Testiclese to get in the nearest lifeboat, then I fire a Reductor Curse at the reef below the hull, hoping to shatter the rock and free the ship long enough for the boats to clear the wreckage.
+Harry Pottah: I shout for Testiclese to get in the nearest lifeboat, then I fire a Reductor Curse at the reef below the hull, hoping to shatter the rock and free the ship long enough for the boats to clear the wreckage.
+   [check_prompted] skill=arcana
+DM: The Reductor Curse slams into the submerged reef with a thunderous crack, and the rock explodes outward in a spray of shattered coral and white foam. The *Rising Star* shudders violently—then lurches forward, free of the jagged teeth that had pinned it—its hull groaning as it tilts back toward something resembling level. The lifeboats splash down into the open water, hauling their panicked crews away from the wounded ship as the ropes snap taut and the boats clear the wreckage. For a heartbeat, the deck is almost calm—the psychic fog has thinned significantly in the wake of the phantom's retreat, and the silenced shriek of tortured wood has been replaced by the slap of waves against a drifting hull.
+
+But the ship is taking on water fast, listing starboard now, and the mist-phantom—blinded, wounded, still thrashing somewhere in the fog—has not fully withdrawn. Its hollow wails echo from deeper in the mists, and you can feel its presence co
+   [check_rolled] skill=arcana total=21 success=true
+   [encounter_attempt] skill=arcana success=true
+
+--- turn 6 ---
+>> HARRY POTTAH (do): I leap from the sinking ship into the nearest lifeboat, grab an oar, and bellow for the crew to row hard for the edge of the thinning mists—away from the phantom's wails and toward whatever open water lies beyond.
+Harry Pottah: I leap from the sinking ship into the nearest lifeboat, grab an oar, and bellow for the crew to row hard for the edge of the thinning mists—away from the phantom's wails and toward whatever open water lies beyond.
+   [check_prompted] skill=athletics
+DM: The lifeboat cuts through the black water as the oars bite and pull, and behind you the *Rising Star* groans its final death rattle—its hull splitting open, green-black water pouring in as the listing deck tilts and the masts crash down in a tangle of rigging and splintered wood. The psychic fog thins just enough to see the stars above, cold and distant, and the wailing of the phantom fades to a low, guttural moan somewhere behind you in the mists, retreating but not gone. You count the faces in the boat—Testiclese is here, and a handful of crew—but at least a third of the sailors are missing, dragged below or simply vanished into the fog, and those who remain sit hollow-eyed, some muttering to themselves, their minds frayed from the psychic assault. The ship is gone. The supplies are gone. The course you were charting is lost. Then a voice breaks through the silence—one of the surviving sailors, a gaunt woman with salt-crusted hair, points toward a faint glow on the horizon to the east and speaks in a hoarse whisper: there is an island in the archipelago, half-submerged and wreathed in mist, where the wrecked ships of countless sailors have washed ashore over the centuries. Do you steer toward that island and risk whatever dwells there, stay in open water and hope to signal a passing vessel, or attempt to retrace your course through the mists to find salvage from the wreck?
+DM: Objective complete: Navigate the Whispering Mists
+DM: The lifeboat finally clears the last tendrils of the Whispering Mists, the oppressive psychic weight lifting like a shroud. Behind you, the *Rising Star* slips beneath the waves with a final, muffled sigh, taking its dead and its secrets to the depths. Ahead, the faint glow resolves into the silhouette of a rocky shore, dotted with the skeletal remains of other wrecks and the dim, flickering lights of what must be a small settlement huddled against the cliffs. The gaunt sailor who pointed it out now grips the gunwale, her voice dropping low: "That's Oakhaven. They'll help... for a price. Or they'll gut you for your boots. Depends on the mood of the tide and the witch." The exhausted crew looks to you, their faces pale in the starlight. Do you steer for the shore of Oakhaven, attempt to slip past in the dark, or hold a council among yourselves first?
+   [check_rolled] skill=athletics total=18 success=true
+   [encounter_attempt] skill=athletics success=true
+   [milestone_reached] milestone=party_reached_aethelian_archipelago
+   [encounter_resolved] label=Navigate the Psychic Mists
+   [objective_completed] title=Navigate the Whispering Mists
+   [objective_revealed] title=Investigate Oakhaven Village
+
+--- turn 7 ---
+>> HARRY POTTAH (do): I steer the lifeboat directly toward Oakhaven, scanning the shore for any signs of the witch or a path through the wrecks, and tell the crew to keep their wands hidden but ready.
+Harry Pottah: I steer the lifeboat directly toward Oakhaven, scanning the shore for any signs of the witch or a path through the wrecks, and tell the crew to keep their wands hidden but ready.
+DM: The oars dip and pull, and the lifeboat surges toward the flickering lights of Oakhaven. As you draw closer, the skeletal remains of dozens of wrecks loom like jagged teeth along the shore, their rotting hulls tangled in kelp and broken timber. A narrow path winds between the wrecks toward the settlement, but a figure stands at its entrance—motionless, wrapped in dark robes, watching your approach with an unsettling stillness.
+   [entry_mapped]
+   [scene_travel] name=Oakhaven proposed=Oakhaven
+   [encounter_opened] label=Navigate the Psychic Mists
+
+--- turn 8 ---
+>> HARRY POTTAH (do): I halt the lifeboat a dozen yards from shore, raise a hand in greeting, and call out to the figure: 'We come as survivors, not enemies—seeking shelter and news of this place. Are you the witch of Oakhaven?'
+Harry Pottah: I halt the lifeboat a dozen yards from shore, raise a hand in greeting, and call out to the figure: 'We come as survivors, not enemies—seeking shelter and news of this place. Are you the witch of Oakhaven?'
+   [check_prompted] skill=insight
+DM: The robed figure tilts their head at your words in a way that seems almost curious—or amused. A long silence stretches out, broken only by the slap of black water against the hull. Then the figure speaks, and the voice is wrong: layered, as if multiple mouths move at once, resonating at a frequency that makes the remaining crew flinch and press their hands to their ears. "The witch does not receive guests," the figure says, though the words don't quite match the movement of the hood. "She receives *fuel*." One gloved hand rises, pointing—not at you, but at Testiclese, and at the lifeboat behind you. The path between the wrecks remains open, but so does the dark water stretching back the way you came. The figure waits, patient as driftwood, and the flickering lights of Oakhaven pulse overhead like a cold heartbeat.
+   [check_rolled] skill=insight total=2 success=false
+   [encounter_attempt] skill=insight success=false
+
+!! time box reached - stopping at turn 9
+
+=== SEGMENT END: STORY STATE ===
+objective: Navigate the Whispering Mists [completed]
+objective: Investigate Oakhaven Village [active]
+objective: Find the Derelict Vessel [hidden]
+objective: Explore the Phosphorescent Cove [hidden]
+ending: The Whispering Echo [leading]
+ending: The Chorus of Madness [candidate]
+ending: Sanity's Price [candidate]
+ending: The Abyssal Bargain [candidate]
+ending reached: false
+scene: Oakhaven (narration), day 1, gold 0
+
+=== SPEND (cumulative DM agents + this segment player) ===
+consistency_checker: 18 calls, $0.0021
+narrator: 22 calls, $0.0049
+adjudicator: 16 calls, $0.0031
+summarizer: 10 calls, $0.0000
+hook_weaver: 1 calls, $0.0006
+encounter_designer: 1 calls, $0.0002
+beat_planner: 2 calls, $0.0063
+player agent (this segment): $0.0017
+TOTAL DM spend: $0.0172
+
+=== RESUMED SEGMENT - 2026-07-19T13:46:50.389Z ===
+
+--- turn 1 ---
+>> HARRY POTTAH (say): I'm not fuel for anyone's fire. Step aside, or I'll blast a path through you and these wrecks both.
+Harry Pottah: I'm not fuel for anyone's fire. Step aside, or I'll blast a path through you and these wrecks both.
+
+--- turn 2 ---
+>> HARRY POTTAH (do): With my wand pointed at the hooded figure, I push the lifeboat past them toward the path, speaking low to the crew: 'Hold steady—if they move, Stun them.'
+Harry Pottah: With my wand pointed at the hooded figure, I push the lifeboat past them toward the path, speaking low to the crew: 'Hold steady—if they move, Stun them.'
+   [check_prompted] skill=intimidation
+   [prompt check -> 546] {"code":"WORKER_RESOURCE_LIMIT","message":"Function failed due to not having enough compute resources (please check logs)"}
+   [check_rolled] skill=intimidation total=3 success=false
+   [encounter_attempt] skill=intimidation success=false
+   [scene_effect_rejected] proposed=party encountered fog
+   [encounter_resolved] label=Navigate the Psychic Mists
+
+--- turn 3 ---
+>> HARRY POTTAH (do): I leap from the lifeboat onto the shore, wand still trained on the figure, and stride past them onto the path—ready to cast a Shield Charm if they strike, but not breaking stride toward the settlement lights.
+   [server 500] {"error":"Model response had no content"}
+Harry Pottah: I leap from the lifeboat onto the shore, wand still trained on the figure, and stride past them onto the path—ready to cast a Shield Charm if they strike, but not breaking stride toward the settlement lights.
+   [entry_mapped]
+   [scene_travel] name=Oakhaven proposed=Oakhaven
+   [encounter_opened] label=Navigate the Psychic Mists
+
+--- turn 4 ---
+>> HARRY POTTAH (do): I keep moving, wand steady, and hiss to Testiclese: 'Watch our backs—if that thing follows, signal me.'
+Harry Pottah: I keep moving, wand steady, and hiss to Testiclese: 'Watch our backs—if that thing follows, signal me.'
+   [check_prompted] skill=perception
+DM: Testiclese, scanning the murky trail behind you, catches a flicker of movement—a dark shape flitting between the skeletal husks of wrecked vessels, keeping pace with your advance. He gives your arm a sharp tap, a silent alert that confirms you're being shadowed, but the hooded figure from the shore is nowhere in sight. Ahead, the path climbs toward the first flickering lanterns of Oakhaven, its lights weaving through the mist like a will-o'-the-wisp.
+   [check_rolled] skill=perception total=15 success=true
+   [encounter_attempt] skill=perception success=true
+
+--- turn 5 ---
+>> HARRY POTTAH (say): Keep moving, Testiclese—if it follows into the open, we'll make it regret it. Let's find the heart of this village before that shadow finds us.
+Harry Pottah: Keep moving, Testiclese—if it follows into the open, we'll make it regret it. Let's find the heart of this village before that shadow finds us.
+
+--- turn 6 ---
+>> HARRY POTTAH (say): Stay sharp—anyone who's watching us will be in the tavern or the square. Let's find the nearest inn and ask about the witch and these wrecks.
+Harry Pottah: Stay sharp—anyone who's watching us will be in the tavern or the square. Let's find the nearest inn and ask about the witch and these wrecks.
+
+--- turn 7 ---
+>> HARRY POTTAH (do): I lead Testiclese toward the largest lantern-lit building near the square—likely the inn—pushing open the door and scanning the room for the barkeep or any locals who look like they talk for coin.
+Harry Pottah: I lead Testiclese toward the largest lantern-lit building near the square—likely the inn—pushing open the door and scanning the room for the barkeep or any locals who look like they talk for coin.
+DM: The inn door groans open on damp leather hinges and a wall of stale air hits you—pipe smoke, brine, and something sharper, like burnt hair. The taproom is dim and half-empty: a few locals hunched over thimbles of something murky, their eyes sliding toward you and then quickly away. Behind the bar, a broad-shouldered woman with a scar splitting her eyebrow wipes a mug without looking up, though her gaze tracks your reflection in the polished wood. Outside, the mist presses against the grimy windows like something alive, and somewhere beyond the walls you hear a low, rhythmic thrum—like a heartbeat buried in the fog.
+   [encounter_attempt] skill=resourcefulness success=true
+
+--- turn 8 ---
+>> HARRY POTTAH (say): Barkeep—I'm Harry Pottah. I'm looking for news of the witch who calls this island her hearth, and the wrecks that line your shore like a warning. I've gold for answers.
+Harry Pottah: Barkeep—I'm Harry Pottah. I'm looking for news of the witch who calls this island her hearth, and the wrecks that line your shore like a warning. I've gold for answers.
+
+--- turn 9 ---
+>> HARRY POTTAH (say): I'll take a measure of whatever passes for safe drink here, and I'll pay for a few words about the witch and the fog that seems to think it owns this place.
+Harry Pottah: I'll take a measure of whatever passes for safe drink here, and I'll pay for a few words about the witch and the fog that seems to think it owns this place.
+
+--- turn 10 ---
+>> HARRY POTTAH (do): I slide a few gold coins across the bar, meet her eyes, and say quietly: 'The witch who doesn't receive guests—only fuel. What's her name, and what does she want with the living?'
+Harry Pottah: I slide a few gold coins across the bar, meet her eyes, and say quietly: 'The witch who doesn't receive guests—only fuel. What's her name, and what does she want with the living?'
+   [check_prompted] skill=investigation
+DM: The mists release you—but not cleanly.
+
+Your ship sits creaking in the
+   [check_rolled] skill=investigation total=15 success=true
+   [encounter_attempt] skill=investigation success=true
+   [scene_effect_rejected] proposed=party_reached_aethelian_archipelago
+   [encounter_resolved] label=Navigate the Psychic Mists
+
+!! time box reached - stopping at turn 11
+
+=== SEGMENT END: STORY STATE ===
+objective: Navigate the Whispering Mists [completed]
+objective: Investigate Oakhaven Village [active]
+objective: Find the Derelict Vessel [hidden]
+objective: Explore the Phosphorescent Cove [hidden]
+ending: The Whispering Echo [leading]
+ending: The Chorus of Madness [candidate]
+ending: Sanity's Price [candidate]
+ending: The Abyssal Bargain [candidate]
+ending reached: false
+scene: Oakhaven (narration), day 1, gold 0
+
+=== SPEND (cumulative DM agents + this segment player) ===
+consistency_checker: 21 calls, $0.0024
+narrator: 27 calls, $0.0060
+summarizer: 14 calls, $0.0000
+adjudicator: 21 calls, $0.0039
+hook_weaver: 1 calls, $0.0006
+encounter_designer: 1 calls, $0.0002
+beat_planner: 2 calls, $0.0063
+player agent (this segment): $0.0020
+TOTAL DM spend: $0.0193
+
+=== RESUMED SEGMENT - 2026-07-19T13:53:52.855Z ===
+
+--- turn 1 ---
+>> HARRY POTTAH (say): I need to know about the witch—what's her name, and what does she want with the living?
+Harry Pottah: I need to know about the witch—what's her name, and what does she want with the living?
+DM: The barkeep's eyes harden, and she leans close enough for you to smell the brine on her breath. "Morrigan," she whispers, the name like a splinter of ice. "She doesn't *want* anything—she *takes*. The fog is her breathing, and it's drawing breath now, lads." A deep groan shudders through the timbers beneath your feet, and the rhythmic thrum outside becomes a relentless, pounding drum. The few remaining patrons scramble for the door, their faces slack with terror, as the ship's planking begins to warp and splinter.
+
+You must decide—do you chart a course into the thickening mists to avoid the rocks, or do you try to brace the vessel and weather the storm?
+   [entry_mapped]
+   [social_started]
+   [encounter_opened] label=Navigate the Psychic Mists
+
+--- turn 2 ---
+>> HARRY POTTAH (do): I steady myself against the shuddering bar, grip my wand, and mutter a quick *Protego* around Testiclese and myself before barking to the barkeep: 'Morrigan's breath or not, I'm not dying in your tavern—' I shove through the panicked crowd toward the door, scanning for the heart of the village where the mist beats loudest.
+Harry Pottah: I steady myself against the shuddering bar, grip my wand, and mutter a quick *Protego* around Testiclese and myself before barking to the barkeep: 'Morrigan's breath or not, I'm not dying in your tavern—' I shove through the panicked crowd toward the door, scanning for the heart of the village where the mist beats loudest.
+   [check_prompted] skill=perception
+DM: Your protective barrier flickers, but the mist swallows it like a torch in deep water. You push through the door and into the street, only to find the alley narrowing into a dead end choked with fog, the door to the next building sealed and slick with condensation. The psychic pressure intensifies, and you can feel Testiclese at your back, the sound of the ship's groaning timbers now a distant, muffled thunder. The mist is thick here, almost solid, and it seems to be pushing you back toward the main street.
+   [check_rolled] skill=perception total=9 success=false
+   [encounter_attempt] skill=perception success=false
+
+--- turn 3 ---
+>> HARRY POTTAH (do): I press through the mist in the direction of the loudest heartbeat, keeping my wand low and ready, looking for a path toward the village square or the oldest structure—where a witch's anchor would be.
+Harry Pottah: I press through the mist in the direction of the loudest heartbeat, keeping my wand low and ready, looking for a path toward the village square or the oldest structure—where a witch's anchor would be.
+   [check_prompted] skill=perception
+DM: The mist rejects your Prodego and presses in, thick and cloying, muffling the ship's groans into a distant, muffled roar. You stumble through the spectral fog, following the pounding heartbeat that seems to originate from the village square, but the alley twists back on itself, the cobblestones slick with an oily sheen. A spectral tolling sound echoes from the direction of the dock—the ship's bell, struck by unseen hands. When the fog finally parts, you find yourselves standing on the edge of the village square, facing a stone well from which the heartbeat seems to emanate. But the path back to the tavern is gone, swallowed by the shifting grey. The well's stone lip is carved with the same rune as the ship's helm, and something dark and patient stirs in its depths.
+
+From the square's far side, a figure in a tattered cloak emerges from a doorway, holding a lantern that casts no light but seems to drink the surrounding mist. It raises a hand, not in threat, but in summons. Do you approach the well and confront whatever pulses within, or do you face the beckoning figure at the edge of the square?
+   [check_rolled] skill=perception total=9 success=false
+   [encounter_attempt] skill=perception success=false
+   [scene_effect_rejected] proposed=party encountered fog
+   [encounter_resolved] label=Navigate the Psychic Mists
+
+--- turn 4 ---
+>> HARRY POTTAH (do): I approach the figure with the lantern, keeping my wand trained on the well, and call out: 'You know what's in that well—and you know why Morrigan's mist is waking. I'm here to listen.'
+Harry Pottah: I approach the figure with the lantern, keeping my wand trained on the well, and call out: 'You know what's in that well—and you know why Morrigan's mist is waking. I'm here to listen.'
+DM: The figure lowers the lantern as you approach, and you see it for what it truly is—a hollow gourd, its interior lined with teeth-like crystals that drink the grey light around it. Old Man Hemlock's face emerges from the cloak's shadow, webbed with scars that mirror the runes on the well and helm alike. "Listen, then," he rasps, his voice carrying the cadence of someone who's navigated treacherous waters before. "Morrigan's mist isn't fog—it's *memory*. Every soul she's taken still drowns in there, and they'll pull you toward what you've lost. To reach the rocks, you need to name your heading through grief itself."
+
+He reaches into his cloak and produces three objects: a barnacle-encrusted compass whose needle spins wildly, a vial of ink-black water that moves against gravity, and a human knuckle bone carved with the same well-rune. "You'll need all three to chart a course, but you can only carry two. One's a burden you won't need until it's too late." His lantern-less eyes fix on you both, ancient and certain. "Which do you leave behind—the compass that can't point true, the water that remembers every drowning, or the bone that speaks to the dead?"
+   [entry_mapped]
+   [social_started]
+   [encounter_opened] label=Navigate the Psychic Mists
+
+--- turn 5 ---
+>> HARRY POTTAH (say): I leave the compass. A heading through grief is no use to me if it points to what I've already lost—but memory and the dead? Those I can bargain with.
+Harry Pottah: I leave the compass. A heading through grief is no use to me if it points to what I've already lost—but memory and the dead? Those I can bargain with.
+Old Man Hemlock: You... you leave it? The compass? It... it points to the mists, the ones that sing... the ones that take... but if you seek the dead... the drowned... the song is stronger there...
+
+--- turn 6 ---
+>> HARRY POTTAH (say): I'll take the water and the bone. Memory of the drowned and the voice of the dead—if I'm to face Morrigan, I'll need to understand what she's taken, not just where she's been.
+Harry Pottah: I'll take the water and the bone. Memory of the drowned and the voice of the dead—if I'm to face Morrigan, I'll need to understand what she's taken, not just where she's been.
+Old Man Hemlock: The drowned... they remember the song too, don't they? They always do. *His voice cracks, turning inward.* She'll take what you offer, boy. Take it and eat it whole. But first... you must find the place where the deep song began, before it swallows everything...
+
+--- turn 7 ---
+>> HARRY POTTAH (do): I pocket the water and the bone, then turn from Hemlock toward the well, gripping my wand tighter. 'Then I'll go to where the song began—show me the oldest path through these stones.'
+Harry Pottah: I pocket the water and the bone, then turn from Hemlock toward the well, gripping my wand tighter. 'Then I'll go to where the song began—show me the oldest path through these stones.'
+   [check_prompted] skill=investigation
+DM: The runes beneath the water and bone in your pockets flare with a cold, internal light, and the ancient stones before you seem to *breathe*, shifting just slightly apart to reveal a narrow, twisting path paved with cracked shale. The mists ahead draw back like a curtain, revealing a descent through the henge that wasn't there moments ago. A low, dirge-like hum vibrates up through the soles of your feet, growing louder from the newly-opened way. Beside you, Testiclese sees the path continue to wind downward, its stones slick with something that isn't water, while the wall of psychic mist to your left shimmers with fleeting, half-formed shapes.
+   [check_rolled] skill=investigation total=22 success=true
+   [encounter_attempt] skill=investigation success=true
+
+--- turn 8 ---
+>> HARRY POTTAH (do): I step onto the shale path, drawing the knuckle bone and pressing it to my temple, whispering: 'Speak to me, dead—tell me where the first note fell.'
+Harry Pottah: I step onto the shale path, drawing the knuckle bone and pressing it to my temple, whispering: 'Speak to me, dead—tell me where the first note fell.'
+   [check_prompted] skill=arcana
+DM: The knuckle bone flares with a cold, pale light against your temple, but the whispers that rise are not an answer—they are a chorus of confusion, a jumble of drowning gasps and fractured lullabies that offer no clear direction. The mist to your left surges inward, its half-formed shapes coalescing into reaching, skeletal hands that stretch toward you across the path. Ahead, the descent continues downward into gloom, while Testiclese stands rigid, his gaze fixed on something shimmering in the mist just out of sight. The dirge-like hum from below deepens, now threaded with a dissonant, angry undertone.
+   [check_rolled] skill=arcana total=11 success=false
+   [encounter_attempt] skill=arcana success=false
+
+--- turn 9 ---
+>> HARRY POTTAH (do): I shove the bone back into my pocket and raise my wand, casting a shielding charm to ward off the skeletal hands, then stride forward down the path, calling out: 'Show yourselves, dead—or I'll find the song's source through your silence.'
+Harry Pottah: I shove the bone back into my pocket and raise my wand, casting a shielding charm to ward off the skeletal hands, then stride forward down the path, calling out: 'Show yourselves, dead—or I'll find the song's source through your silence.'
+   [check_prompted] skill=arcana
+DM: The shielding charm shatters against the mist's surge like sea glass on stone. Harry's challenge echoes back—not as defiance, but as a hundred overlapping whispers that hammer behind his eyes, each one a different voice begging, singing, screaming. The skeletal hands close around his wrist and drag him sideways off the shale path, and only Testiclese's quick grab keeps him from tumbling into the slick, dark crevice that splits the ground below. The path itself collapses behind them—not the whole descent, but enough to seal off any return the way they came. A distant, splintering crash echoes from somewhere above and far away: wood against rock, the unmistakable sound of a hull breaking apart. The crew, the ship—neither is a factor anymore. The mist behind shimmers with the shapes of drowned figures who pause, watching, before dissolving back into the fog like they were never there. The hum below has become a single, resonant note, vibrating in the bone, and it seems to emanate from somewhere deeper still, beneath the henge, beneath the well, beneath the very bedrock of Oakhaven.
+
+You are underground now, the path narrowing to barely a shoulder's width. Ahead, Testiclese sees a faint, greenish light pooling at a landing where three tunnels branch away; one descends sharply, one levels off through what looks like a carved archway, and one is choked with thick, pulsing roots that seem to breathe. A cracked stone tablet at the junction bears a symbol—one of the same circular sigils you saw in the well. The air smells of brine and old copper. The mist rides at your heels, patient, waiting.
+
+What do you do—descend toward the greenish light below, take the carved archway, or push through the living roots?
+   [check_rolled] skill=arcana total=14 success=false
+   [encounter_attempt] skill=arcana success=false
+   [scene_effect_rejected] proposed=party encountered fog
+   [encounter_resolved] label=Navigate the Psychic Mists
+
+!! time box reached - stopping at turn 10
+
+=== SEGMENT END: STORY STATE ===
+objective: Navigate the Whispering Mists [completed]
+objective: Investigate Oakhaven Village [active]
+objective: Find the Derelict Vessel [hidden]
+objective: Explore the Phosphorescent Cove [hidden]
+ending: The Whispering Echo [leading]
+ending: The Chorus of Madness [candidate]
+ending: Sanity's Price [candidate]
+ending: The Abyssal Bargain [candidate]
+ending reached: false
+scene: Oakhaven (roleplay), day 1, gold 0
+
+=== SPEND (cumulative DM agents + this segment player) ===
+consistency_checker: 30 calls, $0.0032
+narrator: 35 calls, $0.0077
+summarizer: 20 calls, $0.0001
+adjudicator: 30 calls, $0.0050
+npc_agent: 3 calls, $0.0008
+hook_weaver: 1 calls, $0.0006
+encounter_designer: 1 calls, $0.0002
+beat_planner: 2 calls, $0.0063
+player agent (this segment): $0.0014
+TOTAL DM spend: $0.0238
+
+=== RESUMED SEGMENT - 2026-07-19T14:10:34.054Z ===
+
+--- turn 1 ---
+>> HARRY POTTAH (do): I kneel and press the knuckle bone to the tablet's sigil, whispering: 'Show me the way the drowned first sang—I'll follow the note that broke the silence.'
+Harry Pottah: I kneel and press the knuckle bone to the tablet's sigil, whispering: 'Show me the way the drowned first sang—I'll follow the note that broke the silence.'
+DM: The knuckle bone meets the stone sigil and a pulse of greenish light erupts from the tablet, washing over Harry's hands and face. The three tunnels each react differently: the descending path resonates with a deep, harmonious hum; the carved archway flickers with shadows that seem to form shapes of those walking upright; the pulsing roots shudder and part slightly, revealing a glimpse of something wet and dark beyond them, while a single, perfect musical note—clear as a bell—rings out from within.
+
+The mist at your heels presses closer, and you can feel it now, a pressure against your back like cold fingers. Testiclese grips your shoulder and nods toward the roots. The note came from there. It has to have come from there. But the roots are thick, and something moves in the dark beyond them—not a shape, not a sound, but a *presence*, and it knows you're here.
+
+What do you do—force your way through the roots toward that single note, take the descending path where the hum feels almost like recognition, or try the archway where the shadows seem to hold answers of their own?
+   [entry_mapped]
+   [social_ended]
+   [scene_travel] name=Sunken Altar proposed=Sunken Altar
+   [day_advanced]
+   [antagonist_advanced] trigger=time_passed
+   [encounter_opened] label=Navigate the Psychic Mists
+
+--- turn 2 ---
+>> HARRY POTTAH (do): I push through the pulsing roots toward the single note, wand held low, muttering: 'If the drowned sing, I'll answer note for note.'
+Harry Pottah: I push through the pulsing roots toward the single note, wand held low, muttering: 'If the drowned sing, I'll answer note for note.'
+   [check_prompted] skill=arcana
+DM: The thick roots warm beneath Harry's touch, their pulsing rhythm syncing to his whispered promise as they part like curtains of living tissue. A breath of briny air surges forward, and the single note swells—no longer distant but immediate, resonating in the bones of the skull and the chambers of the heart. Beyond the roots, the space opens into a shallow grotto where a pool of still, black water reflects a faint greenish glow from above, and at its center, a submerged shape rises just below the surface: a figure, humanoid, curled in a posture that suggests sleep or grief, and from its chest emanates the note, vibrating the water in concentric ripples.
+
+The mist pauses at the threshold of the roots, the skeletal hands recoiling from the parting growths, but it does not retreat—only waits. Behind you, Testiclese lets out a low breath. The grotto is small, the water dark and deep, and the figure beneath the surface hasn't moved—though the ripples suggest it might. The greenish light seems to come from the figure itself.
+   [check_rolled] skill=arcana total=20 success=true
+   [encounter_attempt] skill=arcana success=true
+
+--- turn 3 ---
+>> HARRY POTTAH (do): I step to the pool's edge, press the water and bone into the ripples, and whisper the lullaby from the well—let the drowned singer decide if I'm guest or offering.
+Harry Pottah: I step to the pool's edge, press the water and bone into the ripples, and whisper the lullaby from the well—let the drowned singer decide if I'm guest or offering.
+   [check_prompted] skill=religion
+DM: The figure stirs beneath the surface, and the single note from its chest softens into a kind of hum—a sound that doesn't press against your mind but threads through it, warm and dissembling. The ripples around your hand settle into a mirror-smooth stillness, and the greenish glow brightens, casting the drowned singer's features into sudden clarity: a face, pale and long-lidded, mouth half-open in something between song and prayer. From the water, a whispered word surfaces—not a language you recognize, but you feel its meaning bloom somewhere behind your ribs: *South. The
+   [check_rolled] skill=religion total=18 success=true
+   [encounter_attempt] skill=religion success=true
+
+--- turn 4 ---
+>> HARRY POTTAH (do): I rise slowly, keeping my hand in the water, and turn to Testiclese. 'The song points south—past the mist, deeper still. I'm following the note before it fades.' I step back from the pool, wiping my hand dry, and head for the descending tunnel where the hum matched the singer's note.
+Harry Pottah: I rise slowly, keeping my hand in the water, and turn to Testiclese. 'The song points south—past the mist, deeper still. I'm following the note before it fades.' I step back from the pool, wiping my hand dry, and head for the descending tunnel where the hum matched the singer's note.
+   [check_prompted] skill=insight
+DM: The descending passage swallows Harry as he steps into it, the singer's note still ringing in his jaw—but the mist follows like a living thing, curling around his ankles, and the psychic thread he clings to begins to fray. The hum that seemed like recognition fractures into a chorus of whispers, each pulling in different directions, and the tunnel walls seem to breathe, shifting subtly so that the path he's following might not be south at all. He stops—uncertain, the mist thickening at his back, pressing inward with a pressure that feels almost like doubt. Somewhere behind him, Testiclese's voice calls out, though it sounds distant, as though drowned by the same water that swallowed the singer. The greenish glow is gone. The tunnel ahead slopes downward into darkness, and something waits in it—not the note, not the singer, but something older and less patient.
+   [check_rolled] skill=insight total=10 success=false
+   [encounter_attempt] skill=insight success=false
+
+--- turn 5 ---
+>> HARRY POTTAH (do): I stop and press my back against the tunnel wall, raising my wand with a whispered 'Lumos' to cut through the darkness, then call out: 'Testiclese—sound off. If this tunnel shifts, I'll carve my own path.' I scrape the knuckle bone along the wall as I walk, leaving a scratch mark to track the twists.
+Harry Pottah: I stop and press my back against the tunnel wall, raising my wand with a whispered 'Lumos' to cut through the darkness, then call out: 'Testiclese—sound off. If this tunnel shifts, I'll carve my own path.' I scrape the knuckle bone along the wall as I walk, leaving a scratch mark to track the twists.
+   [check_prompted] skill=investigation
+DM: The scratch marks you carve do not hold. They smear and vanish behind you like wet chalk on a wet slate, the tunnel walls weeping a thin, slick fluid that tastes of salt and memory. Your Lumos sputters, not from a lack of will, but because the very air it tries to push against grows thick, curdling into a fog that drinks the light at its edges. The path you marked south is gone, folded into a spiraling descent that offers only three choices, each seeming as perilous as the last. Behind you, Testiclese’s voice reaches you not as sound, but as a spike of raw panic—a vision of the *Coral Crown* listing hard to starboard, its hull groaning against unseen reefs as the crew’s shouts become unmoored screams. The psychic mist is no longer navigating you; it is discarding you, shunting you toward a nexus of collapse.
+
+The tunnel ahead branches into a triad of archways. The left one exhales a draft of warm,腐烂 air and glimmers with faint, inviting lights that dance just out of focus. The right one is perfectly still, silent, and its darkness seems absolute, even to your wand. Straight ahead, the floor slopes sharply down into a rushing sound—the churn of black water and the groan of a ship’s timbers being crushed.
+
+What do you do? Do you chase the dancing lights, plunge into the silent dark, or race toward the sound of the breaking ship?
+   [check_rolled] skill=investigation total=13 success=false
+   [encounter_attempt] skill=investigation success=false
+   [scene_effect_rejected] proposed=party encountered fog
+   [encounter_resolved] label=Navigate the Psychic Mists
+
+--- turn 6 ---
+>> HARRY POTTAH (say): Testiclese is drowning in that vision—I've got to break this mist's hold. To the ship sounds, straight ahead—if I can reach her hull before she's pulp, maybe I can ground the nightmare in something real.
+Harry Pottah: Testiclese is drowning in that vision—I've got to break this mist's hold. To the ship sounds, straight ahead—if I can reach her hull before she's pulp, maybe I can ground the nightmare in something real.
+DM: You charge down the sloping floor, the roar of crushing timber swelling until it fills your skull, and the mist around you thickens into a choking veil that tries to push you back. The greenish glow flickers faintly in the darkness ahead—just enough to see the twisted skeleton of a ship’s hull, half-submerged in black water, its ribs splintering against the rocks as the psychic screams of the crew echo like a funeral dirge. The mist pulls at your sanity, whispering doubts about whether this is real or another layer of the illusion, and you feel your grip on the wand slipping.
+
+The ship is tearing itself apart, and you’re standing at the edge of the wreckage with no clear path to reach it—only the churning water, the splintering wood, and the ever-tightening mist. What do you do?
+   [entry_mapped]
+   [encounter_opened] label=Navigate the Psychic Mists
+
+!! time box reached - stopping at turn 7
+
+=== SEGMENT END: STORY STATE ===
+objective: Navigate the Whispering Mists [completed]
+objective: Investigate Oakhaven Village [active]
+objective: Find the Derelict Vessel [hidden]
+objective: Explore the Phosphorescent Cove [hidden]
+ending: The Whispering Echo [leading]
+ending: The Chorus of Madness [candidate]
+ending: Sanity's Price [candidate]
+ending: The Abyssal Bargain [candidate]
+ending reached: false
+scene: Sunken Altar (narration), day 2, gold 0
+
+=== SPEND (cumulative DM agents + this segment player) ===
+consistency_checker: 36 calls, $0.0040
+narrator: 42 calls, $0.0098
+adjudicator: 36 calls, $0.0061
+summarizer: 24 calls, $0.0003
+meta_loop_steward: 1 calls, $0.0007
+npc_agent: 3 calls, $0.0008
+hook_weaver: 1 calls, $0.0006
+encounter_designer: 1 calls, $0.0002
+beat_planner: 2 calls, $0.0063
+player agent (this segment): $0.0012
+TOTAL DM spend: $0.0287
+
+=== RESUMED SEGMENT - 2026-07-19T14:17:16.304Z ===
+
+--- turn 1 ---
+>> HARRY POTTAH (do): I leap onto a splintered plank drifting in the black water, using it as a raft, and paddle hard toward the ship's groaning hull, shouting: 'Hold on, Testiclese—I'm coming through the mist!'
+Harry Pottah: I leap onto a splintered plank drifting in the black water, using it as a raft, and paddle hard toward the ship's groaning hull, shouting: 'Hold on, Testiclese—I'm coming through the mist!'
+   [check_prompted] skill=athletics
+DM: The splintered plank barely supports your weight as you launch into the black water, the cold seeping through your clothes and into your bones. You paddle with desperate strokes, your wand clamped between your teeth, the ship's groaning hull growing closer with each labored push through the churning water. The mist swirls around you, whispering that the ship isn't real, that you're drowning in nothing—but you push through the doubt, your fingers finding a jagged handhold on the hull just as the plank is snatched away by the current.
+
+Your grip holds. The ship's timbers shudder beneath your palms, and for a moment, the psychic mist recoils, the screams of the crew fading to a distant echo. You're here, grounded in the vision, the cold water lapping at your chest. But the hull is splintering, and just above you, a broken mast leans precariously, ready to collapse. From somewhere deeper in the wreck, Testiclese's voice flickers—a sharp, terrified cry that might be a warning or a plea.
+   [check_rolled] skill=athletics total=17 success=true
+   [encounter_attempt] skill=athletics success=true
+
+--- turn 2 ---
+>> HARRY POTTAH (do): I shove my wand into my pocket and scramble up the hull's jagged edge, hand over hand, aiming for the broken mast to brace it before it crashes down on Testiclese.
+Harry Pottah: I shove my wand into my pocket and scramble up the hull's jagged edge, hand over hand, aiming for the broken mast to brace it before it crashes down on Testiclese.
+   [check_prompted] skill=athletics
+DM: You haul yourself upward, the splintered wood biting into your palms as the hull shifts beneath you. The mast groans, its fibers fraying with a sound like tearing muscle, and you throw your shoulder against it just as it begins to fall. The impact drives the air from your lungs, but the brace holds—the mast shudders and stays, angled but solid, pinning itself against a crossbeam. Below, the black water churns, and somewhere in the wreckage, Testiclese’s voice cuts through the mist again—closer now, frantic, but alive. The mist tightens around the wreck like a fist, and through a gap in the splintered deck, you catch a glimpse of pale, frightened eyes peering up at you from the shadows.
+   [check_rolled] skill=athletics total=21 success=true
+   [encounter_attempt] skill=athletics success=true
+
+--- turn 3 ---
+>> HARRY POTTAH (do): I drop to my knees and reach through the gap, extending my hand. 'Grab hold—I've got you. The mist wants us scattered, but we're still together.'
+Harry Pottah: I drop to my knees and reach through the gap, extending my hand. 'Grab hold—I've got you. The mist wants us scattered, but we're still together.'
+   [check_prompted] skill=insight
+DM: Your hand finds Testiclese's grip, and you haul them up through the splintered deck. The psychic mist recoils with a final, shuddering whisper, but it leaves a mark—a lingering, cold ache behind your eyes, a sense of something watched and found wanting. The ship groans, settling deeper into the rocks as the mast you braced leans at an impossible angle, still holding. Through the thinning fog, the sunken altar is visible just ahead, its green glow pulsing like a sickly heartbeat, and the skeletal remains of the crew are gone, their dirge silenced. But the cost is visible: the deck is slick with black water, and the planks beneath your feet are beginning to crack and splinter, threatening to give way at any moment. Testiclese is gasping, their eyes wide with the terror of the mist's influence, and from the altar's direction, a new sound rises—not a scream, but a low, resonant hum that seems to vibrate in your bones.
+
+What do you do?
+   [check_rolled] skill=insight total=14 success=true
+   [encounter_attempt] skill=insight success=true
+   [scene_effect_rejected] proposed=party_reached_aethelian_archipelago
+   [encounter_resolved] label=Navigate the Psychic Mists
+
+--- turn 4 ---
+>> HARRY POTTAH (say): 'That hum's the same note from the pool—the altar's waking up. Stay close, Testiclese; we're seeing this through before the whole wreck folds.'
+Harry Pottah: 'That hum's the same note from the pool—the altar's waking up. Stay close, Testiclese; we're seeing this through before the whole wreck folds.'
+DM: The deck shudders beneath your feet as the humming grows louder, the planks groaning like a living thing in pain. Through the mist, the sunken altar pulses with an intensified green light, and the water around it begins to swirl, pulling debris and shadows toward its center. Testiclese clutches your arm, their breath ragged, and the broken mast you braced above you creaks ominously, threatening to finally give way. The deck cracks further under your weight, and the ship groans, settling deeper into the rocks.
+
+Do you press forward toward the altar, find stable ground, or brace the ship to keep it from collapsing?
+   [entry_mapped]
+   [encounter_opened] label=Navigate the Psychic Mists
+
+--- turn 5 ---
+>> HARRY POTTAH (do): I pull Testiclese toward the altar, leaping from the cracking deck to a solid stone outcrop beside the green glow, wand raised and ready to see what this hum demands.
+Harry Pottah: I pull Testiclese toward the altar, leaping from the cracking deck to a solid stone outcrop beside the green glow, wand raised and ready to see what this hum demands.
+   [check_prompted] skill=acrobatics
+DM: You sail across the gap, boots finding solid stone as you and Testiclese land hard on the outcrop beside the altar. The green light pulses directly before you now, close enough that its sickly warmth prickles against your skin, and the humming resonates through the rock beneath your feet—deep, rhythmic, almost like breathing. Behind you, the deck shudders and gives way with a splintering crash, the wreck finally surrendering to the water, and the gap between you and the ship is gone. Testiclese clings to your arm, pale and shaking, while the altar's glow intensifies, and through its light you catch the first clear sight of what's carved into the stone surface: a symbol, half-submerged in black water, pulsing in time with the hum.
+   [check_rolled] skill=acrobatics total=17 success=true
+   [encounter_attempt] skill=acrobatics success=true
+
+--- turn 6 ---
+>> HARRY POTTAH (do): I crouch down and trace the carved symbol with my wand tip, trying to feel its pulse and see if it responds to magic or touch.
+Harry Pottah: I crouch down and trace the carved symbol with my wand tip, trying to feel its pulse and see if it responds to magic or touch.
+   [check_prompted] skill=arcana
+DM: Your wand tip connects with the carved symbol, and it flinches—a ripple of unnatural warmth travels up the wood. The symbol’s green pulse synchronizes with your wand’s magical hum, and you feel a sudden, draining pull, as if the altar is tasting your power. The carved lines glow brighter, shedding their submerged aspect, and the deep hum shifts in pitch, becoming a resonant invitation. Beside you, Testiclese shivers as the water around the altar’s base calms into an unnaturally perfect circle, revealing a faint, shimmering path hidden in its depths.
+   [check_rolled] skill=arcana total=18 success=true
+   [encounter_attempt] skill=arcana success=true
+
+--- turn 7 ---
+>> HARRY POTTAH (do): I step onto the shimmering path in the water, gesturing for Testiclese to follow, and press forward toward the altar's core.
+Harry Pottah: I step onto the shimmering path in the water, gesturing for Testiclese to follow, and press forward toward the altar's core.
+   [check_prompted] skill=arcana
+DM: The water beneath your boots is unnervingly still, the shimmering path holding you aloft as the green light from the altar's core bathes you in its sickly glow. The deep hum resolves into a chorus of whispers, pressing against your thoughts with images of drowned villages and forgotten names, and you feel the mental strain of the passage leave its mark—a dull ache behind your eyes, a subtle fraying at the edges of your focus. The path ends at a central stone pillar, where the glowing symbol now floats fully revealed: a stylized, open eye weeping a single droplet. Testiclese, released from your arm, stumbles back a step, their gaze fixed on the weeping eye as the whispers seem to focus on them specifically. The wreck behind you is gone, swallowed by the churning mist, leaving only this altar and the dark, swirling water. The weeping eye symbol begins to slowly rotate, and the whispers coalesce into a single, demanding thought that fills your mind: *Name the sorrow you carry to be named in turn.* Do you attempt to answer the altar's psychic demand, try to physically interact with the floating symbol, or pull Testiclese away from the water's edge entirely?
+   [check_rolled] skill=arcana total=17 success=true
+   [encounter_attempt] skill=arcana success=true
+   [scene_effect_rejected] proposed=party_reached_aethelian_archipelago
+   [encounter_resolved] label=Navigate the Psychic Mists
+
+--- turn 8 ---
+>> HARRY POTTAH (say): I'll answer it. I carry the sorrow of a mother lost to a world that never knew her, and a father's voice I can barely remember.
+Harry Pottah: I'll answer it. I carry the sorrow of a mother lost to a world that never knew her, and a father's voice I can barely remember.
+DM: The moment the words leave your mouth, the weeping eye stops rotating. The whispers fall silent. Then the green light *explodes* outward, and the world dissolves.
+
+You're standing in mist—not the fog from before, but something thicker, psychic, alive. It presses against your skull with the weight of every name you've ever forgotten, every face blurred by time. The altar is gone. The dark water is gone. Testiclese is gone. You are alone in a churning gray void, the ground beneath your feet indistinct and shifting like memory itself.
+
+Then—voices. Faint, frantic, human. Your crew. They're out here somewhere in this fog, and you can hear them screaming, their minds tearing open under the assault of whatever this place feeds on. The mist tightens around you, and three visions crystallize in the gray ahead: a corridor of drowned faces leading left, a bridge of shattered glass stretching forward, and a descending spiral of whispered names spiraling right. Each path pulses with the same sickly green.
+
+The screams are getting worse. You need to move—now. Which path do you take?
+   [entry_mapped]
+   [encounter_opened] label=Navigate the Psychic Mists
+
+--- turn 9 ---
+>> HARRY POTTAH (say): I won't let them be swallowed whole. Testiclese, hold on—I'm coming!
+Harry Pottah: I won't let them be swallowed whole. Testiclese, hold on—I'm coming!
+
+--- turn 10 ---
+>> HARRY POTTAH (do): I sprint toward the corridor of drowned faces, wand blazing with a Lumos Maxima, trusting that the path of the most trapped souls leads to my crew.
+Harry Pottah: I sprint toward the corridor of drowned faces, wand blazing with a Lumos Maxima, trusting that the path of the most trapped souls leads to my crew.
+   [check_prompted] skill=investigation
+DM: The corridor of drowned faces splits open before your blazing wand, the Lumos Maxima cutting through the psychic mist like a blade through gauze. The faces—dozens of them, bloated and gray—shriek and recoil
+   [check_rolled] skill=investigation total=22 success=true
+   [encounter_attempt] skill=investigation success=true
+
+!! time box reached - stopping at turn 11
+
+=== SEGMENT END: STORY STATE ===
+objective: Navigate the Whispering Mists [completed]
+objective: Investigate Oakhaven Village [active]
+objective: Find the Derelict Vessel [hidden]
+objective: Explore the Phosphorescent Cove [hidden]
+ending: The Whispering Echo [leading]
+ending: The Chorus of Madness [candidate]
+ending: Sanity's Price [candidate]
+ending: The Abyssal Bargain [candidate]
+ending reached: false
+scene: Sunken Altar (narration), day 2, gold 0
+
+=== SPEND (cumulative DM agents + this segment player) ===
+consistency_checker: 45 calls, $0.0051
+narrator: 52 calls, $0.0119
+adjudicator: 45 calls, $0.0077
+summarizer: 28 calls, $0.0003
+meta_loop_steward: 1 calls, $0.0007
+npc_agent: 3 calls, $0.0008
+hook_weaver: 1 calls, $0.0006
+encounter_designer: 1 calls, $0.0002
+beat_planner: 2 calls, $0.0063
+player agent (this segment): $0.0023
+TOTAL DM spend: $0.0335
+
+=== RESUMED SEGMENT - 2026-07-19T14:27:05.534Z ===
+
+--- turn 1 ---
+>> HARRY POTTAH (do): I grab the journal with a Conjured Air Bubble spell, yanking it free from the slime, then I blast the altar with a Reducto.
+Harry Pottah: I grab the journal with a Conjured Air Bubble spell, yanking it free from the slime, then I blast the altar with a Reducto.
+   [check_prompted] skill=arcana
+DM: Your air bubble snatches the journal, but the slime reacts with predatory speed, lashing out in a corrosive spray that splatters against the bubble, making it sizzle and warp. Before you can fire, the altar thrums with a violent pulse, sending a psychic shockwave through your skull. The Reducto from your wand goes wild, blasting a chunk from the altar's side but failing to shatter it, and the impact sends a shower of stone and violet light raining down. The altar's glow intensifies, now focused directly on you, while the damaged slime begins to ooze toward your feet.
+   [check_rolled] skill=arcana total=10 success=false
+   [encounter_attempt] skill=arcana success=false
+
+--- turn 2 ---
+>> HARRY POTTAH (say): Testiclese, shield your mind! I'm going to finish this altar off — cover me!
+Harry Pottah: Testiclese, shield your mind! I'm going to finish this altar off — cover me!
+
+--- turn 3 ---
+>> HARRY POTTAH (do): I cast a Protego shield to deflect the slime and the psychic pulse, then follow up with a Diffindo to carve the altar apart at its cracked base.
+Harry Pottah: I cast a Protego shield to deflect the slime and the psychic pulse, then follow up with a Diffindo to carve the altar apart at its cracked base.
+   [check_prompted] skill=arcana
+DM: Your Protego flares outward like a dome of burnished silver, catching the slime's corrosive arc and deflecting the psychic pulse in a shower of violet sparks—the wave rolls over your shield and dissipates into the walls, leaving your mind blessedly clear for a heartbeat. In that opening, your Diffindo slices clean through the altar's cracked base with a shriek of shearing stone, and the entire structure buckles, collapses, and explodes outward in a burst of fractured basalt and dimming violet light. The psychic hum that's been drilling into your skull goes silent, and above you, the thick mists begin to curl and thin, revealing glimpses of dark water and something that might be a ceiling far overhead. But the fragments of the altar haven't fully settled—several shards are still glowing with that sickly violet pulse, and the slime, now severed from the altar's power, has gone utterly still in the water at your feet, its surface rippling as if something beneath it is breathing. Testiclese's nosebleed has stopped, but his eyes are locked on the journal still bobbing in your conjured bubble, and the tremor in the floor has shifted—deeper, slower, closer.
+   [check_rolled] skill=arcana total=23 success=true
+   [encounter_attempt] skill=arcana success=true
+
+--- turn 4 ---
+>> HARRY POTTAH (do): I grab the journal from the air bubble, open it to the latest entry, and scan it for any clue about the Derelict Vessel or the source of the tremor—while keeping my wand ready in case the slime stirs.
+Harry Pottah: I grab the journal from the air bubble, open it to the latest entry, and scan it for any clue about the Derelict Vessel or the source of the tremor—while keeping my wand ready in case the slime stirs.
+   [check_prompted] skill=investigation
+DM: The mists recede like a tide pulled back by an invisible hand, and the journal's latest entry burns itself into your mind — coordinates, a warning about "the sleeper beneath," and a date that matches the crew member's fever-dream. Above, the ship groans as it scrapes past a jagged outcrop that would have torn the hull open minutes ago, the helmsman's wild course corrected just in time by the thinning fog. But the victory tastes of copper and ash: one crewman sits rigid against the mast, whispering in a language no one recognizes, his eyes fixed on nothing; another clutches a bloody hand where a shard of violet stone bit into flesh, the wound already blackening at the edges. The tremors in the floor have synchronized into something rhythmic now — not an earthquake, but a heartbeat rising from the sunken stones below, and the slime at your feet ripples in answer, its surface parting just enough to reveal something pale and massive shifting in the darkness beneath. Testiclese tugs at your sleeve, pointing toward the ship's hull where barnacles are curling away from the waterline, recoiling from whatever presence now pulses through the deep. The journal's author wrote
+   [check_rolled] skill=investigation total=20 success=true
+   [encounter_attempt] skill=investigation success=true
+   [scene_effect_rejected] proposed=party_reached_aethelian_archipelago
+   [encounter_resolved] label=Navigate the Psychic Mists
+
+--- turn 5 ---
+>> HARRY POTTAH (do): I thrust the journal at Testiclese, shouting 'Burn that into your memory, I'm diving—if that sleeper's waking, I'll find its anchor point and blast it from below before it fully stirs.'
+Harry Pottah: I thrust the journal at Testiclese, shouting 'Burn that into your memory, I'm diving—if that sleeper's waking, I'll find its anchor point and blast it from below before it fully stirs.'
+DM: The cold hits you like a wall as you plunge beneath the slime's surface — it parts reluctantly, thick and clinging, and for a terrible instant you're blind, tasting brine and something metallic on your tongue. Then your eyes adjust, and you see it: a massive, luminous mass coiled around the shattered remnants of the altar's true foundation, a pillar of carved obsidian sunk deep into the seabed, pulsing in time with the heartbeat shaking the ship above. Tendrils of psychic energy thread from the sleeper's body through cracks in the pillar like roots through broken soil — that's the anchor, the thing keeping it tethered to this plane, and it's already beginning to crack free. The sleeper's eye — vast, lidless, ancient — rolls slowly toward you, and the water itself seems to scream as a wave of psychic force barrels downward. Testiclese's terrified face is a shrinking oval of light above, the journal clutched to his chest. You have seconds before that force hits — do you drive your wand into the pillar, try to ward yourself against the psychic blast first, or do something else entirely?
+   [entry_mapped]
+   [scene_travel] name=Sunken Altar proposed=Sunken Altar
+   [encounter_opened] label=Uncover the Sunken Secrets
+
+--- turn 6 ---
+>> HARRY POTTAH (do): I drive my wand into the obsidian pillar with a piercing curse, aiming to shatter the anchor before the psychic wave reaches me, trusting my bubble-head charm to hold for one more breath.
+Harry Pottah: I drive my wand into the obsidian pillar with a piercing curse, aiming to shatter the anchor before the psychic wave reaches me, trusting my bubble-head charm to hold for one more breath.
+   [check_prompted] skill=arcana
+DM: The piercing curse spirals from your wand in a helix of white fire — but the obsidian is ancient, reinforced by something far older than magic, and the bolt cracks against its surface like lightning against bedrock, leaving only a hairline fracture where you needed a blind. The psychic wave hits you in the same instant, a wall of predation and hunger that smashes through your bubble-head charm like shattered glass, flooding your lungs with black water and your mind withImages — a city drowning, a voice reciting names into the dark, and the sleeper's vast heartbeat hammering against the inside of your skull. Your body convulses, and the wand slips from your fingers, drifting slowly downward through the murk as the pillar hums, undamaged, its fracture sealing over like a wound that knows how to heal. Above, you can See Testiclese's outline thrashing at the surface, his hand reaching down through the slime, and the sleeper's eye has begun to turn — not toward you, but toward the ship.
+   [check_rolled] skill=arcana total=17 success=false
+   [encounter_attempt] skill=arcana success=false
+
+!! time box reached - stopping at turn 7
+
+=== SEGMENT END: STORY STATE ===
+objective: Navigate the Whispering Mists [completed]
+objective: Investigate Oakhaven Village [completed]
+objective: Find the Derelict Vessel [active]
+objective: Explore the Phosphorescent Cove [hidden]
+ending: The Whispering Echo [leading]
+ending: The Chorus of Madness [candidate]
+ending: Sanity's Price [candidate]
+ending: The Abyssal Bargain [candidate]
+ending reached: false
+scene: Sunken Altar (narration), day 2, gold 0
+
+=== SPEND (cumulative DM agents + this segment player) ===
+narrator: 62 calls, $0.0143
+consistency_checker: 52 calls, $0.0059
+adjudicator: 51 calls, $0.0091
+summarizer: 32 calls, $0.0003
+npc_agent: 3 calls, $0.0008
+beat_planner: 3 calls, $0.0111
+encounter_designer: 2 calls, $0.0002
+hook_weaver: 2 calls, $0.0013
+meta_loop_steward: 1 calls, $0.0007
+player agent (this segment): $0.0017
+TOTAL DM spend: $0.0436
+
+=== RESUMED SEGMENT - 2026-07-19T14:34:08.148Z ===
+
+--- turn 1 ---
+>> HARRY POTTAH (do): I lunge downward, snatch my wand from the dark water, and shove it into the hairline fracture I just made—then I channel a point-blank Reducto blast into the pillar's core, using the fractured seal as a wedge to split it open before the sleeper's eye can fix on the hull above.
+Harry Pottah: I lunge downward, snatch my wand from the dark water, and shove it into the hairline fracture I just made—then I channel a point-blank Reducto blast into the pillar's core, using the fractured seal as a wedge to split it open before the sleeper's eye can fix on the hull above.
+   [check_prompted] skill=arcana
+DM: The wand’s wood splinters against the obsidian with a sound like cracking bone, the Reducto blast collapsing inward on itself in a shower of harmless, fizzing sparks. The pillar remains, cracked but unbroken, and the psychic wave, unmet, washes over you completely. Your vision whites out as the black water fills your lungs, the bubble-head charm shattering. Through the roaring in your ears, you feel a sudden, violent tug—not downward, but up. Testiclese has you by the collar, hauling you toward the slime’s surface with a strength born
+   [check_rolled] skill=arcana total=6 success=false
+   [encounter_attempt] skill=arcana success=false
+   [milestone_reached] milestone=party_investigated_derelict_boat
+   [milestone_reached] milestone=psychic_backlash_suffered
+   [encounter_resolved] label=Uncover the Sunken Secrets
+
+--- turn 2 ---
+>> HARRY POTTAH (do): I break the surface, gasping, and shout to the crew to cut the anchor lines and raise the sails—we need to get the ship moving before that sleeper's full attention turns on us.
+Harry Pottah: I break the surface, gasping, and shout to the crew to cut the anchor lines and raise the sails—we need to get the ship moving before that sleeper's full attention turns on us.
+DM: The slime coats your throat as you break the surface, gasping, and the ship’s deck is a chaos of rigging and shouting men. Testiclese stands over you, the journal clutched to his chest, his face pale and determined as he looks toward the horizon where the water bulges upward in a slow, rising dome. The anchor lines are still taut, biting into the wood of the hull, and the first mate is looking at you, his hand on the great knife, waiting for the word to cut.
+   [entry_mapped]
+   [day_advanced]
+   [antagonist_advanced] trigger=time_passed
+   [encounter_opened] label=Uncover the Sunken Secrets
+
+--- turn 3 ---
+>> HARRY POTTAH (say): Cut the lines now—every second gives that thing a stronger hold on us!
+Harry Pottah: Cut the lines now—every second gives that thing a stronger hold on us!
+
+--- turn 4 ---
+>> HARRY POTTAH (do): I scramble to my feet, wand still sparking, and slice through the nearest anchor line with a Diffindo, shouting for the crew to follow suit before the sleeper's pulse reaches the hull.
+Harry Pottah: I scramble to my feet, wand still sparking, and slice through the nearest anchor line with a Diffindo, shouting for the crew to follow suit before the sleeper's pulse reaches the hull.
+   [check_prompted] skill=arcana
+DM: A clean, sharp *thwack* of magic severs the thickest anchor line, and the ship lurches free of that one point, groaning as it begins to drift. The crew, seeing your decisive spellwork, surges into action, knives flashing in the dim light as they cut through the remaining lines with a desperate frenzy. The ship is loose now, but the water around it churns violently, and the horizon bulges higher, the sleeper’s attention clearly fixed on your vessel’s escape.
+   [check_rolled] skill=arcana total=21 success=true
+   [encounter_attempt] skill=arcana success=true
+
+--- turn 5 ---
+>> HARRY POTTAH (do): I point my wand at the mainsail and shout 'Ventus!' to blast a gust of wind into the canvas, driving the ship away from the rising dome before the sleeper can strike.
+Harry Pottah: I point my wand at the mainsail and shout 'Ventus!' to blast a gust of wind into the canvas, driving the ship away from the rising dome before the sleeper can strike.
+   [check_prompted] skill=arcana
+   [prompt check -> 500] {"error":"Model response had no content"}
+   [check_rolled] skill=arcana total=18 success=true
+   [encounter_attempt] skill=arcana success=true
+
+--- turn 6 ---
+>> HARRY POTTAH (do): I point my wand at the mainsail and shout 'Ventus!' to blast a gust of wind into the canvas, driving the ship away from the rising dome before the sleeper can strike.
+Harry Pottah: I point my wand at the mainsail and shout 'Ventus!' to blast a gust of wind into the canvas, driving the ship away from the rising dome before the sleeper can strike.
+   [check_prompted] skill=arcana
+DM: The spell whips out from your wand, but the gust arrives in stuttering bursts—more sputter than gale. The mainsail bellows outward, then deflates as the wind twists sideways, tangling itself in the rigging. A mast-line groans and snaps. The ship lurches but barely crawls, the canvas hanging limp and twisted like a broken wing. Around you, the water rises in a terrifying, swelling ridge, the sleeper's dome now close enough that the ship's hull shudders from the beneath of it. Testiclese grabs a railing, knuckles white, the journal pressed against him like armor. The first mate is shouting something lost to the wind, his knife still drawn, and the remaining anchor lines are free but the ship hasn't moved enough—the dome is *right there*, dark and impossibly vast, a shadow swallowing starlight. Somewhere below the waterline, something *clicks*—a deep, resonant sound, like the sleeper shifting its enormous shape.
+   [check_rolled] skill=arcana total=10 success=false
+   [encounter_attempt] skill=arcana success=false
+
+--- turn 7 ---
+>> HARRY POTTAH (do): I grab Testiclese's arm, shove him toward the wheel, and shout, 'Get the crew to reverse the sails—back us away from the dome, now!' Then I spin, drop to one knee, and slam the base of my wand against the deck, channeling a Protego Maxima into the hull, hoping to buy us a few seconds of shielding before the sleeper's next move.
+Harry Pottah: I grab Testiclese's arm, shove him toward the wheel, and shout, 'Get the crew to reverse the sails—back us away from the dome, now!' Then I spin, drop to one knee, and slam the base of my wand against the deck, channeling a Protego Maxima into the hull, hoping to buy us a few seconds of shielding before the sleeper's next move.
+   [check_prompted] skill=arcana
+DM: Your Protego Maxima blooms outward in a shimmering, wavering barrier—but it破裂s before it fully forms, the wand's magic stuttering like a candle in a gale. The wave hits the hull with a sound like thunder recalled, and the deck buckles beneath your feet. Psychic slime—thick, luminous, and reeking of salt and old memory—surges up through the seams of the planking, coating the rails in a viscous, pulsing film that *breathes*. The altar's sentience, awakened fully now, lets out a subsonic wail that vibrates in your teeth, and the dome of the sleeper rises until it blots out half the sky, its colossal eye slowly rolling toward the ship with ancient, unhurried indifference. Testiclese staggers to the wheel, the journal clutched to his chest, but the pages within
+DM: ...flutter open on their own, spilling loose, handwritten notes that whip into the air. The wind-sucking vortex begins to pull the pages—and Testiclese—toward the gaping, dark maw at the base of the altar. Do you let him be pulled in, or do you cast to save him and risk your own footing?
+   [check_rolled] skill=arcana total=8 success=false
+   [encounter_attempt] skill=arcana success=false
+   [encounter_resolved] label=Uncover the Sunken Secrets
+   [encounter_opened] label=Sudden hazard near Sunken Altar
+
+--- turn 8 ---
+>> HARRY POTTAH (do): I lunge forward, grabbing Testiclese's arm with one hand and stabbing my wand into the deck with the other, anchoring us both as I shout, 'Accio!' to summon back the scattered pages before the vortex swallows them.
+Harry Pottah: I lunge forward, grabbing Testiclese's arm with one hand and stabbing my wand into the deck with the other, anchoring us both as I shout, 'Accio!' to summon back the scattered pages before the vortex swallows them.
+   [check_prompted] skill=arcana
+DM: Your wand bites deep into the wood and you hook an arm around Testiclese's torso, but the vortex's pull is immense—a physical weight dragging at your shoulders and spine. The Accio charm sputters, catching only three or four loose pages that flutter uselessly against the current, while the rest—half the journal's contents—whip past you and vanish into the darkness below the altar. Worse, the effort costs you your grip: Testiclese slides another foot closer to the edge, his boots scraping against slick planking coated in psychic slime, and you feel the deck beneath your anchored wand beginning to splinter. The first mate has retreated to the far rail, face ashen, and the ship's broken rigging groans overhead. Between you and the vortex's mouth, a single massive page drifts缓慢ly—clearly one of the most important, its ink still legible in the glow of the slime—and beyond it, the sleeper's eye has finally fixed fully on your position, unblinking.
+   [check_rolled] skill=arcana total=4 success=false
+   [encounter_attempt] skill=arcana success=false
+
+!! time box reached - stopping at turn 9
+
+=== SEGMENT END: STORY STATE ===
+objective: Navigate the Whispering Mists [completed]
+objective: Investigate Oakhaven Village [completed]
+objective: Find the Derelict Vessel [active]
+objective: Explore the Phosphorescent Cove [hidden]
+ending: The Whispering Echo [leading]
+ending: The Chorus of Madness [candidate]
+ending: Sanity's Price [candidate]
+ending: The Abyssal Bargain [candidate]
+ending reached: false
+scene: Sunken Altar (narration), day 3, gold 0
+
+=== SPEND (cumulative DM agents + this segment player) ===
+narrator: 71 calls, $0.0163
+consistency_checker: 59 calls, $0.0067
+adjudicator: 58 calls, $0.0106
+summarizer: 36 calls, $0.0003
+npc_agent: 3 calls, $0.0008
+beat_planner: 3 calls, $0.0111
+encounter_designer: 2 calls, $0.0002
+hook_weaver: 2 calls, $0.0013
+meta_loop_steward: 2 calls, $0.0016
+player agent (this segment): $0.0016
+TOTAL DM spend: $0.0488
+
+=== RESUMED SEGMENT - 2026-07-19T14:41:23.530Z ===
+
+--- turn 1 ---
+>> HARRY POTTAH (say): T, hold tight—I'm going for that page, and I'll drag us both back!
+Harry Pottah: T, hold tight—I'm going for that page, and I'll drag us both back!
+
+--- turn 2 ---
+>> HARRY POTTAH (do): I tighten my grip on Testiclese, thrust my wand toward the drifting page, and bellow 'Accio Maxima!' with every ounce of will I can muster, praying the spell is strong enough to rip it from the vortex's pull before I'm forced to let it go to save us both.
+Harry Pottah: I tighten my grip on Testiclese, thrust my wand toward the drifting page, and bellow 'Accio Maxima!' with every ounce of will I can muster, praying the spell is strong enough to rip it from the vortex's pull before I'm forced to let it go to save us both.
+   [check_prompted] skill=arcana
+DM: The Accio Maxima erupts from your wand with a crack like splitting timber, and the massive page tears free of the vortex's grip, spiraling through the air to slap wetly into your outstretched hand. For a heartbeat you feel the pull lessen—and then the deck lurches sideways, the plank where your wand was anchored snapping clean in half and sending a jagged crack racing toward the stern. Testiclese tumbles back against you, gasping, the journal clutched to his chest, but his face is slack with shock and his eyes are darting—half the pages are gone, claimed by the maw below, and the recovery of this single sheet feels like pulling a tooth from a drowned man's mouth. The psychic slime on the rails has thickened, its pulsing glow brighter now, and the subsonic wail of the altar's sentience has deepened into something that presses against the inside of your skull like a hand trying to find a door. The sleeper's vast eye remains fixed on the ship, unblinking, its indifference curdling slowly into something that
+   [check_rolled] skill=arcana total=20 success=true
+   [encounter_attempt] skill=arcana success=true
+   [encounter_resolved] label=Sudden hazard near Sunken Altar
+
+--- turn 3 ---
+>> HARRY POTTAH (say): We need to get out of here now—T, what does that page say? Is there anything about escaping this thing?
+Harry Pottah: We need to get out of here now—T, what does that page say? Is there anything about escaping this thing?
+DM: The massive page in your hand is slick with slime, but the ink—written in a spidery, frantic hand—is still legible in the altar's glow. It describes a "harmonic counter-vibration" that can disrupt the psychic link, but the instructions are incomplete, ending mid-sentence with a warning about the "sentience's focus." The subsonic wail in your skull sharpens into a distinct, chilling thought that isn't yours: *You hold a piece of me. Give it back.* The splintered deck groans beneath you, and the crack in the hull is now a foot wide, with black water bubbling up through the seams. Do you try to piece together the incomplete instructions, attempt to throw the page into the vortex to appease the altar, or make a break for the first mate's skiff at the far rail?
+   [entry_mapped]
+   [encounter_opened] label=Uncover the Sunken Secrets
+
+--- turn 4 ---
+>> HARRY POTTAH (say): T, I need you to read me whatever's there—every symbol, every half-line—while I try to buy us time! Accio the loose pages from the deck!
+Harry Pottah: T, I need you to read me whatever's there—every symbol, every half-line—while I try to buy us time! Accio the loose pages from the deck!
+
+--- turn 5 ---
+>> HARRY POTTAH (do): I raise my wand and bellow 'Protego Totalum!' to erect a full shield around us, buying T time to read, then brace for the altar's retaliation.
+Harry Pottah: I raise my wand and bellow 'Protego Totalum!' to erect a full shield around us, buying T time to read, then brace for the altar's retaliation.
+   [check_prompted] skill=arcana
+DM: Your wand cuts the familiar arc, but the words catch in your throat—half-formed, stuttering against the psychic pressure crushing in from every direction. The shield flickers to life like a candle in a hurricane, a translucent bubble that wobbles once, twice, and then shatters into motes of light that are swallowed by the altar's glow before they hit the water.
+
+The full weight of the sentience crashes over you both unfiltered. Testiclese drops the journal with a strangled cry, his hands clawing at his temples, and the incomplete page slips from your grip—fluttering down to rest on the slime-slicked deck just inches from the crack where black water surges upward. The subsonic wail resolves into something terrifyingly clear, a voice that feels like it's speaking from inside your own skull: *You cannot shield yourselves from what already lives within the deep.* The sleeper's eye dilates, the pupil swallowing the sickly yellow until the whole orb is black and fathomless, and the deck tilts another degree toward the waterline.
+
+Testiclese is on his knees, gasping, his eyes squeezed shut. The page lies within arm's reach, its
+   [check_rolled] skill=arcana total=6 success=false
+   [encounter_attempt] skill=arcana success=false
+
+--- turn 6 ---
+>> HARRY POTTAH (do): I snatch the page from the deck, shove it into my robes, and haul Testiclese to his feet as I half-carry, half-drag him toward the first mate's skiff, shouting over my shoulder, 'This vessel is done—get to the skiff now!'
+Harry Pottah: I snatch the page from the deck, shove it into my robes, and haul Testiclese to his feet as I half-carry, half-drag him toward the first mate's skiff, shouting over my shoulder, 'This vessel is done—get to the skiff now!'
+   [check_prompted] skill=athletics
+DM: The splintered deck groans beneath you, tilting sharply as the crack in the hull widens to a gaping maw, black water surging up to swirl around your ankles. The psychic backlash hits not as a wave, but as a focused lance of freezing malice that drives straight into your thoughts, bypassing any defense. Testiclese collapses completely, his body going limp as a puppet with cut strings, a thin line of drool connecting his lip to the slime-slicked wood. The first mate's skiff, your only obvious escape, is now half-submerged and being actively dragged toward the vortex by a taut, unseen rope of psychic force. The sentience's voice is no longer a whisper, but a triumphant roar that vibrates in your teeth: *The page is mine. The minds are mine. The ship is my mouth, and you are the morsel.* The altar's eye fixes on you, its black depth promising utter dissolution.
+
+The skiff is being pulled under. Testiclese is unconscious and sinking. The incomplete instructions on the page in your robes might still offer a desperate, half-understood chance. Do you try to awaken Testiclese with a jolt of magic, make a final, suicidal dive for the altar's eye itself, or read the frantic, half-sentenced warning aloud, hoping its harmonic disruption still holds some power?
+   [check_rolled] skill=athletics total=7 success=false
+   [encounter_attempt] skill=athletics success=false
+   [encounter_resolved] label=Uncover the Sunken Secrets
+
+--- turn 7 ---
+>> HARRY POTTAH (do): I yank the page from my robes and shout the half-sentence about the harmonic counter-vibration at the top of my lungs, hoping the spoken words alone might break the psychic grip before the vortex swallows us all.
+Harry Pottah: I yank the page from my robes and shout the half-sentence about the harmonic counter-vibration at the top of my lungs, hoping the spoken words alone might break the psychic grip before the vortex swallows us all.
+DM: The incomplete phrase tears from your throat in a ragged shout, the unfamiliar syllables clashing against the subsonic wail. For a heartbeat, the black water stills, the vortex pausing its hungry swirl as if surprised. Then, the altar’s eye pulses, and the psychic grip tightens, the voice now a mocking chuckle in your mind: *A child’s lullaby against the tide?* The skiff groans, its gunwale slipping beneath the surface, and Testiclese’s limp form begins to slide toward the churning black water.
+   [entry_mapped]
+   [encounter_opened] label=Uncover the Sunken Secrets
+
+--- turn 8 ---
+>> HARRY POTTAH (do): I jam my wand into the slime-slick deck at my feet, and with every shred of defiance left in me, I scream 'Incendio!' — not at the altar, but at the fuel itself, hoping the psychic slime catches and forces the sentience to release its grip or burn alongside us.
+Harry Pottah: I jam my wand into the slime-slick deck at my feet, and with every shred of defiance left in me, I scream 'Incendio!' — not at the altar, but at the fuel itself, hoping the psychic slime catches and forces the sentience to release its grip or burn alongside us.
+   [check_prompted] skill=arcana
+DM: The spell's heat hits the deck, but the slime doesn't burn—it drinks the fire, its surface rippling and turning a deeper, oily black. A searing bolt of redirected energy lances back up your wand arm, and the deck beneath you lurches violently, the vortex's pull on the skiff and Testiclese's body suddenly tenfold stronger. The altar's voice is a roar of triumph now, the eye's blackness seeming to spread, and the skiff's bow plunges under, water rushing toward Testiclese's motionless face.
+   [check_rolled] skill=arcana total=7 success=false
+   [encounter_attempt] skill=arcana success=false
+
+--- turn 9 ---
+>> HARRY POTTAH (do): I dive after Testiclese, grabbing his collar with one hand and bracing my feet against the cracked deck, then thrust my wand toward the altar's eye and scream 'Oppugno!' at the page in my robes, sending it flapping like a frantic bird straight into the center of that black pupil.
+Harry Pottah: I dive after Testiclese, grabbing his collar with one hand and bracing my feet against the cracked deck, then thrust my wand toward the altar's eye and scream 'Oppugno!' at the page in my robes, sending it flapping like a frantic bird straight into the center of that black pupil.
+   [check_prompted] skill=arcana
+DM: The page, propelled by your spell, strikes the altar’s eye—but instead of disrupting it, the parchment is absorbed instantly, its ink merging with the blackness like a final offering. The sentience, now fully fed, erupts in a thrumming pulse of psychic energy that shakes the deck like a living thing. The vortex intensifies, and the first mate’s skiff is dragged down, vanishing beneath the churning black water with a gurgle of splintered wood. Testiclese’s body slumps from your grip, his face submerging just as the last ray of light from the surface is swallowed by the deep, the water closing over him with a cold, indifferent sigh. The altar’s eye, now shimmering with the page’s stolen power, turns its full attention to you, its voice a resonant, booming decree: *You fed me the key. Now, I open the door.* The entire sunken structure groans, and the floor beneath you begins to tilt violently, as if the very sea is trying to swallow the altar itself.
+
+Do you plunge into the vortex after Testiclese, hoping to pull him free before the psychic grip claims him too? Do you try to use the altar’s recent burst of energy against it, perhaps by commanding the slime to constrict the eye itself? Or do you scramble for the rising water’s surface, risking the crushing pressure, to escape while you still can?
+   [check_rolled] skill=arcana total=9 success=false
+   [encounter_attempt] skill=arcana success=false
+   [encounter_resolved] label=Uncover the Sunken Secrets
+
+!! time box reached - stopping at turn 10
+
+=== SEGMENT END: STORY STATE ===
+objective: Navigate the Whispering Mists [completed]
+objective: Investigate Oakhaven Village [completed]
+objective: Find the Derelict Vessel [active]
+objective: Explore the Phosphorescent Cove [hidden]
+ending: The Whispering Echo [leading]
+ending: The Chorus of Madness [candidate]
+ending: Sanity's Price [candidate]
+ending: The Abyssal Bargain [candidate]
+ending reached: false
+scene: Sunken Altar (narration), day 3, gold 0
+
+=== SPEND (cumulative DM agents + this segment player) ===
+narrator: 80 calls, $0.0186
+consistency_checker: 66 calls, $0.0075
+adjudicator: 65 calls, $0.0120
+summarizer: 42 calls, $0.0003
+npc_agent: 3 calls, $0.0008
+beat_planner: 3 calls, $0.0111
+encounter_designer: 2 calls, $0.0002
+hook_weaver: 2 calls, $0.0013
+meta_loop_steward: 2 calls, $0.0016
+player agent (this segment): $0.0018
+TOTAL DM spend: $0.0533
+
+=== RESUMED SEGMENT - 2026-07-19T14:48:40.564Z ===
+
+--- turn 1 ---
+>> HARRY POTTAH (do): I grab the broken mast spar beside me and plunge it into the vortex, shouting 'Accio Testiclese!' to let the spell drag him up along the wood before the sentience can claim him.
+Harry Pottah: I grab the broken mast spar beside me and plunge it into the vortex, shouting 'Accio Testiclese!' to let the spell drag him up along the wood before the sentience can claim him.
+DM: The splintered spar plunges into the churning vortex, and your charm rips through the psychic murk like a silver thread—Testiclese's limp body lurches upward, his collar snagging on the wood as the Accio's pull fights the sentience's hunger. For a moment, you feel the mast vibrate in your grip, two impossible forces warring through the same object: your spell pulling life upward, the altar dragging death below. The sentience snarls in your mind, and the vortex tightens around the spar like a fist, the wood groaning and beginning to crack. Testiclese's face breaks the surface three feet below you—eyes closed, chest still, but *close enough to grab*. The altar's eye pulses once, and a wave of psychic pressure slams into you from below
+   [entry_mapped]
+   [encounter_opened] label=Uncover the Sunken Secrets
+
+--- turn 2 ---
+>> HARRY POTTAH (do): I lunge forward, grab Testiclese by the collar, and kick off the broken deck to drag us both toward the crumbling outer wall, hoping for any fissure or passage leading away from this dying altar.
+Harry Pottah: I lunge forward, grab Testiclese by the collar, and kick off the broken deck to drag us both toward the crumbling outer wall, hoping for any fissure or passage leading away from this dying altar.
+   [check_prompted] skill=athletics
+   [prompt check -> 500] {"error":"Model response had no content"}
+   [check_rolled] skill=athletics total=3 success=false
+   [encounter_attempt] skill=athletics success=false
+
+--- turn 3 ---
+>> HARRY POTTAH (do): I swim for the crumbling wall, pulling Testiclese with me, and spot a jagged crack in the stone that might lead to a submerged tunnel—I kick hard to reach it before the vortex pulls us back.
+Harry Pottah: I swim for the crumbling wall, pulling Testiclese with me, and spot a jagged crack in the stone that might lead to a submerged tunnel—I kick hard to reach it before the vortex pulls us back.
+   [check_prompted] skill=athletics
+   [prompt check -> 500] {"error":"Model response had no content"}
+   [check_rolled] skill=athletics total=16 success=false
+   [encounter_attempt] skill=athletics success=false
+   [encounter_resolved] label=Uncover the Sunken Secrets
+
+--- turn 4 ---
+>> HARRY POTTAH (do): I take a final gulp of air and drag Testiclese through the crack, kicking into the submerged tunnel with desperate strokes, hoping the sentience's power doesn't reach this far.
+Harry Pottah: I take a final gulp of air and drag Testiclese through the crack, kicking into the submerged tunnel with desperate strokes, hoping the sentience's power doesn't reach this far.
+DM: The submerged tunnel swallows you in cold, dark pressure, the water thick with silt and a faint, oily residue that stings your eyes. Testiclese is a dead weight in your arms, his breath stopped against your chest as you kick deeper into the stone passage, the groans of the collapsing altar fading to a distant rumble. A faint, bioluminescent glow pulses from the tunnel walls ahead, casting distorted shadows that seem to pulse in time with your own racing heartbeat. Suddenly, the tunnel forks—one branch plunges into total darkness, while the other leads toward the faint glow, where something large and silent shifts in the shadows. Do you follow the light, hoping it leads to air and escape, or do you take the dark path, trusting your wand's light to reveal what lies ahead?
+   [entry_mapped]
+   [scene_travel] name=Sunken Altar proposed=Sunken Altar
+   [encounter_opened] label=Uncover the Sunken Secrets
+
+!! time box reached - stopping at turn 5
+
+=== SEGMENT END: STORY STATE ===
+objective: Navigate the Whispering Mists [completed]
+objective: Investigate Oakhaven Village [completed]
+objective: Find the Derelict Vessel [active]
+objective: Explore the Phosphorescent Cove [hidden]
+ending: The Whispering Echo [leading]
+ending: The Chorus of Madness [candidate]
+ending: Sanity's Price [candidate]
+ending: The Abyssal Bargain [candidate]
+ending reached: false
+scene: Sunken Altar (narration), day 3, gold 0
+
+=== SPEND (cumulative DM agents + this segment player) ===
+narrator: 87 calls, $0.0206
+consistency_checker: 68 calls, $0.0078
+adjudicator: 69 calls, $0.0127
+summarizer: 44 calls, $0.0003
+npc_agent: 3 calls, $0.0008
+beat_planner: 3 calls, $0.0111
+encounter_designer: 2 calls, $0.0002
+hook_weaver: 2 calls, $0.0013
+meta_loop_steward: 2 calls, $0.0016
+player agent (this segment): $0.0009
+TOTAL DM spend: $0.0563
+
+=== RESUMED SEGMENT - 2026-07-19T14:57:23.426Z ===
+
+--- turn 1 ---
+>> HARRY POTTAH (do): I twist left into the dark tunnel, wand lifted to cast Lumos once I'm clear of the glow's pull, gambling that whatever lurks in the shadows is less immediate than the silent watcher near the light.
+Harry Pottah: I twist left into the dark tunnel, wand lifted to cast Lumos once I'm clear of the glow's pull, gambling that whatever lurks in the shadows is less immediate than the silent watcher near the light.
+   [check_prompted] skill=investigation
+DM: The Lumos blazes in the dark tunnel, its sharp white light cutting through murk that feels ancient and undisturbed—no watcher, no creature, just stone. The water here is shallower, barely waist-deep, and your feet find solid ground as the tunnel curves upward, ending at a narrow crevice where air trickles through, thin but *real*. Carved into the rock beside the opening is a faded symbol: an eye pierced by a spear, freshly scratched over with what looks like old claw marks. Testiclese's chest stirs against you—an involuntary sputter, the faintest rasp of breath—while the tunnel behind you shudders with another distant, guttural groan from the collapsing altar.
+   [check_rolled] skill=investigation total=17 success=true
+   [encounter_attempt] skill=investigation success=true
+
+--- turn 2 ---
+>> HARRY POTTAH (do): I drag Testiclese through the crevice into the air pocket, lay him flat, and press two quick compressions on his chest to clear his lungs, then check his pulse.
+Harry Pottah: I drag Testiclese through the crevice into the air pocket, lay him flat, and press two quick compressions on his chest to clear his lungs, then check his pulse.
+DM: Testiclese's eyes flutter but stay shut as his lungs shudder and expel a gush of brackish water, his chest hitching with each ragged, involuntary breath. His pulse thumps weakly against your fingertips—not strong, but persistent, the rhythm of someone stubbornly clinging to the world.
+
+The air pocket is a cramped hollow carved into ancient stone, the ceiling slick with moisture and faintly luminous moss. The narrow crevice behind you still funnels a thin draft of bre air, but it can't mask the tight, enclosed feeling—this space was never meant to hold two people for long. The freshly scratched symbol on the rock glimmers in the half-light, its claw marks almost tender in their hasty fury, like something trying to erase a warning it couldn't fully cover, and somewhere deeper in the crevice beyond, the dark tunnel continues—a horizontal passage that the air seems to seep from, cool and indifferent.
+
+Testiclese lies motionless at your feet, water pooling around his sodden robes, while the stone behind you groans again—lower this time, a sound like something turning in its sleep.
+   [encounter_attempt] skill=resourcefulness success=true
+
+--- turn 3 ---
+>> HARRY POTTAH (do): I press my ear to the horizontal passage, listening for any sound of water or movement, then whisper a quick Nox to conserve my wand's light, trusting the moss-glow to guide us as I hoist Testiclese over my shoulder and crawl forward into the dark air-seep.
+Harry Pottah: I press my ear to the horizontal passage, listening for any sound of water or movement, then whisper a quick Nox to conserve my wand's light, trusting the moss-glow to guide us as I hoist Testiclese over my shoulder and crawl forward into the dark air-seep.
+   [check_prompted] skill=perception
+DM: The horizontal passage slopes upward, ending in a rough-hewn opening that spills you into a vaulted chamber, its ceiling lost in shadow. The air here is thick with the scent of wet stone and something faintly metallic, and your foot scuffs against a pile of rotting wood—the shattered remains of a long-broken crate. On the floor, half-submerged in a shallow pool, lies a waterlogged leather journal, its cover swollen and the eye-and-spear symbol faintly embossed on the spine. As you kneel to retrieve it, a final, shuddering groan echoes from the tunnel behind you, and the symbol on the rock wall at the chamber's far end glows with a sudden, sickly green light. A low hum fills the room, and the psychic residue you narrowly avoided now begins to coalesce into a shimmering, amorphous form between you and the only visible exit. Do you grab the journal and risk the psychic backlash, attempt to sneak past the forming entity while carrying Testiclese, or try to find another way out of the chamber?
+DM: The first mate's skiff scrapes free of the sinking derelict, trailing ropes like severed veins. A luminous, blue-black slime now pulses along its oars, weeping images of drowned sailors into the water with each pull. Harry grips the tiller as the ship groans and lists behind them. Testiclese stands rigid at the bow, his eyes milky-white, muttering in a tongue that sounds like wet gravel shifting. A low, psychic hum builds—dozens of crew corpses are twitching on the capsizing deck, turning sightless faces toward the skiff. Harry must keep them moving, Testiclese must break the whisper-lock on his mind, and together they must decide a heading: toward the distant islet where the pulsing roots converge, toward open sea, or back toward the weakening ward buoy they passed an hour ago. Each choice shimmers uneasily in the growing psychic haze.
+
+The skiff is free, but the altar's awakening is now a psychic wave spreading outward, and the slime's residue is seeping into your minds, pulling you toward a destination of its own. Do you fight the current and steer for the islet, trust the open sea, or try to reach the buoy before the backlash marks you for the drowned?
+   [check_rolled] skill=perception total=15 success=true
+   [encounter_attempt] skill=perception success=true
+   [milestone_reached] milestone=found_journal_fragment
+   [encounter_resolved] label=Uncover the Sunken Secrets
+   [beat_exit_met]
+   [beat_opened] name=The Sleeper's Gaze trigger=beat_exit
+
+--- turn 4 ---
+>> HARRY POTTAH (do): I grab the journal, shove it into my robes, and hoist Testiclese higher as I charge straight at the shimmering entity, hoping to bowl through it before it fully solidifies.
+   [server 504] {"code":"IDLE_TIMEOUT","message":"Request idle timeout limit (150s) reached"}
+Harry Pottah: I grab the journal, shove it into my robes, and hoist Testiclese higher as I charge straight at the shimmering entity, hoping to bowl through it before it fully solidifies.
+DM: The moment your shoulder connects with the shimmering form, it doesn’t yield—it *screams* in your mind, a silent shriek that feels like needles behind your eyes. The entity dissolves into a spray of cold, glittering motes, but the psychic backlash ripples through you, and Testiclese’s eyes snap open with a terrified, vacant gaze. The chamber’s far wall now reveals a narrow, dark fissure where the symbol once was, while the tunnel behind you echoes with a new, wet, slithering sound. Do you stagger toward the fissure while trying to snap Testiclese out of his trance, or do you turn to face whatever is approaching from the tunnel?
+   [entry_mapped]
+   [scene_travel] name=Aethelian Archipelago proposed=Aethelian Archipelago
+   [day_advanced]
+   [antagonist_advanced] trigger=time_passed
+   [encounter_opened] label=Sudden hazard near Aethelian Archipelago
+   [encounter_opened] label=Flee the Awakening Hulk
+
+--- turn 5 ---
+>> HARRY POTTAH (do): I haul Testiclese through the fissure without looking back, shaking him hard and shouting his name to break the trance as we scramble into the dark beyond.
+Harry Pottah: I haul Testiclese through the fissure without looking back, shaking him hard and shouting his name to break the trance as we scramble into the dark beyond.
+   [check_prompted] skill=strength (athletics)
+DM: Your foot catches on a jagged lip of stone, and you pitch forward with a sharp crack of your knee against the rock, the journal slipping from your robes and sliding away into the wet dark with a faint splash. Testiclese sags heavier in your grip, his vacant eyes still staring through you, lips still murmuring in that awful gravel-tongue. Behind you, the slithering intensifies—something wet and heavy dragging itself through the fissure—while ahead, the narrow passage opens into a moss-lit crawl where something pale and bulbous pulses faintly against the far wall.
+   [check_rolled] skill=strength (athletics) total=2 success=false
+   [encounter_attempt] skill=strength (athletics) success=false
+
+!! time box reached - stopping at turn 6
+
+=== SEGMENT END: STORY STATE ===
+objective: Navigate the Whispering Mists [completed]
+objective: Investigate Oakhaven Village [completed]
+objective: Find the Derelict Vessel [active]
+objective: Explore the Phosphorescent Cove [hidden]
+ending: The Whispering Echo [leading]
+ending: The Chorus of Madness [candidate]
+ending: Sanity's Price [candidate]
+ending: The Abyssal Bargain [candidate]
+ending reached: false
+scene: Aethelian Archipelago (narration), day 4, gold 0
+
+=== SPEND (cumulative DM agents + this segment player) ===
+narrator: 95 calls, $0.0226
+consistency_checker: 74 calls, $0.0085
+adjudicator: 74 calls, $0.0136
+summarizer: 48 calls, $0.0003
+npc_agent: 3 calls, $0.0008
+beat_planner: 4 calls, $0.0149
+encounter_designer: 3 calls, $0.0003
+hook_weaver: 3 calls, $0.0021
+meta_loop_steward: 3 calls, $0.0033
+player agent (this segment): $0.0011
+TOTAL DM spend: $0.0664
+
+=== RESUMED SEGMENT - 2026-07-19T15:08:13.372Z ===
+
+--- turn 1 ---
+>> HARRY POTTAH (do): I jam my wand into my mouth to bite down on it, then grab Testiclese by the collar and drag him toward the archway, shielding us behind the pulsing growth as I kick a crab into the nearest cluster, hoping the disruption buys us a second to reach the salt breeze.
+Harry Pottah: I jam my wand into my mouth to bite down on it, then grab Testiclese by the collar and drag him toward the archway, shielding us behind the pulsing growth as I kick a crab into the nearest cluster, hoping the disruption buys us a second to reach the salt breeze.
+   [check_prompted] skill=athletics
+DM: The archway swallows you both in a rush of salt and cold air, and you tumble out onto a slick, barnacle-crusted ledge where a listing sk
+   [check_rolled] skill=athletics total=8 success=false
+   [encounter_attempt] skill=athletics success=false
+   [scene_effect_rejected] proposed=crew surged overboard as the ship capsized
+   [scene_effect_rejected] proposed=barely_escaped_capsize
+   [scene_effect_rejected] proposed=forced_to_dive_psychic_slime
+   [encounter_resolved] label=Flee the Awakening Hulk
+
+--- turn 2 ---
+>> HARRY POTTAH (do): I haul Testiclese upright and scan the ledge for any sign of the journal or a way to navigate toward the islet, then point my wand at the nearest cluster of crabs that followed us and cast a silent Incendio to buy us a moment of clear air.
+Harry Pottah: I haul Testiclese upright and scan the ledge for any sign of the journal or a way to navigate toward the islet, then point my wand at the nearest cluster of crabs that followed us and cast a silent Incendio to buy us a moment of clear air.
+DM: You haul Testiclese upright, his weight settling against you as your eyes sweep the ledge—no journal, no path, just slick stone and the skiff listing drunkenly in the swell below. The crabs pour through the archway behind you, and a wordless flick of your wand sends a sharp tongue of flame licking across the nearest cluster; they scatter, mandibles clicking in agitation, but the fire buys only seconds before they reorient, drawn forward by the altar's hum still resonating in your skull.
+
+The skiff rocks against the ledge, its oars gone, its hull scraped raw, and across the dark water the grotto entrance pulses with that sickly light where Testiclese's vacant smile and whispered unknown words still echo. The psychic pressure hasn't released—if anything, out here in the open air it's sharpened, the whispers threading between waves of nausea—and the crabs behind you are already clicking their way through the archway again, drawn by the beacon that won't stop calling. The altar and its psychic assault still wait; can you reach it before Testiclese's mind, or the crabs, or the rising water leave you nothing left to fight with?
+   [entry_mapped]
+
+--- turn 3 ---
+>> HARRY POTTAH (do): I tighten my grip on Testiclese and shout 'Accio!' toward the grotto, hoping the journal—or anything useful—flies to my hand, then I drag him toward the nearest cluster of crabs, conjuring a gust of wind from my wand to knock them off the ledge into the sea.
+Harry Pottah: I tighten my grip on Testiclese and shout 'Accio!' toward the grotto, hoping the journal—or anything useful—flies to my hand, then I drag him toward the nearest cluster of crabs, conjuring a gust of wind from my wand to knock them off the ledge into the sea.
+DM: The air thrums with the force of your Accio, the psychic current momentarily coiling around your will before snapping back like a broken bowstring; from the grotto’s pulsing throat, nothing answers your call. A savage blast of wind erupts from your wand, shearing the front rank of skittering crabs from the slick stone and scattering them into the black, churning surf below. But the breach is short-lived—the remaining horde surges forward, a tide of pale shells and mandibles, while Testiclese’s hand suddenly clamps over yours, his grip unnaturally strong, his eyes fixed on the grotto’s abyssal entrance as he whispers, “*It’s calling us home.*” Do you fight his grip and make a desperate leap for the listing skiff, or do you turn your wand on the mind of your friend to sever the altar’s hold before it’s too late?
+   [entry_mapped]
+   [encounter_opened] label=The Altar's Psychic Assault
+
+--- turn 4 ---
+>> HARRY POTTAH (do): I drive the heel of my boot hard into Testiclese's instep to break his trance-grip, then grab him by the collar and hurl us both into the listing skiff, casting a hasty Reparo on its hull and setting us adrift into the dark salt water beyond the crabs' reach, shouting, 'No, you daft git, we're not going back there!'
+Harry Pottah: I drive the heel of my boot hard into Testiclese's instep to break his trance-grip, then grab him by the collar and hurl us both into the listing skiff, casting a hasty Reparo on its hull and setting us adrift into the dark salt water beyond the crabs' reach, shouting, 'No, you daft git, we're not going back there!'
+   [check_prompted] skill=athletics
+DM: The heel of your boot cracks against Testiclese's instep, and his grip falters just enough for you to haul him by the collar and fling him into the listing skiff. He lands with a heavy thud against the gunwale, and you tumble in after him, the boat rocking violently as you point your wand at the scraped hull and bark a hasty Reparo—but the wood groans, splinters knitting unevenly, the repair incomplete as the skiff lurches and capsizes, dumping you both into the cold, black water.
+   [check_rolled] skill=athletics total=5 success=false
+   [encounter_attempt] skill=athletics success=false
+
+--- turn 5 ---
+>> HARRY POTTAH (do): I grab Testiclese by the robes and kick hard toward a rocky outcropping I spotted earlier, dragging him through the dark water as the crabs clatter at the ledge's edge, hoping the salt breeze and cold shock break his trance for good.
+Harry Pottah: I grab Testiclese by the robes and kick hard toward a rocky outcropping I spotted earlier, dragging him through the dark water as the crabs clatter at the ledge's edge, hoping the salt breeze and cold shock break his trance for good.
+   [check_prompted] skill=athletics
+DM: The salt water seeps into your clothes, cold and biting, but the psychic assault doesn’t rattle—it doubles. As your feet find purchase on the rocky outcropping, the altar’s hum deepens inside your skull, carving new grooves of compulsion. Testiclese goes rigid under your grip, his vacant smile stretching as he whispers a single, resonant word in a language you can’t understand; the crabs on the ledge behind you freeze, then turn in perfect unison, their pale shells gleaming with the same sickly light that pulses from the grotto. The skiff is gone, sunk beneath the black waves, and the rising tide is beginning to lap at the base of your rock.
+
+The psychic pressure coalesces into a single, undeniable demand, and you feel your own thoughts beginning to curl around it, drawn toward the water where the altar waits. Testiclese’s eyes are on
+   [check_rolled] skill=athletics total=10 success=false
+   [encounter_attempt] skill=athletics success=false
+   [story_event] tag=party entered phosphorescent cove
+   [milestone_reached] milestone=party entered phosphorescent cove
+   [story_event] tag=party fled the cove, carrying fragmented psychic impressions
+   [milestone_reached] milestone=party fled the cove, carrying fragmented psychic impressions
+   [encounter_resolved] label=The Altar's Psychic Assault
+   [beat_exit_met]
+   [incident]
+   [incident] trigger=beat_exit
+
+--- turn 6 ---
+>> HARRY POTTAH (do): I wrench my gaze away from the grotto and shove my wand against my own temple, forcing a sharp Occlumency barrier between the altar's pull and my mind, then seize Testiclese by the collar and kick toward a gap in the cliff wall ahead, hoping to find a crevice or sea cave the crabs cannot follow.
+Harry Pottah: I wrench my gaze away from the grotto and shove my wand against my own temple, forcing a sharp Occlumency barrier between the altar's pull and my mind, then seize Testiclese by the collar and kick toward a gap in the cliff wall ahead, hoping to find a crevice or sea cave the crabs cannot follow.
+   [entry_mapped]
+   [scene_travel] name=Aethelian Archipelago proposed=Aethelian Archipelago (cliff crevice or sea cave)
+   [encounter_opened] label=Flee the psychic pull
+   [check_prompted] skill=arcana
+DM: The Occlumency barrier you erect around your mind splinters almost the moment it forms, the altar's hum punching through like a betentacled fist, and your muscles seize with a will not your own—your legs kick you *wrong*, not toward the cliff gap but back toward the water's edge, dragging Testiclese with you as his vacant grin widens. The crabs at the ledge's rim shift in eerie concert, their pale shells brightening, their mandibles clicking a rhythm that matches the pulse inside your skull. The rock beneath your feet is slippery, the black tide surging around your calves, and Testiclese's hand finds your wrist again—this time not a panic
+   [check_rolled] skill=arcana total=4 success=false
+   [encounter_attempt] skill=arcana success=false
+
+!! time box reached - stopping at turn 7
+
+=== SEGMENT END: STORY STATE ===
+objective: Navigate the Whispering Mists [completed]
+objective: Investigate Oakhaven Village [completed]
+objective: Find the Derelict Vessel [completed]
+objective: Explore the Phosphorescent Cove [active]
+ending: The Whispering Echo [leading]
+ending: The Chorus of Madness [candidate]
+ending: Sanity's Price [candidate]
+ending: The Abyssal Bargain [candidate]
+ending reached: false
+scene: Aethelian Archipelago (narration), day 4, gold 0
+
+=== SPEND (cumulative DM agents + this segment player) ===
+narrator: 104 calls, $0.0249
+consistency_checker: 82 calls, $0.0095
+adjudicator: 81 calls, $0.0150
+summarizer: 55 calls, $0.0003
+npc_agent: 3 calls, $0.0008
+beat_planner: 7 calls, $0.0217
+encounter_designer: 5 calls, $0.0004
+hook_weaver: 4 calls, $0.0027
+meta_loop_steward: 3 calls, $0.0033
+player agent (this segment): $0.0014
+TOTAL DM spend: $0.0786
+
+=== FINALE (after DM-override canonization of stale-guide atoms) ===
+DM: The salt water seeps into your clothes, cold and biting, but the psychic assault doesn’t rattle—it doubles. As your feet find purchase on the rocky outcropping, the altar’s hum deepens inside your skull, carving new grooves of compulsion. Testiclese goes rigid under your grip, his vacant smile stretching as he whispers a single, resonant word in a language you can’t understand; the crabs on the ledge behind you freeze, then turn in perfect unison, their pale shells gleaming with the same sickly light that pulses from the grotto. The skiff is gone, sunk beneath the black waves, and the rising tide is beginning to lap at the base of your rock.
+
+The psychic pressure coalesces into a single, undeniable demand, and you feel your own thoughts beginning to curl around it, drawn toward the water where the altar waits. Testiclese’s eyes are on
+Harry Pottah: I wrench my gaze away from the grotto and shove my wand against my own temple, forcing a sharp Occlumency barrier between the altar's pull and my mind, then seize Testiclese by the collar and kick toward a gap in the cliff wall ahead, hoping to find a crevice or sea cave the crabs cannot follow.
+DM: The Occlumency barrier you erect around your mind splinters almost the moment it forms, the altar's hum punching through like a betentacled fist, and your muscles seize with a will not your own—your legs kick you *wrong*, not toward the cliff gap but back toward the water's edge, dragging Testiclese with you as his vacant grin widens. The crabs at the ledge's rim shift in eerie concert, their pale shells brightening, their mandibles clicking a rhythm that matches the pulse inside your skull. The rock beneath your feet is slippery, the black tide surging around your calves, and Testiclese's hand finds your wrist again—this time not a panic
+DM: Objective complete: Explore the Phosphorescent Cove
+DM: The Phosphorescent Cove lies before you, its alien glow bathing the rocky walls in pulsating blues and sickly greens. You've breached the hidden grotto, seeing the source of the whispers—a carved stone altar half-submerged in the tidal pool, thumping with a light that matches the rhythm in your own skull. Testiclese is limp in your grip, his vacant smile now slack-jawed and still. A narrow, dry gap in the cliff face leads inland
+DM: The grotto's light pulses around you, its alien rhythm now shuddering through the stone itself as you drag Testiclese toward the dry gap in the cliff face, his slack body a dead weight in your arms. Above the altar—half-submerged and still thrumming with Xy'loth's call—a web of hairline cracks is spreading across the ceiling, and you realize the psychic feedback from your Occlumency struggle has destabilized something fundamental, a threadbare flaw in the entity's centuries-long awakening. The crabs have stopped at the waterline, their pale shells dimming, and the whispers in your skull are fraying into static; you have a single, clear instant to act before the feedback loop collapses or detonates the entire cove. Do you pour all your remaining will into severing the altar's connection, knowing the psychic backlash may leave a permanent scar on the archipelago—or do you flee through the gap, preserving yourself and Testiclese but abandoning the islands to whatever comes next?
+
+*** ENDING COMMITTED: The Whispering Echo (scores: Echo 8, Chorus 5, Abyssal 3, Sanity 2) ***
+objectives: all 4 completed | day 4 | scene: Aethelian Archipelago

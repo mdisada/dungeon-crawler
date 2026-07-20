@@ -45,18 +45,41 @@ export function CheckPrompt() {
   let body: React.ReactNode
   if (pending.kind === 'check') {
     const mine = pending.actorCharacterId === myCharacterId
+    // The DM calls the check and offers the applicable skills as buttons - the player picks
+    // which to roll (one option keeps the plain Roll button).
+    const options = pending.skillOptions?.length ? pending.skillOptions : [pending.skill]
     body = mine ? (
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <p className="text-sm text-white">
-          <span className="font-semibold capitalize">{pending.skill}</span> check — {pending.reason}
+          {options.length > 1 ? (
+            <>The DM calls for a check — {pending.reason}</>
+          ) : (
+            <>
+              <span className="font-semibold capitalize">{pending.skill}</span> check — {pending.reason}
+            </>
+          )}
         </p>
-        <Button size="sm" disabled={isBusy} onClick={() => void rollPending(pending.id)}>
-          Roll
-        </Button>
+        {options.length > 1 ? (
+          options.map((skill) => (
+            <Button
+              key={skill}
+              size="sm"
+              disabled={isBusy}
+              className="capitalize"
+              onClick={() => void rollPending(pending.id, skill)}
+            >
+              Roll {skill}
+            </Button>
+          ))
+        ) : (
+          <Button size="sm" disabled={isBusy} onClick={() => void rollPending(pending.id)}>
+            Roll
+          </Button>
+        )}
       </div>
     ) : (
       <p className="text-sm text-white/80">
-        Waiting for {nameOf(pending.actorCharacterId ?? '')} to roll {pending.skill}…
+        Waiting for {nameOf(pending.actorCharacterId ?? '')} to roll {options.join(' / ')}…
       </p>
     )
   } else if (pending.kind === 'group') {

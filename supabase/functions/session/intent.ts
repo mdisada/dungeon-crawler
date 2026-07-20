@@ -8,24 +8,34 @@ import {
   classifyIntent, dmSettings, liveRng, promptDeadline, rollCheck,
   ASSIST_PROMPT_WINDOW_S, GROUP_PROMPT_WINDOW_S, SOLO_PROMPT_WINDOW_S,
 } from '../_shared/play/index.ts'
-import type { CheckSpec, PendingPrompt } from '../_shared/play/index.ts'
+import type { CheckSpec, IntentRoute, PendingPrompt } from '../_shared/play/index.ts'
 import type { Json, PendingPromptState } from '../_shared/state/index.ts'
 import { runAdjudicator } from './agents.ts'
-import type { AgentEnv } from './agents.ts'
+import type { AgentEnv, SceneEffects } from './agents.ts'
 import { narrationBeat } from './narration.ts'
-import { handleSay } from './npc-dialogue.ts'
+import { endEncounter, handleSay, startSocial } from './npc-dialogue.ts'
 import type { SayUtterance } from './npc-dialogue.ts'
+import { maybeSpawnEncounter } from './danger.ts'
+import { handleCutsceneIntent } from './entry.ts'
 import {
-  appendLinesDiff, loadCharacter, loadPartyCharacters, loadPlayContext, newLine,
-  partySkillList, pendingDiffs, skillModifierFor, typingDiff,
+  handleChallengeIntent, handleEncounterTalk, openEncounterCommand, spawnInstantiator,
+  specFromCommandBody,
+} from './encounters.ts'
+import { handlePuzzleIntent, openPuzzleFromSpec } from './puzzle-encounter.ts'
+import { openSocialEncounter } from './social-encounter.ts'
+import {
+  activePcIds, appendLinesDiff, characterProfiles, loadCharacter, loadPartyCharacters,
+  loadPlayContext, newLine, partySkillList, pendingDiffs, skillModifierFor, typingDiff,
 } from './orchestrate.ts'
-import { classifyAndHandle, noteIntentForClassifier, planAndOpenBeat } from './beats.ts'
+import { classifyAndHandle, loadLoops, noteIntentForClassifier, planAndOpenBeat } from './beats.ts'
+import { activeLoop, listMilestoneAtoms } from '../_shared/story/index.ts'
 import type { CharacterRow, PlayContext } from './orchestrate.ts'
 import { evaluateStoryProgress } from './progress.ts'
 import { expireStaleProposals, recordProposal } from './proposals.ts'
+import { applySceneEffects } from './scene-director.ts'
 import { completeQuest, journalPatch, maybeHandleOfferResponse, stageOfferByContractId } from './story.ts'
 import { antagonistTurn, noteSuspicion } from './steward.ts'
-import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
+import { commitDiffs, loadState, logEvent } from './util.ts'
 
 export interface DoCheckStash {
   flow: 'do'
@@ -36,6 +46,8 @@ export interface DoCheckStash {
   consequencesHint: string
   spec: CheckSpec
   assistResult: { success: boolean; margin: number } | null
+  /** Applied on check success only (full-AI); absent in pre-slice stashes. */
+  sceneEffects?: SceneEffects | null
 }
 
 const mustPickCharacter = { status: 403, body: { error: 'Pick a character before acting' } }
@@ -65,11 +77,25 @@ export async function playerIntent(
   const character = await loadCharacter(service, play.member.character_id)
   if (!character) return mustPickCharacter
 
-  if (row.state.dialogue.pending) {
-    return { status: 409, body: { error: 'Resolve the current check first' } }
-  }
-  if (row.state.dialogue.typing) {
-    return { status: 409, body: { error: 'The DM is thinking - one moment' } }
+  if (row.state.dialogue.pending || row.state.dialogue.typing) {
+    // Self-heal a dead pipeline: a worker killed mid-call (WORKER_RESOURCE_LIMIT, seen live)
+    // never reaches its catch block, so typing:true - or a pending prompt orphaned after its
+    // roll - would lock the table forever. If nothing has been logged for 2 minutes, the DM
+    // is not thinking and no flow is coming back for the prompt: clear both and proceed.
+    const { data: lastEvent } = await service
+      .from('event_log')
+      .select('created_at')
+      .eq('adventure_id', adventureId)
+      .order('id', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const lastAt = lastEvent ? new Date(lastEvent.created_at as string).getTime() : 0
+    if (Date.now() - lastAt < 120_000) {
+      return row.state.dialogue.pending
+        ? { status: 409, body: { error: 'Resolve the current check first' } }
+        : { status: 409, body: { error: 'The DM is thinking - one moment' } }
+    }
+    await commitDiffs(service, adventureId, () => [...pendingDiffs(null, null), typingDiff(false)])
   }
   // Slice 2 table lock: one gist review at a time; nothing else moves until the DM decides.
   if (row.state.dm?.pendingReview) {
@@ -84,16 +110,73 @@ export async function playerIntent(
     if (offerResult) return offerResult
   }
 
-  const route = classifyIntent(
+  // Phase enforcement (encounter-states Slice 3): narrative play is a two-phase machine.
+  // An open encounter's handler owns actions; otherwise full-AI cutscenes route every say/do
+  // through entry mapping - the free-form adjudication path no longer exists for them.
+  // Assist keeps the human DM as the driver: only open challenges intercept its intents.
+  let route: IntentRoute | 'challenge' | 'entry' | 'puzzle' | 'encounter_talk' = classifyIntent(
     { kind: kind as never, skill, targetId },
     { mode: row.state.scene.mode, stagedNpcIds: row.state.dialogue.speakers.map((s) => s.npcId) },
   )
+  // Unified input (2026-07-20): the player just talks to the DM - say and do route
+  // identically, and the interpreters decide what the words are (the social classifier
+  // escapes physical actions out of conversations; the adjudicator's talk flag and the
+  // puzzle judge's talk result turn questions into answered DM talk). Explicit Roll stays
+  // the one mechanical fast path.
+  const narrativeMode = ['narration', 'roleplay', 'downtime', 'puzzle'].includes(row.state.scene.mode)
+  if (narrativeMode && (kind === 'say' || kind === 'do' || (kind === 'roll' && !skill))) {
+    const conversational = row.state.dialogue.speakers.length > 0 && kind !== 'roll'
+    if (conversational) {
+      route = 'dialogue'
+    } else if (row.state.encounter?.kind === 'skill_challenge') {
+      route = 'challenge'
+    } else if (row.state.encounter?.kind === 'puzzle') {
+      route = 'puzzle'
+    } else if (row.state.encounter?.kind === 'social') {
+      route = 'encounter_talk'
+    } else if (play.adventure.mode === 'full_ai') {
+      route = 'entry'
+    }
+    // Assist with nobody staged keeps classifyIntent's verdict (free adjudication).
+  }
+  // Variety/classifier bookkeeping wants the interpreted pillar, not the button pressed.
+  const pillarKind = route === 'dialogue' || route === 'encounter_talk' || route === 'chat'
+    ? 'say'
+    : kind === 'roll' ? 'roll' : 'do'
   await logEvent(service, adventureId, play.sessionId, 'intent_submitted', {
-    kind, route, character_id: character.id, text: text.slice(0, 200),
+    kind: pillarKind, raw_kind: kind, route, character_id: character.id, text: text.slice(0, 200),
   })
 
   let result: { status: number; body: Record<string, unknown> }
   switch (route) {
+    case 'challenge': {
+      const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
+      result = await handleChallengeIntent(service, env, play.sessionId, character, text)
+      break
+    }
+    case 'puzzle': {
+      const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
+      result = await handlePuzzleIntent(service, env, play.sessionId, character, text)
+      break
+    }
+    case 'encounter_talk': {
+      const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
+      result = await handleEncounterTalk(service, env, play.sessionId, character, text)
+      // Suspicion parity with the other say routes - never blocks the reply.
+      if (result.status === 200) {
+        try {
+          await noteSuspicion(service, env, play.sessionId, text)
+        } catch (err) {
+          console.error('suspicion pass failed', err)
+        }
+      }
+      break
+    }
+    case 'entry': {
+      const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
+      result = await handleCutsceneIntent(service, env, play.sessionId, character, text, kind)
+      break
+    }
     case 'fast_path':
       result = await fastPath(service, adventureId, play.sessionId, kind, skill, character)
       break
@@ -113,10 +196,33 @@ export async function playerIntent(
       const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
       const utterance: SayUtterance = { actorCharacterId: character.id, actorName: character.name, text }
       result = await handleSay(service, env, play.sessionId, utterance, targetId)
+      // The social classifier escaped a physical action out of the conversation (unified
+      // input): the line is committed and typing is on - continue in the right action flow.
+      if (result.status === 200 && result.body.resolved === 'action') {
+        if (row.state.encounter?.kind === 'skill_challenge') {
+          result = await handleChallengeIntent(service, env, play.sessionId, character, text, { lineAlreadyStaged: true })
+        } else if (row.state.encounter?.kind === 'puzzle') {
+          result = await handlePuzzleIntent(service, env, play.sessionId, character, text, { lineAlreadyStaged: true })
+        } else if (play.adventure.mode === 'full_ai' && !row.state.encounter && narrativeMode) {
+          result = await handleCutsceneIntent(service, env, play.sessionId, character, text, 'do', { lineAlreadyStaged: true })
+        } else {
+          result = await adjudicate(service, adventureId, play, character, text, { lineAlreadyStaged: true })
+        }
+      }
       break
     }
     case 'adjudicate':
       result = await adjudicate(service, adventureId, play, character, text)
+      // Say-kind intents used to get suspicion tagging on the chat route; keep parity now
+      // that no-NPC says adjudicate instead.
+      if (kind === 'say' && result.status === 200) {
+        try {
+          const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
+          await noteSuspicion(service, env, play.sessionId, text)
+        } catch (err) {
+          console.error('suspicion pass failed', err)
+        }
+      }
       break
     default:
       return { status: 400, body: { error: `Unroutable intent kind: ${kind}` } }
@@ -127,7 +233,7 @@ export async function playerIntent(
   if (result.status === 200) {
     const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
     try {
-      const classified = await noteIntentForClassifier(service, env, play.sessionId, kind)
+      const classified = await noteIntentForClassifier(service, env, play.sessionId, pillarKind)
       if (classified?.body.resolved === 'pivoted') {
         const patch = await journalPatch(service, adventureId)
         await commitDiffs(service, adventureId, () => [patch])
@@ -168,24 +274,42 @@ async function adjudicate(
   play: { adventure: { creator_id: string; mode: string | null }; sessionId: string; demo: boolean },
   character: CharacterRow,
   text: string,
+  opts?: { lineAlreadyStaged?: boolean },
 ) {
   const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
-  await commitDiffs(service, adventureId, (s) => [
-    appendLinesDiff(s, [newLine(character.name, null, text)], { typing: true }),
-  ])
+  if (!opts?.lineAlreadyStaged) {
+    await commitDiffs(service, adventureId, (s) => [
+      appendLinesDiff(s, [newLine(character.name, null, text)], { typing: true }),
+    ])
+  }
 
-  const party = await loadPartyCharacters(service, adventureId)
+  const [party, locationRows, npcRows] = await Promise.all([
+    loadPartyCharacters(service, adventureId),
+    service.from('locations').select('name').eq('adventure_id', adventureId),
+    service.from('npcs').select('name').eq('adventure_id', adventureId),
+  ])
   const partySkills = partySkillList(party)
   let adjudication
   try {
     const state = (await loadState(service, adventureId)).state
     const currentObjective = state.objectives.list.find((o) => o.id === state.objectives.currentId)
     const { data: objectiveRow } = currentObjective
-      ? await service.from('objectives').select('title, hidden_description').eq('id', currentObjective.id).maybeSingle()
+      ? await service
+          .from('objectives')
+          .select('title, hidden_description, completion_predicates')
+          .eq('id', currentObjective.id)
+          .maybeSingle()
       : { data: null }
+    const loop = activeLoop(await loadLoops(service, adventureId))
+    const { data: beatRow } = loop?.currentBeatId
+      ? await service.from('beats').select('exit_conditions').eq('id', loop.currentBeatId).maybeSingle()
+      : { data: null }
+    const objectiveAtoms = listMilestoneAtoms(objectiveRow?.completion_predicates ?? null)
+    const beatAtoms = listMilestoneAtoms(beatRow?.exit_conditions ?? null)
+    const profiles = await characterProfiles(service, party)
     adjudication = await runAdjudicator(env, {
       intentText: text,
-      actorSummary: `${character.name}, level ${character.level} ${character.class_key ?? 'adventurer'}`,
+      actorSummary: profiles[character.id] ?? `${character.name}, level ${character.level} ${character.class_key ?? 'adventurer'}`,
       sceneSummary: `${state.scene.locationName || 'unknown place'} (${state.scene.mode})`,
       objective: objectiveRow
         ? { title: objectiveRow.title as string, hiddenDescription: objectiveRow.hidden_description as string }
@@ -193,6 +317,12 @@ async function adjudicate(
       partySkills,
       partySize: party.length,
       recentEvents: state.dialogue.lines.slice(-5).map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`),
+      knownLocations: ((locationRows.data ?? []) as { name: string }[]).map((l) => l.name),
+      knownNpcs: ((npcRows.data ?? []) as { name: string }[]).map((n) => n.name),
+      milestones: [...new Set([
+        ...objectiveAtoms.flags, ...objectiveAtoms.events, ...objectiveAtoms.facts,
+        ...beatAtoms.flags, ...beatAtoms.events, ...beatAtoms.facts,
+      ])],
     })
   } catch (err) {
     await commitDiffs(service, adventureId, () => [typingDiff(false)])
@@ -209,6 +339,11 @@ async function adjudicate(
     summary: `${adjudication.resolution.type}: ${adjudication.interpretation.slice(0, 60)}`,
   })
 
+  if (adjudication.flags.talk) {
+    // A question to the DM, not an action (unified input): answer it in the fiction.
+    return handleEncounterTalk(service, env, play.sessionId, character, text, { lineAlreadyStaged: true })
+  }
+
   if (play.adventure.mode === 'assist' && adjudication.flags.needsDm) {
     // Assist short-circuit (F07 SS3.3): the ruling waits in the tray; Phase 10 makes it clickable.
     await commitDiffs(service, adventureId, () => [typingDiff(false)])
@@ -224,15 +359,40 @@ async function adjudicate(
       return { status: 200, body: { ok: true, resolved: 'impossible' } }
     }
     const outcome = resolution.type === 'auto_success' ? 'succeeds without a roll' : 'fails - no roll could save it'
+    // Scene Director v1: apply validated world movement BEFORE narrating, so the narrator and
+    // consistency checker ground on the new scene instead of fighting the transition.
+    const applyEffects =
+      resolution.type === 'auto_success' && adjudication.sceneEffects && play.adventure.mode === 'full_ai'
+    let sceneNote = ''
+    if (applyEffects) {
+      const applied = await applySceneEffects(
+        service, env, play.sessionId, adjudication.sceneEffects!,
+        {
+          stageNpcs: (npcIds) => startSocial(service, adventureId, env.creatorId, npcIds),
+          endScene: () => endEncounter(service, adventureId, env.creatorId),
+        },
+      )
+      if (applied.sceneEnded) sceneNote += ' The conversation has ended; the party is on the move again.'
+      if (applied.traveledTo) sceneNote += ` The party has just arrived at ${applied.traveledTo} - establish the new scene there.`
+      if (applied.staged.length > 0) sceneNote += ` Present and in conversation now: ${applied.staged.join(', ')}.`
+      if (applied.dayAdvanced !== null) sceneNote += ' Meaningful time passes during this - let the narration carry it.'
+      if (applied.combatWon) sceneNote += ` A fight broke out ("${applied.combatWon}") and the party won decisively - narrate the clash and its immediate aftermath.`
+    }
     await narrationBeat(
       service, env, play.sessionId,
-      `Narrate this action outcome. ${character.name} attempts: ${adjudication.interpretation}. It ${outcome}. ${resolution.consequencesHint}`,
+      `Narrate this action outcome. ${character.name} attempts: ${adjudication.interpretation}. It ${outcome}. ${resolution.consequencesHint}${sceneNote}`,
       'Action outcome',
+      'outcome',
     )
+    // Travel/marker effects may satisfy beat exits or objective predicates - let the story move.
+    if (applyEffects) await evaluateStoryProgress(service, env, play.sessionId)
     return { status: 200, body: { ok: true, resolved: resolution.type } }
   }
 
-  const spec = resolution.check
+  // A solo party has nobody to fill an assist slot - the prompt would just sit until expiry.
+  const spec = party.length < 2 && resolution.check.requiresAssist
+    ? { ...resolution.check, requiresAssist: null }
+    : resolution.check
   const stash: DoCheckStash = {
     flow: 'do',
     utterance: text,
@@ -242,6 +402,7 @@ async function adjudicate(
     consequencesHint: resolution.consequencesHint,
     spec,
     assistResult: null,
+    sceneEffects: play.adventure.mode === 'full_ai' ? adjudication.sceneEffects : null,
   }
   const prompt = buildPrompt(spec, character, await activePcIds(service, adventureId))
   await commitDiffs(service, adventureId, () => [...pendingDiffs(prompt, stash as unknown as Json), typingDiff(false)])
@@ -249,17 +410,6 @@ async function adjudicate(
     kind: prompt.kind, skill: spec.skill, group: spec.group, assist: spec.requiresAssist as unknown as Json,
   })
   return { status: 200, body: { ok: true, resolved: 'check_prompted', prompt: prompt as unknown as Json } }
-}
-
-async function activePcIds(service: SupabaseClient, adventureId: string): Promise<string[]> {
-  const { data, error } = await service
-    .from('adventure_members')
-    .select('character_id, spectator, role')
-    .eq('adventure_id', adventureId)
-  assertOk(error, 'members load failed')
-  return (data ?? [])
-    .filter((m) => m.role === 'player' && !m.spectator && m.character_id)
-    .map((m) => m.character_id as string)
 }
 
 function buildPrompt(spec: CheckSpec, actor: CharacterRow, partyCharacterIds: string[]): PendingPromptState {
@@ -294,6 +444,8 @@ function buildPrompt(spec: CheckSpec, actor: CharacterRow, partyCharacterIds: st
     id: crypto.randomUUID(),
     actorCharacterId: actor.id,
     skill: spec.skill,
+    // The DM offers the applicable skills as buttons; the player picks which to roll.
+    skillOptions: spec.skillOptions.length > 0 ? spec.skillOptions : [spec.skill],
     advDis: spec.advDis,
     reason: spec.rationale,
     deadline: promptDeadline(now, SOLO_PROMPT_WINDOW_S),
@@ -357,6 +509,43 @@ async function dmCommand(
     await evaluateStoryProgress(service, env, sessionId)
     return { status: 200, body: { ok: true } }
   }
+  // Encounter-states: hand-seed a typed encounter (testing surface + DM override).
+  if (command === 'open_encounter') {
+    if (String(body.encounter_kind ?? '') === 'puzzle') {
+      const row = await loadState(service, adventureId)
+      if (row.state.encounter) return { status: 409, body: { error: 'An encounter is already open' } }
+      const label = String(body.label ?? '').trim()
+      if (!label) return { status: 400, body: { error: 'label required' } }
+      const encounter = await openPuzzleFromSpec(service, env, sessionId, {
+        kind: 'puzzle',
+        label,
+        stakes: String(body.stakes ?? ''),
+        params: {
+          solution: String(body.solution ?? ''),
+          steps: (Array.isArray(body.steps) ? body.steps : []) as Json,
+          max_attempts: Number(body.max_attempts ?? 3),
+          fail_consequence: (body.fail_consequence ?? { kind: 'antagonist_step', params: {} }) as Json,
+        },
+        onSuccess: Array.isArray(body.on_success) ? body.on_success.filter((s): s is string => typeof s === 'string') : [],
+        onPartial: Array.isArray(body.on_partial) ? body.on_partial.filter((s): s is string => typeof s === 'string') : [],
+        onFailure: Array.isArray(body.on_failure) ? body.on_failure.filter((s): s is string => typeof s === 'string') : [],
+      })
+      return { status: 200, body: { ok: true, encounter_id: encounter.id, kind: 'puzzle', label } }
+    }
+    if (String(body.encounter_kind ?? '') === 'social') {
+      const row = await loadState(service, adventureId)
+      if (row.state.encounter) return { status: 409, body: { error: 'An encounter is already open' } }
+      const spec = specFromCommandBody('social', body)
+      if (!spec.label) return { status: 400, body: { error: 'label required' } }
+      const encounter = await openSocialEncounter(
+        service, env, sessionId, spec,
+        (npcIds) => startSocial(service, adventureId, env.creatorId, npcIds),
+      )
+      if (!encounter) return { status: 400, body: { error: 'No stageable NPCs for the social encounter' } }
+      return { status: 200, body: { ok: true, encounter_id: encounter.id, kind: 'social', label: spec.label } }
+    }
+    return openEncounterCommand(service, env, sessionId, body)
+  }
   if (command === 'plan_beat') {
     const { data: loops } = await service
       .from('core_loops')
@@ -383,6 +572,8 @@ async function dmCommand(
     await logEvent(service, adventureId, sessionId, 'day_advanced', { day: after.state.scene.day })
     await antagonistTurn(service, env, sessionId, 'world_clock')
     await evaluateStoryProgress(service, env, sessionId)
+    // Transition point (Slice 6): passing time invites the world in.
+    await maybeSpawnEncounter(service, env, sessionId, 'advance_day', spawnInstantiator(service, env, sessionId))
     return { status: 200, body: { ok: true, day: after.state.scene.day } }
   }
   if (command === 'set_auto') {
@@ -392,8 +583,11 @@ async function dmCommand(
     if (typeof body.nudge_minutes === 'number' && body.nudge_minutes >= 1) {
       patch.nudgeMinutes = Math.min(60, Math.round(body.nudge_minutes))
     }
+    if (typeof body.hint_turns === 'number' && body.hint_turns >= 1) {
+      patch.hintTurns = Math.min(20, Math.round(body.hint_turns))
+    }
     if (Object.keys(patch).length === 0) {
-      return { status: 400, body: { error: 'auto_dialogue, auto_checks, or nudge_minutes required' } }
+      return { status: 400, body: { error: 'auto_dialogue, auto_checks, nudge_minutes, or hint_turns required' } }
     }
     // Always write the full settings object so partial pre-Slice-2 states heal to a complete shape.
     const after = await commitDiffs(service, adventureId, (s) => [

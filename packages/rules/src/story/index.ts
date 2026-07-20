@@ -1,5 +1,8 @@
-export { parseBeatPlan } from './beats.ts'
-export type { BeatParseResult, BeatPlan, BeatPlanContext, BraidedPair, IngredientRequest } from './beats.ts'
+export { ENCOUNTER_KINDS, parseBeatPlan } from './beats.ts'
+export type {
+  BeatEncounterKind, BeatEncounterSpec, BeatParseResult, BeatPlan, BeatPlanContext, BraidedPair,
+  IngredientRequest,
+} from './beats.ts'
 export {
   MISMATCH_THRESHOLD, nextStreak, parsePivot, PIVOT_AUTO_CONFIDENCE, PIVOT_PROPOSE_CONFIDENCE,
   PIVOT_REEVALUATE_EVENTS, pivotHandling, streakTriggersClassifier,
@@ -10,8 +13,8 @@ export {
   parseEndingSignals, scoreEndings,
 } from './endings.ts'
 export type { EndingCandidate, EndingScores, EndingSignal, EndingSignalWhen, EndingWorld } from './endings.ts'
-export { evaluatePredicate } from './evaluate.ts'
-export type { WorldFacts } from './evaluate.ts'
+export { evaluatePredicate, listMilestoneAtoms } from './evaluate.ts'
+export type { MilestoneAtoms, WorldFacts } from './evaluate.ts'
 export {
   activeLoop, advanceBeat, completeLoop, pushLoop, resumeLoop, suspendLoop,
 } from './loops.ts'

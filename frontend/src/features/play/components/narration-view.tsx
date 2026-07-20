@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 
 import { cn } from '@/lib/utils'
 import type { DialogueState, SceneState } from '@rules/state'
+
+import { useLineReveal } from '../hooks/use-line-reveal'
 
 interface NarrationViewProps {
   scene: SceneState
@@ -14,34 +16,15 @@ interface NarrationViewProps {
  * scroll-up.
  */
 export function NarrationView({ scene, dialogue }: NarrationViewProps) {
-  const active = dialogue.lines.find((l) => l.id === dialogue.activeLineId)
-  const history = dialogue.lines.filter((l) => l.id !== dialogue.activeLineId)
+  const active = dialogue.lines.find((l) => l.id === dialogue.activeLineId) ?? null
+  const history = dialogue.lines.filter((l) => l.id !== active?.id)
   const scrollRef = useRef<HTMLDivElement>(null)
-
-  const sentences = active ? (active.text.match(/[^.!?]+[.!?]*\s*/g) ?? [active.text]) : []
-
-  // Reset the reveal when the active line changes - render-time adjustment, not an effect.
-  const [reveal, setReveal] = useState<{ lineId: string | null; count: number }>({ lineId: null, count: 0 })
-  if (reveal.lineId !== (active?.id ?? null)) {
-    setReveal({ lineId: active?.id ?? null, count: sentences.length > 0 ? 1 : 0 })
-  }
-  const visibleSentences = reveal.count
-
-  useEffect(() => {
-    if (!active || sentences.length <= 1) return
-    // Sentence-level reveal cadence standing in for TTS playback progress (F06 SS3.2).
-    const timer = setInterval(() => {
-      setReveal((prev) =>
-        prev.lineId === active.id && prev.count < sentences.length ? { ...prev, count: prev.count + 1 } : prev,
-      )
-    }, 2200)
-    return () => clearInterval(timer)
-  }, [active, sentences.length])
+  const { sentences, visibleCount, isRevealing } = useLineReveal(active)
 
   useEffect(() => {
     // Optional-called: jsdom (tests) has no Element.scrollTo.
     scrollRef.current?.scrollTo?.({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [visibleSentences, dialogue.lines.length])
+  }, [visibleCount, dialogue.lines.length])
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
@@ -71,10 +54,17 @@ export function NarrationView({ scene, dialogue }: NarrationViewProps) {
           ))}
           {active && (
             <p className="text-lg leading-relaxed text-white drop-shadow" aria-live="polite">
-              {sentences.slice(0, visibleSentences).join('')}
-              <span className={cn('inline-block w-2', visibleSentences < sentences.length && 'animate-pulse')}>
-                {visibleSentences < sentences.length ? '…' : ''}
+              {sentences.slice(0, visibleCount).join('')}
+              <span className={cn('inline-block w-2', isRevealing && 'animate-pulse')}>
+                {isRevealing ? '…' : ''}
               </span>
+            </p>
+          )}
+          {dialogue.typing && (
+            <p className="flex items-center gap-1.5" role="status" aria-label="The DM is thinking">
+              <span className="size-2 animate-bounce rounded-full bg-white/80" />
+              <span className="size-2 animate-bounce rounded-full bg-white/80 [animation-delay:150ms]" />
+              <span className="size-2 animate-bounce rounded-full bg-white/80 [animation-delay:300ms]" />
             </p>
           )}
         </div>

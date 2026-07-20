@@ -17,10 +17,21 @@ import {
   runConsistency, runGenericNpc, runInteractionSummary, runNpcAgent, runReplyGists, runSocialClassifier,
 } from './agents.ts'
 import type { AgentEnv, NpcContext } from './agents.ts'
+import { activeLoop } from '../_shared/story/index.ts'
+import { loadLoops } from './beats.ts'
+import { challengeCheckResolved } from './encounters.ts'
+import type { ChallengeCheckStash } from './encounters.ts'
 import type { DoCheckStash } from './intent.ts'
 import { directedNarrationPrompt, narrationBeat, publishNarration, stageNarrationReview } from './narration.ts'
-import { appendLinesDiff, newLine, pcLineCounts, pendingDiffs, typingDiff } from './orchestrate.ts'
+import {
+  appendLinesDiff, loadPartyCharacters, newLine, partyProfileLines, pcLineCounts, pendingDiffs,
+  typingDiff,
+} from './orchestrate.ts'
+import { retrieveMemories, writeMemoryFragment } from './memory.ts'
+import { evaluateStoryProgress } from './progress.ts'
 import { recordProposal } from './proposals.ts'
+import { applySceneEffects } from './scene-director.ts'
+import { detectSocialExit, recordSocialExchange, resolveSocialExit } from './social-encounter.ts'
 import { finishNegotiation } from './story.ts'
 import type { NegotiateStash } from './story.ts'
 import { noteSuspicion } from './steward.ts'
@@ -94,8 +105,18 @@ export async function startSocial(service: SupabaseClient, adventureId: string, 
   return { status: 200, body: { ok: true, staged: speakers.map((s) => s.name) } }
 }
 
-/** Scene end (F10 SS6): distill interaction memory per staged NPC, clear scene-scoped state. */
-export async function endEncounter(service: SupabaseClient, adventureId: string, userId: string) {
+/**
+ * Scene end (F10 SS6): distill interaction memory per staged NPC, clear scene-scoped state.
+ * If a social encounter frame is open (Slice 4), the scene ending resolves it - the judged
+ * nearest exit, or left_unresolved. Pass frameExit: 'skip' when the caller resolves the
+ * frame itself (exit detected mid-conversation).
+ */
+export async function endEncounter(
+  service: SupabaseClient,
+  adventureId: string,
+  userId: string,
+  opts?: { frameExit?: 'skip' },
+) {
   const ctx = await loadContext(service, adventureId, userId)
   if (!ctx?.isDm) return { status: 403, body: { error: 'Only the DM (or creator in Full-AI) can end the scene' } }
   const row = await loadState(service, adventureId)
@@ -117,6 +138,14 @@ export async function endEncounter(service: SupabaseClient, adventureId: string,
       summary: summary as unknown as Json,
     })
     assertOk(error, 'interaction memory write failed')
+    // Retrieval memory (Slice 7): the distilled scene becomes a retrievable fragment.
+    await writeMemoryFragment(
+      service, env, 'scene_summary',
+      `Conversation with ${speaker.name} at ${state.scene.locationName || 'an unknown place'}: ` +
+        `${summary.said.join('; ') || 'small talk'}.` +
+        (summary.promised.length > 0 ? ` Promised: ${summary.promised.join('; ')}.` : '') +
+        ` Disposition: ${summary.disposition_trajectory}.`,
+    )
   }
 
   await commitDiffs(service, adventureId, () => [
@@ -139,6 +168,14 @@ export async function endEncounter(service: SupabaseClient, adventureId: string,
   await logEvent(service, adventureId, state.session.id, 'social_ended', {
     npc_ids: state.dialogue.speakers.map((s) => s.npcId),
   })
+  // A social frame outliving its scene resolves now: judged nearest exit or left_unresolved.
+  if (opts?.frameExit !== 'skip' && state.encounter?.kind === 'social' && state.session.id) {
+    const detected = await detectSocialExit(service, env, state.session.id, [])
+    await resolveSocialExit(
+      service, env, state.session.id,
+      detected?.exit ?? null, detected?.forced ?? false,
+    )
+  }
   return { status: 200, body: { ok: true } }
 }
 
@@ -269,6 +306,8 @@ async function loadNpcBundle(
     .eq('npc_id', npcId)
     .order('created_at', { ascending: false })
     .limit(3)
+  // Retrieval memory (Slice 7): what past sessions established, relevant to this utterance.
+  const retrieved = await retrieveMemories(service, env, `${npc.name}: ${utterance.text}`, 3)
   const { data: hookRows } = await service
     .from('hooks')
     .select('hook_text')
@@ -276,7 +315,19 @@ async function loadNpcBundle(
     .eq('from_ref->>table', 'npcs')
     .eq('from_ref->>id', npcId)
 
+  // Beat awareness (F08): the NPC steers conversation toward the open beat's live situations
+  // instead of monologuing past them (the Elara volcano dead-end, seen live 2026-07-19).
+  const loop = activeLoop(await loadLoops(service, env.adventureId))
+  const { data: beatRow } = loop?.currentBeatId
+    ? await service.from('beats').select('goals').eq('id', loop.currentBeatId).maybeSingle()
+    : { data: null }
+  const beatGoals = Array.isArray(beatRow?.goals)
+    ? (beatRow.goals as unknown[]).filter((g): g is string => typeof g === 'string')
+    : []
+
   const lineCounts = pcLineCounts(state)
+  // Personalization (2026-07-20): the NPC reacts to who each PC is, not just their name.
+  const profiles = await partyProfileLines(service, await loadPartyCharacters(service, env.adventureId))
   const personality = typeof npc.personality === 'object' && npc.personality !== null
     ? JSON.stringify(npc.personality)
     : String(npc.personality ?? '')
@@ -284,12 +335,13 @@ async function loadNpcBundle(
   const buildContext = (constraint?: string, direction?: string): NpcContext => ({
     npc: { id: npc.id, name: npc.name, personality, description: npc.description, faction: npc.faction },
     dispositionByPc: dispositions,
-    memory: (memoryRows ?? []).map((m) => JSON.stringify(m.summary)),
+    memory: [...(memoryRows ?? []).map((m) => JSON.stringify(m.summary)), ...retrieved.map((m) => `Established earlier: ${m}`)],
     knowledge: knowledge.map((k) => ({ id: k.candidate.id, reveals: k.reveals, condition: k.candidate.condition })),
     conversation: {
       topicStack: state.dm?.conversation.topicStack ?? [],
       revealedThisScene: state.dm?.conversation.revealedThisScene ?? [],
     },
+    recentLines: state.dialogue.lines.slice(-12).map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`),
     utterance,
     checkResult: checkResult
       ? { skill: checkResult.skill, success: checkResult.success, margin: checkResult.margin }
@@ -299,7 +351,9 @@ async function loadNpcBundle(
       name: p.name,
       linesThisScene: lineCounts.get(p.characterId) ?? 0,
     })),
+    partyProfiles: profiles,
     hooks: (hookRows ?? []).map((h) => h.hook_text as string),
+    beatGoals,
     constraint,
     direction,
   })
@@ -329,13 +383,18 @@ export async function npcReply(
 
   const npcs = [{ id: npc.id, name: npc.name }]
   const npcStates = state.dm?.facts.npcStates ?? {}
-  let verdict = await runConsistency(env, output.dialogue, npcs, npcStates, '')
+  // NPC replies used to be checked against an EMPTY fact sheet, so scene contradictions passed
+  // ("if only I could reach the volcano" said while standing at it, seen live 2026-07-19).
+  const npcFactSheet =
+    `Location: the party and ${npc.name} are together at ${state.scene.locationName || 'an unknown place'} ` +
+    `(scene mode: ${state.scene.mode}, day ${state.scene.day}), speaking face to face.`
+  let verdict = await runConsistency(env, output.dialogue, npcs, npcStates, npcFactSheet)
   if (!verdict.ok) {
     const constraint = verdict.violations.map((v) => `${v.claim} (${v.conflictsWith})`).join('; ')
     await logEvent(service, env.adventureId, sessionId, 'consistency_blocked', { draft: output.dialogue, violations: constraint })
     if (!env.demo) {
       output = await runNpcAgent(env, buildContext(`NEVER: ${constraint}`, direction))
-      verdict = await runConsistency(env, output.dialogue, npcs, npcStates, '')
+      verdict = await runConsistency(env, output.dialogue, npcs, npcStates, npcFactSheet)
     }
     if (env.demo || !verdict.ok) {
       await logEvent(service, env.adventureId, sessionId, 'incident', { kind: 'npc_consistency_failure', npc_id: npcId })
@@ -380,6 +439,7 @@ export async function npcReply(
     })
   }
 
+  let npcLeaves = false
   for (const action of output.proposedActions) {
     if (action.type === 'canonize_theory') {
       // Player-theory canonization (F08 SS5): full-AI auto-approves only on a clean
@@ -430,6 +490,7 @@ export async function npcReply(
     }
     const disposition = dispositions[utterance.actorCharacterId] ?? 0
     const allowed = env.demo || actionAutoAllowed(action, disposition)
+    if (action.type === 'leave' && allowed) npcLeaves = true
     await logEvent(service, env.adventureId, sessionId, 'npc_action', {
       npc_id: npcId, action: action as unknown as Json, auto_applied: allowed,
     })
@@ -469,6 +530,40 @@ export async function npcReply(
   await logEvent(service, env.adventureId, sessionId, 'npc_reply', {
     npc_id: npcId, addressed: output.addressPc, revealed: gate.allowed, tone: output.tone,
   })
+
+  // An accepted leave executes (F14: nothing else ends a social scene in full-AI): the NPC
+  // steps down after their farewell line; the last one out closes the whole scene.
+  if (npcLeaves) {
+    const current = (await loadState(service, env.adventureId)).state
+    const others = current.dialogue.speakers.filter((sp) => sp.npcId !== npcId)
+    await logEvent(service, env.adventureId, sessionId, 'npc_left_scene', { npc_id: npcId })
+    if (others.length === 0) {
+      // endEncounter resolves an open social frame itself (nearest exit / left_unresolved).
+      await endEncounter(service, env.adventureId, env.creatorId)
+    } else {
+      await commitDiffs(service, env.adventureId, (s) => [
+        {
+          domain: 'dialogue',
+          patch: { speakers: s.dialogue.speakers.filter((sp) => sp.npcId !== npcId) as unknown as Json },
+        },
+      ])
+    }
+  }
+
+  // Social encounter frame (Slice 4): count the exchange, then check the authored exits -
+  // the disposition floor forces a hostile exit; the narrow judge decides the rest.
+  const post = (await loadState(service, env.adventureId)).state
+  if (post.encounter?.kind === 'social' && sessionId) {
+    await recordSocialExchange(service, env, sessionId, utterance.actorCharacterId)
+    const stagedIds = post.dialogue.speakers.map((sp) => sp.npcId)
+    if (stagedIds.length > 0) {
+      const detected = await detectSocialExit(service, env, sessionId, stagedIds)
+      if (detected) {
+        await endEncounter(service, env.adventureId, env.creatorId, { frameExit: 'skip' })
+        await resolveSocialExit(service, env, sessionId, detected.exit, detected.forced)
+      }
+    }
+  }
 }
 
 export interface SocialCheckStash {
@@ -516,6 +611,12 @@ export async function handleSay(
   // the same way around its adjudicator call).
   try {
     const classification = await runSocialClassifier(env, utterance.text, `${npc.name}: ${npc.description}`)
+    if (classification.kind === 'action') {
+      // Unified input (2026-07-20): a physical action mid-conversation belongs to the action
+      // pipelines, not the NPC. The line is committed and typing stays on - the intent
+      // dispatcher re-routes and continues the flow.
+      return { status: 200, body: { ok: true, resolved: 'action' } }
+    }
     if (classification.kind === 'conversation') {
       const resolved = await npcBeat(service, env, npcId, utterance, null)
       return { status: 200, body: { ok: true, resolved } }
@@ -582,12 +683,18 @@ export async function continueAfterCheck(
   service: SupabaseClient,
   env: AgentEnv,
   sessionId: string,
-  stash: DoCheckStash | SocialCheckStash | NegotiateStash,
+  stash: DoCheckStash | SocialCheckStash | NegotiateStash | ChallengeCheckStash,
   result: CheckResult & { skill: string },
   detail: string,
 ): Promise<void> {
   if (stash.flow === 'negotiate') {
     await finishNegotiation(service, env, sessionId, stash, result)
+    return
+  }
+  if (stash.flow === 'challenge') {
+    // Skill-challenge attempt (encounter-states Slice 2): the engine counts the outcome.
+    await commitDiffs(service, env.adventureId, () => [...pendingDiffs(null, null), typingDiff(true)])
+    await challengeCheckResolved(service, env, sessionId, stash, result, detail)
     return
   }
   if (stash.flow === 'social') {
@@ -596,12 +703,32 @@ export async function continueAfterCheck(
     return
   }
   await commitDiffs(service, env.adventureId, () => [...pendingDiffs(null, null), typingDiff(true)])
+  // Scene Director: a successful check earns its stashed world movement (full-AI stashes only),
+  // applied before narrating so the narrator grounds on the new scene.
+  const stashEffects = result.success ? (stash.sceneEffects ?? null) : null
+  let sceneNote = ''
+  if (stashEffects) {
+    const applied = await applySceneEffects(
+      service, env, sessionId, stashEffects,
+      {
+        stageNpcs: (npcIds) => startSocial(service, env.adventureId, env.creatorId, npcIds),
+        endScene: () => endEncounter(service, env.adventureId, env.creatorId),
+      },
+    )
+    if (applied.sceneEnded) sceneNote += ' The conversation has ended; the party is on the move again.'
+    if (applied.traveledTo) sceneNote += ` The party has just arrived at ${applied.traveledTo} - establish the new scene there.`
+    if (applied.staged.length > 0) sceneNote += ` Present and in conversation now: ${applied.staged.join(', ')}.`
+    if (applied.dayAdvanced !== null) sceneNote += ' Meaningful time passes during this - let the narration carry it.'
+    if (applied.combatWon) sceneNote += ` A fight broke out ("${applied.combatWon}") and the party won decisively - narrate the clash and its immediate aftermath.`
+  }
   await narrationBeat(
     service, env, sessionId,
     `Narrate this action outcome. ${stash.actorName} attempts: ${stash.interpretation}. ` +
-      `The ${result.skill} check ${result.success ? 'SUCCEEDS' : 'FAILS'} (${detail}). ${stash.consequencesHint}`,
+      `The ${result.skill} check ${result.success ? 'SUCCEEDS' : 'FAILS'} (${detail}). ${stash.consequencesHint}${sceneNote}`,
     'Action outcome',
+    'outcome',
   )
+  if (stashEffects) await evaluateStoryProgress(service, env, sessionId)
 }
 
 /**
@@ -699,7 +826,8 @@ export async function reviewDecide(
     if (choice !== 'accept' && choice !== 'flip') {
       return { status: 400, body: { error: 'A check ruling takes accept or flip' } }
     }
-    const stash = (row.state.dm?.conversation.pendingContext ?? null) as DoCheckStash | SocialCheckStash | NegotiateStash | null
+    const stash = (row.state.dm?.conversation.pendingContext ?? null) as
+      | DoCheckStash | SocialCheckStash | NegotiateStash | ChallengeCheckStash | null
     if (!stash) return { status: 409, body: { error: 'Ruling context missing - the flow moved on' } }
     const flipped = choice === 'flip'
     const success = flipped ? !review.success : review.success

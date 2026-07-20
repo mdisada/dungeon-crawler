@@ -120,6 +120,7 @@ export async function runStage3(env: StageEnv, chapterId: string): Promise<void>
       chapter: chapterSketch(chapter),
       chapterNumber: chapter.index + 1,
       scenes,
+      adventureType: env.adventure.type ?? undefined,
     }),
     parseStage3,
   )

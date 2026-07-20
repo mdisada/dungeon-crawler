@@ -50,6 +50,8 @@ export interface PendingPromptState {
   kind: 'check' | 'group' | 'assist'
   id: string
   skill: string
+  /** Solo checks: 1-3 pickable skills (`skill` first); absent = single-skill roll. */
+  skillOptions?: string[]
   reason: string
   deadline: string
   actorCharacterId?: string
@@ -208,6 +210,8 @@ export interface DmSettingsState {
   autoChecks: boolean
   /** Idle-nudge threshold in minutes (F08 SS9.1); absent = default 3. */
   nudgeMinutes?: number
+  /** Stuck-hint auto-detector threshold in no-progress turns; absent = default 3. */
+  hintTurns?: number
 }
 
 export interface ReviewCandidate {
@@ -273,6 +277,20 @@ export interface ConversationState {
   pendingContext: Json | null
 }
 
+/**
+ * Hidden half of the open encounter (encounter-states Slice 2): outcome maps + kind-specific
+ * secrets (e.g. a puzzle's solution). Lives on the dm domain so it never reaches players;
+ * the visible frame is GameState.encounter.
+ */
+export interface EncounterSpecState {
+  onSuccess: string[]
+  onPartial: string[]
+  onFailure: string[]
+  params?: Json
+  /** Hidden half of the interrupted encounter, restored with its frame (Slice 6). */
+  interrupted?: EncounterSpecState | null
+}
+
 /** DM-only domains, stripped from player resyncs and broadcast on dm:{id} only. */
 export interface DmState {
   /** Full objective checklist incl. hidden ones (DM overview tab). */
@@ -295,6 +313,28 @@ export interface DmState {
   pendingReview?: PendingReviewState | null
   /** F08 story bookkeeping (optional, absent pre-Phase 6): the off-loop mismatch streak. */
   story?: { offLoopStreak: number }
+  /** Hidden spec of the open encounter; null/absent when no encounter is open. */
+  encounterSpec?: EncounterSpecState | null
+}
+
+export type EncounterKind = 'skill_challenge' | 'puzzle' | 'social' | 'combat'
+
+/**
+ * Typed encounter frame (encounter-states redesign): the story spine advances only through
+ * resolvable encounters. `progress` is kind-specific plain data; `contributions` counts each
+ * PC's success-attempts (feeds the full-participation tier and hint pacing). Player-visible -
+ * the UI renders the frame like the check prompt.
+ */
+export interface EncounterState {
+  id: string
+  kind: EncounterKind
+  label: string
+  stakes: string
+  progress: Json
+  contributions: Record<string, number>
+  startedAt: string
+  /** Single-depth interrupt stack (Slice 6): a random spawn preserves the encounter it cut off. */
+  interrupted?: EncounterState | null
 }
 
 export interface GameState {
@@ -305,9 +345,11 @@ export interface GameState {
   objectives: ObjectivesState
   session: SessionState
   dm: DmState | null
+  /** Optional: absent in states persisted before the encounter-states redesign. */
+  encounter?: EncounterState | null
 }
 
-export type DiffDomain = 'scene' | 'dialogue' | 'combat' | 'players' | 'objectives' | 'session' | 'dm'
+export type DiffDomain = 'scene' | 'dialogue' | 'combat' | 'players' | 'objectives' | 'session' | 'dm' | 'encounter'
 
 /**
  * One state-diff message. `patch` is an RFC 7386-style merge patch against that domain:
@@ -351,6 +393,7 @@ export function initialGameState(): GameState {
     players: { list: [], gold: 0 },
     objectives: { currentId: null, list: [], offers: [], quests: [] },
     session: { id: null, index: 0, status: 'lobby', recap: null },
+    encounter: null,
     dm: {
       objectives: [],
       proposals: [],

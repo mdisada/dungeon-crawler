@@ -5,6 +5,9 @@
 //     check (terms never exceed the authored ceiling); decline is honored (disposition shift,
 //     event, banner cleared); re-weave escalates with reweave_count; any PC's clear accept
 //     binds the party (loop pushed, objective activated, journal updated)
+//   - encounter machine (encounter-states Slice 3): the opened beat carries a canned
+//     encounter spec; an "offered" reply enters it, attempts drive it to a tier, the outcome
+//     map applies milestones, and the beat exits - the $0 spine lifecycle
 //   - ledger payout: complete_quest pays exactly once (second call 409s), balance lands in
 //     players.gold and the ledger_credited event
 //   - RLS: players read no quest_offers/core_loops rows directly
@@ -226,7 +229,7 @@ async function main() {
 
   console.log('\n[unrelated talk falls through]')
   const question = await act(p2, { action: 'player_intent', adventure_id: advId, kind: 'say', text: 'A strange village, this.' })
-  ok('unrelated say routes as normal chat', question.status === 200 && question.body.resolved === 'chat', question.body)
+  ok('unrelated say falls past the offer classifier into entry mapping (folded in)', question.status === 200 && question.body.resolved === 'folded_in', question.body)
 
   console.log('\n[negotiation: bounded haggling]')
   const haggle = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'say', text: 'Pay us more and we have a deal.' })
@@ -261,7 +264,7 @@ async function main() {
 
   console.log('\n[any clear accept binds the party]')
   const objection = await act(p2, { action: 'player_intent', adventure_id: advId, kind: 'say', text: 'I still do not like this...' })
-  ok('an objection is just conversation', objection.status === 200 && objection.body.resolved === 'chat', objection.body)
+  ok('an objection neither accepts nor declines', objection.status === 200 && !['offer_accepted', 'offer_declined'].includes(objection.body.resolved), objection.body)
   const accept = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'say', text: 'We accept the job, elder.' })
   ok('clear accept resolves the offer', accept.status === 200 && accept.body.resolved === 'offer_accepted', accept.body)
   state = await resyncState(gm, advId)
@@ -287,6 +290,48 @@ async function main() {
   const liveHooks = await serviceRest('GET', `hooks?adventure_id=eq.${advId}&from_ref->>table=eq.live&select=id,kind`)
   ok('live Hook Weaver planted hooks for the objective', liveHooks.length >= 1, liveHooks.length)
 
+  console.log('\n[stuck hint: player asks the DM for their bearings]')
+  const hint1 = await act(gm, { action: 'hint', adventure_id: advId, requested: true })
+  ok('requested hint lands with a rung', hint1.status === 200 && hint1.body.resolved === 'hint' && hint1.body.rung >= 1, hint1.body)
+  ok('hint_given event logged with source', (await eventsOf(advId, 'hint_given')).some((e) => e.payload.source === 'requested'))
+  const hint2 = await act(gm, { action: 'hint', adventure_id: advId, requested: true })
+  ok('a second ask climbs the ladder', hint2.status === 200 && hint2.body.rung >= hint1.body.rung, hint2.body)
+  const tuneHint = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'dm_command', command: 'set_auto', hint_turns: 5 })
+  ok('hint_turns is DM-configurable via set_auto', tuneHint.status === 200, tuneHint.body)
+
+  console.log('\n[encounter machine: canned spec -> entry -> attempts -> resolution -> beat exit]')
+  const [specBeat] = await serviceRest('GET', `beats?core_loop_id=eq.${loopRow.id}&status=eq.active&select=id,name,encounter_spec`)
+  ok('opened beat carries a canned encounter spec', specBeat.encounter_spec?.kind === 'skill_challenge', specBeat.encounter_spec)
+  ok('Encounter Designer filled the challenge params', specBeat.encounter_spec?.params?.needed_successes === 1, specBeat.encounter_spec?.params)
+  const enter = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'say', text: 'We take on the challenge before us.' })
+  ok('offered reply enters the encounter', enter.status === 200 && enter.body.resolved === 'encounter_entered', enter.body)
+  state = await resyncState(gm, advId)
+  ok('visible encounter frame is live', state.encounter?.kind === 'skill_challenge' && state.encounter?.label === specBeat.encounter_spec.label, state.encounter)
+  const entryMapped = await eventsOf(advId, 'entry_mapped')
+  ok('entry_mapped logged the offered entry', entryMapped.some((e) => e.payload.entry === 'offered'), entryMapped)
+  for (let i = 0; i < 8; i++) {
+    state = await resyncState(gm, advId)
+    if (!state.encounter) break
+    if (state.dialogue.pending) {
+      await act(gm, { action: 'roll_pending', adventure_id: advId, prompt_id: state.dialogue.pending.id })
+      continue
+    }
+    await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'do', text: 'I climb the rise for a better line.' })
+  }
+  state = await resyncState(gm, advId)
+  ok('encounter closed after attempts', !state.encounter, state.encounter)
+  ok('encounter_attempt events logged', (await eventsOf(advId, 'encounter_attempt')).length >= 1)
+  const challengeResolved = (await eventsOf(advId, 'encounter_resolved')).at(-1)
+  ok('resolution carries a tier', ['full', 'partial', 'failed'].includes(challengeResolved?.payload?.tier), challengeResolved)
+  if (challengeResolved?.payload?.tier !== 'failed') {
+    ok('outcome map applied the beat-exit milestone', (await eventsOf(advId, 'milestone_reached')).some((e) => e.payload.source === 'encounter_outcome'))
+    ok('resolution exited the beat (next beat opened)', (await eventsOf(advId, 'beat_exit_met')).length >= 1)
+    const questBeatsAfter = await serviceRest('GET', `beats?core_loop_id=eq.${loopRow.id}&select=id,status&order=index`)
+    ok('quest loop advanced to its second beat', questBeatsAfter.length === 2 && questBeatsAfter.at(-1).status === 'active', questBeatsAfter)
+  } else {
+    console.log('  note: dice failed the challenge this run - beat stays open (fail-forward)')
+  }
+
   console.log('\n[loop pivot: classifier proposes, full-AI auto-accepts at 0.9]')
   const barricade = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'do', text: 'We barricade the gates and prepare to defend the village!' })
   ok('barricade intent lands', barricade.status === 200, barricade.body)
@@ -302,9 +347,10 @@ async function main() {
   ok('pivoted loop opened its first template beat', siegeBeats1.length === 1 && siegeBeats1[0].name === 'warning', siegeBeats1)
 
   console.log('\n[beat exit conditions: mark_event -> next beat opens]')
+  const exitsBefore = (await eventsOf(advId, 'beat_exit_met')).length
   const exitMark = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'dm_command', command: 'mark_event', tag: 'beat warning resolved' })
   ok('mark_event accepted', exitMark.status === 200, exitMark.body)
-  ok('beat exit detected', (await eventsOf(advId, 'beat_exit_met')).length === 1)
+  ok('beat exit detected', (await eventsOf(advId, 'beat_exit_met')).length === exitsBefore + 1)
   const siegeBeats2 = await serviceRest('GET', `beats?core_loop_id=eq.${siegeLoopId}&select=name,status&order=index`)
   ok('next template beat opened, previous completed', siegeBeats2.length === 2 && siegeBeats2[0].status === 'completed' && siegeBeats2[1].name === 'preparation' && siegeBeats2[1].status === 'active', siegeBeats2)
 
@@ -385,6 +431,114 @@ async function main() {
   ok('contradicting theory blocked with the conflict shown', theory2.status === 200 && (await eventsOf(advId, 'canonization_blocked')).length === 1, theory2.body)
   ok('no second canonized ingredient', (await serviceRest('GET', `ingredients?adventure_id=eq.${advId}&canon_source=eq.player_theory&select=id`)).length === 1)
   ok('end scene', (await act(gm, { action: 'end_encounter', adventure_id: advId })).status === 200)
+
+  console.log('\n[social encounter: seeded exits -> judged exit -> beat advance (Slice 4)]')
+  const siegeBeatsPre = await serviceRest('GET', `beats?core_loop_id=eq.${siegeLoopId}&select=id,name,status&order=index`)
+  // The outcome map must target the CURRENT active beat's exit event (objective completion
+  // force-replans beats, so the open beat name moves as the suite progresses).
+  const activeSiegeBeat = siegeBeatsPre.find((b) => b.status === 'active')
+  const siegeExitTag = `beat ${activeSiegeBeat.name} resolved`
+  const openSocial = await act(gm, {
+    action: 'player_intent', adventure_id: advId, kind: 'dm_command', command: 'open_encounter',
+    encounter_kind: 'social', label: 'Steady the elder', stakes: 'Her nerve decides the defense',
+    goal: 'Reassure Maren that the walls will hold', npc_ids: [maren.id],
+    exits: [
+      { outcome: 'reassured', description: 'Maren steadies herself', tier: 'success' },
+      { outcome: 'despairing', description: 'Maren gives up on the defense', tier: 'failure' },
+    ],
+    on_success: [siegeExitTag], on_partial: [], on_failure: [],
+  })
+  ok('social encounter seeds via dm_command', openSocial.status === 200, openSocial.body)
+  state = await resyncState(gm, advId)
+  ok('social frame live, NPC staged in roleplay',
+    state.encounter?.kind === 'social' && state.scene.mode === 'roleplay' && state.dialogue.speakers.length === 1,
+    { encounter: state.encounter, mode: state.scene.mode })
+  const socialSay = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'say', text: 'You look reassured at last, elder - the walls will hold.' })
+  ok('say inside the encounter runs the NPC pipeline', socialSay.status === 200 && socialSay.body.resolved === 'conversation', socialSay.body)
+  state = await resyncState(gm, advId)
+  ok('judged exit resolved the encounter (frame closed, scene ended)',
+    !state.encounter && state.dialogue.speakers.length === 0, { encounter: state.encounter, speakers: state.dialogue.speakers })
+  const socialResolved = (await eventsOf(advId, 'encounter_resolved')).filter((e) => e.payload.kind === 'social')
+  ok('social resolution carries the full tier', socialResolved.length === 1 && socialResolved[0].payload.tier === 'full', socialResolved)
+  const exitEvents = await eventsOf(advId, 'encounter_exit')
+  ok('exit event logged with the authored outcome', exitEvents.length === 1 && exitEvents[0].payload.outcome === 'reassured' && exitEvents[0].payload.forced === false, exitEvents)
+  ok('exchange counted toward contributions', (await eventsOf(advId, 'encounter_attempt')).some((e) => e.payload.kind === 'social'))
+  const siegeBeatsPost = await serviceRest('GET', `beats?core_loop_id=eq.${siegeLoopId}&select=id,name,status&order=index`)
+  ok('social success exited the siege beat (next beat opened)', siegeBeatsPost.length === siegeBeatsPre.length + 1, siegeBeatsPost)
+
+  console.log('\n[social encounter: disposition floor forces a hostile exit]')
+  await serviceRest('PATCH', `npc_dispositions?npc_id=eq.${maren.id}&character_id=eq.${p2Char.id}`, { value: -8 })
+  const openHostile = await act(gm, {
+    action: 'player_intent', adventure_id: advId, kind: 'dm_command', command: 'open_encounter',
+    encounter_kind: 'social', label: 'Calm the elder again', stakes: 'The defense frays',
+    goal: 'Keep Maren from despair', npc_ids: [maren.id],
+    exits: [
+      { outcome: 'steadied', description: 'Maren holds on', tier: 'success' },
+      { outcome: 'despairing', description: 'Maren gives up', tier: 'failure' },
+    ],
+    on_success: [], on_partial: [], on_failure: [],
+  })
+  ok('second social encounter seeds', openHostile.status === 200, openHostile.body)
+  const hostileSay = await act(p2, { action: 'player_intent', adventure_id: advId, kind: 'say', text: 'The night is cold, elder.' })
+  ok('hostile-floor say still processes', hostileSay.status === 200, hostileSay.body)
+  state = await resyncState(gm, advId)
+  ok('forced exit closed the encounter', !state.encounter, state.encounter)
+  const forcedExit = (await eventsOf(advId, 'encounter_exit')).at(-1)
+  ok('exit was forced by the disposition floor (failure tier)',
+    forcedExit?.payload.forced === true && forcedExit?.payload.tier === 'failed', forcedExit)
+  const siegeBeatsFinal = await serviceRest('GET', `beats?core_loop_id=eq.${siegeLoopId}&select=id&order=index`)
+  ok('failed social left the beat in place', siegeBeatsFinal.length === siegeBeatsPost.length, siegeBeatsFinal.length)
+
+  console.log('\n[random encounter: danger spawn interrupts and restores (Slice 6)]')
+  const [dangerLoc] = await serviceRest('POST', 'locations', {
+    adventure_id: advId, chapter_id: chapter.id, name: 'The Black Fen',
+    description: 'A drowned road through the marsh.', danger: 5,
+  })
+  ok('set scene to the dangerous location', (await act(gm, { action: 'set_scene', adventure_id: advId, location_id: dangerLoc.id })).status === 200)
+  const openOriginal = await act(gm, {
+    action: 'player_intent', adventure_id: advId, kind: 'dm_command', command: 'open_encounter',
+    encounter_kind: 'skill_challenge', label: 'Ford the drowned road', stakes: 'The cart sinks',
+    needed_successes: 1, max_failures: 3, suggested_skills: ['athletics'],
+    on_success: [], on_partial: [], on_failure: [],
+  })
+  ok('original challenge opens', openOriginal.status === 200, openOriginal.body)
+  const talk = await act(p2, { action: 'player_intent', adventure_id: advId, kind: 'say', text: 'What do I see around the ford?' })
+  ok('mid-encounter say gets a DM answer, not silence', talk.status === 200 && talk.body.resolved === 'encounter_talk', talk.body)
+  state = await resyncState(gm, advId)
+  ok('encounter-talk narration landed', state.dialogue.lines.at(-1)?.speaker === null && state.dialogue.lines.at(-1)?.text.includes('[demo narration]'), state.dialogue.lines.at(-1))
+  const dayRoll = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'dm_command', command: 'advance_day' })
+  ok('advance_day accepted', dayRoll.status === 200, dayRoll.body)
+  const spawnRolls = await eventsOf(advId, 'random_encounter_roll')
+  ok('spawn roll logged and spawned (danger 5, demo-deterministic)',
+    spawnRolls.length >= 1 && spawnRolls.at(-1).payload.spawned === true && spawnRolls.at(-1).payload.score >= 5,
+    spawnRolls.at(-1))
+  state = await resyncState(gm, advId)
+  ok('spawned encounter interrupts (original stacked underneath)',
+    state.encounter?.label !== 'Ford the drowned road' && state.encounter?.interrupted?.label === 'Ford the drowned road',
+    state.encounter)
+  for (let i = 0; i < 8; i++) {
+    state = await resyncState(gm, advId)
+    if (!state.encounter || state.encounter.label === 'Ford the drowned road') break
+    if (state.dialogue.pending) {
+      await act(gm, { action: 'roll_pending', adventure_id: advId, prompt_id: state.dialogue.pending.id })
+      continue
+    }
+    await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'do', text: 'I climb clear of the hazard and pull the others through.' })
+  }
+  state = await resyncState(gm, advId)
+  ok('interrupted encounter restored after the spawn resolved',
+    state.encounter?.label === 'Ford the drowned road' && !state.encounter?.interrupted, state.encounter)
+  ok('encounter_restored logged', (await eventsOf(advId, 'encounter_restored')).length >= 1)
+  for (let i = 0; i < 8; i++) {
+    state = await resyncState(gm, advId)
+    if (!state.encounter) break
+    if (state.dialogue.pending) {
+      await act(gm, { action: 'roll_pending', adventure_id: advId, prompt_id: state.dialogue.pending.id })
+      continue
+    }
+    await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'do', text: 'I climb the last stretch of the drowned road.' })
+  }
+  ok('original challenge closes cleanly too', !(await resyncState(gm, advId)).encounter)
 
   console.log('\n[RLS + spend]')
   const p2Offers = await restAs(p2, 'GET', `quest_offers?adventure_id=eq.${advId}&select=id`)

@@ -50,18 +50,69 @@ export interface AdjudicatorContext {
   partySkills: string[]
   partySize: number
   recentEvents: string[]
+  /** Registry names the scene_effects proposal may reference (Story Director v1). */
+  knownLocations: string[]
+  knownNpcs: string[]
+  /** Authored milestone vocabulary (objective + open-beat predicate atoms, exact text). */
+  milestones: string[]
+}
+
+/** World-movement proposal riding on the Adjudicator's ruling; server-validated before applying. */
+export interface SceneEffects {
+  travelLocation: string | null
+  stageNpcs: string[]
+  markEvent: string | null
+  advanceDay: boolean
+  /** Combat encounter label; pre-Phase 7 this auto-resolves as a placeholder party victory. */
+  encounter: string | null
+  /** Authored milestones this action accomplished; server-validated against the vocabulary. */
+  milestones: string[]
+  /** The conversation/scene concluded - staged NPCs step down (also implied by travel). */
+  endScene: boolean
+  /** The action makes serious noise - raises danger and may draw a random encounter (Slice 6). */
+  loud: boolean
+}
+
+function extractSceneEffects(raw: unknown): SceneEffects | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const effects = (raw as Record<string, unknown>).scene_effects
+  if (typeof effects !== 'object' || effects === null) return null
+  const obj = effects as Record<string, unknown>
+  const travel = typeof obj.travel_location === 'string' && obj.travel_location.trim() ? obj.travel_location.trim() : null
+  const npcs = Array.isArray(obj.stage_npcs)
+    ? obj.stage_npcs.filter((n): n is string => typeof n === 'string' && n.trim().length > 0).map((n) => n.trim()).slice(0, 3)
+    : []
+  const markEvent = typeof obj.mark_event === 'string' && obj.mark_event.trim() ? obj.mark_event.trim().slice(0, 120) : null
+  const advanceDay = obj.advance_day === true
+  let encounter: string | null = null
+  if (typeof obj.encounter === 'object' && obj.encounter !== null) {
+    const enc = obj.encounter as Record<string, unknown>
+    if (enc.kind === 'combat') {
+      encounter = typeof enc.label === 'string' && enc.label.trim() ? enc.label.trim().slice(0, 80) : 'combat'
+    }
+  }
+  const milestones = Array.isArray(obj.milestones)
+    ? obj.milestones.filter((m): m is string => typeof m === 'string' && m.trim().length > 0).map((m) => m.trim()).slice(0, 3)
+    : []
+  const endScene = obj.end_scene === true
+  const loud = obj.loud === true
+  if (!travel && npcs.length === 0 && !markEvent && !advanceDay && !encounter && milestones.length === 0 && !endScene && !loud) return null
+  return { travelLocation: travel, stageNpcs: npcs, markEvent, advanceDay, encounter, milestones, endScene, loud }
 }
 
 function cannedAdjudication(text: string, partySkills: string[]): AdjudicationOutput {
   const t = text.toLowerCase()
-  const base = { interpretation: `[demo] ${text}`, flags: { impossible: false, needsDm: false } }
+  const base = { interpretation: `[demo] ${text}`, flags: { impossible: false, needsDm: false, talk: false } }
   const check = (spec: Record<string, unknown>) =>
     parseAdjudication(
       { ...base, resolution: { type: 'check', check: spec, consequences_hint: 'demo consequences' } },
       partySkills,
     )
   if (t.includes('impossible')) {
-    return { ...base, flags: { impossible: true, needsDm: false }, resolution: { type: 'auto_fail', check: null, consequencesHint: 'cannot be done' } }
+    return { ...base, flags: { impossible: true, needsDm: false, talk: false }, resolution: { type: 'auto_fail', check: null, consequencesHint: 'cannot be done' } }
+  }
+  if (/\?\s*$/.test(text)) {
+    return { ...base, flags: { impossible: false, needsDm: false, talk: true }, resolution: { type: 'auto_success', check: null, consequencesHint: 'a question for the DM' } }
   }
   if (t.includes('together') || t.includes('we all')) {
     const out = check({ skill: 'stealth', dc: 12, adv_dis: 'none', rationale: 'group effort', group: true })
@@ -80,7 +131,9 @@ function cannedAdjudication(text: string, partySkills: string[]): AdjudicationOu
     if (out.ok) return out.data
   }
   if (t.includes('search') || t.includes('investigate')) {
-    const out = check({ skill: 'investigation', dc: 12, adv_dis: 'none', rationale: 'hidden detail' })
+    const out = check({
+      skill: 'investigation', skill_options: ['perception'], dc: 12, adv_dis: 'none', rationale: 'hidden detail',
+    })
     if (out.ok) return out.data
   }
   return { ...base, resolution: { type: 'auto_success', check: null, consequencesHint: 'it simply works' } }
@@ -89,25 +142,62 @@ function cannedAdjudication(text: string, partySkills: string[]): AdjudicationOu
 const ADJUDICATOR_SYSTEM =
   'You adjudicate free-text player actions in a D&D 5e-style game. Reply with ONLY JSON: ' +
   '{"interpretation": string, "resolution": {"type": "auto_success"|"auto_fail"|"check", ' +
-  '"check"?: {"skill": string, "dc": number (5-25), "adv_dis": "none"|"advantage"|"disadvantage", ' +
+  '"check"?: {"skill": string, "skill_options"?: [up to 2 more applicable skills], ' +
+  '"dc": number (5-25), "adv_dis": "none"|"advantage"|"disadvantage", ' +
   '"rationale": string, "group"?: boolean, "requires_assist"?: {"skill": string, "effect": "enable"|"bonus"}}, ' +
-  '"consequences_hint": string}, "flags": {"impossible"?: boolean, "needs_dm"?: boolean}}. ' +
-  'Trivial actions auto-succeed - never demand rolls for everything. Use "group": true for ' +
-  'whole-party actions. Only spec requires_assist with a skill from the party skill list.'
+  '"consequences_hint": string}, "flags": {"impossible"?: boolean, "needs_dm"?: boolean, "talk"?: boolean}, ' +
+  '"scene_effects"?: {"travel_location"?: string, "stage_npcs"?: [1-3 names], "mark_event"?: string, ' +
+  '"advance_day"?: boolean, "encounter"?: {"kind": "combat", "label": string}, "milestones"?: [strings], ' +
+  '"end_scene"?: boolean, "loud"?: boolean}. ' +
+  'Trivial actions auto-succeed - never demand rolls for everything; unopposed travel between ' +
+  'known locations ALWAYS auto-succeeds. Use "group": true for whole-party actions. Only spec ' +
+  'requires_assist with a skill from the party skill list. Add scene_effects when the action ' +
+  'moves the party to a known location (travel_location), draws named NPCs into conversation ' +
+  '(stage_npcs), or completes a notable story moment (mark_event: short past-tense marker). ' +
+  'Use ONLY names from the provided location/NPC lists; omit scene_effects when nothing changes. ' +
+  'When the party seeks out or addresses a named NPC, prefer stage_npcs so the conversation goes live. ' +
+  'Set advance_day true only when meaningful in-game time passes (a long journey, a rest, waiting out a tide). ' +
+  'COMBAT: when the party initiates a fight or foes engage them (an attack, an ambush, weapons drawn ' +
+  'on both sides), set resolution type "auto_success" AND scene_effects.encounter ' +
+  '{"kind": "combat", "label": short battle name}. Never spec a skill check for fighting itself - ' +
+  'checks are for avoiding, escaping, or setting up a fight, not resolving one. ' +
+  'MILESTONES: when this action (with its outcome) genuinely accomplishes one of the authored ' +
+  'milestones in the provided list, put that milestone in scene_effects.milestones copying its ' +
+  'EXACT text. Never invent milestones and never claim one that has not clearly happened yet. ' +
+  'Set end_scene true when the party disengages from, concludes, or walks away from the current conversation. ' +
+  'Set loud true when the action makes serious noise or draws attention (smashing, explosions, shouting matches, alarms). ' +
+  'SKILL OPTIONS: like a table DM ("Does my Investigation apply?" "Sure!"), when more than one ' +
+  'skill could reasonably serve the attempt, list the alternatives in skill_options (most apt ' +
+  'first is "skill") - the player picks which to roll. ' +
+  'CHARACTER: weigh the actor\'s species traits, background, and quirks in every ruling. A ' +
+  'trait that trivializes the action (Darkvision when peering into darkness) means ' +
+  'auto_success or advantage with a lower DC; a hindering trait means disadvantage or a ' +
+  'higher DC. Name the deciding trait in the rationale so the player sees why. ' +
+  'TALK: set flags.talk true (resolution auto_success) ONLY for table talk or questions ' +
+  'answerable from plain sight and common knowledge - the DM just answers those. A question ' +
+  'that probes for HIDDEN or uncertain information ("any hint the gargoyles are creatures, ' +
+  'not decorations?") is an attempt: spec a check for it instead.'
 
-export async function runAdjudicator(env: AgentEnv, ctx: AdjudicatorContext): Promise<AdjudicationOutput> {
-  if (env.demo) return cannedAdjudication(ctx.intentText, ctx.partySkills)
+export async function runAdjudicator(
+  env: AgentEnv,
+  ctx: AdjudicatorContext,
+): Promise<AdjudicationOutput & { sceneEffects: SceneEffects | null }> {
+  if (env.demo) return { ...cannedAdjudication(ctx.intentText, ctx.partySkills), sceneEffects: null }
   const user = [
     `Action: ${ctx.intentText}`,
     `Actor: ${ctx.actorSummary}`,
     `Scene: ${ctx.sceneSummary}`,
     ctx.objective ? `Current objective: ${ctx.objective.title} (DM notes: ${ctx.objective.hiddenDescription})` : '',
     `Party size: ${ctx.partySize}; party skills: ${ctx.partySkills.join(', ')}`,
+    `Known locations: ${ctx.knownLocations.join('; ') || 'none listed'}`,
+    `Named NPCs in the world: ${ctx.knownNpcs.join('; ') || 'none listed'}`,
+    `Authored milestones (exact text): ${ctx.milestones.join(' | ') || 'none'}`,
     `Recent events: ${ctx.recentEvents.join(' | ') || 'none'}`,
   ].filter(Boolean).join('\n')
-  const parsed = parseAdjudication(await agentJson(env, 'adjudicator', ADJUDICATOR_SYSTEM, user, 500), ctx.partySkills)
+  const raw = await agentJson(env, 'adjudicator', ADJUDICATOR_SYSTEM, user, 600)
+  const parsed = parseAdjudication(raw, ctx.partySkills)
   if (!parsed.ok) throw new AgentCallError(`Adjudicator output invalid: ${parsed.errors.join('; ')}`)
-  return parsed.data
+  return { ...parsed.data, sceneEffects: extractSceneEffects(raw) }
 }
 
 function cannedClassification(text: string): SocialClassification {
@@ -116,14 +206,18 @@ function cannedClassification(text: string): SocialClassification {
   if (/(lie|swear|pretend|totally)/.test(t)) return { kind: 'influence', skill: 'deception', magnitude: 'costly' }
   if (/(threat|or else|last chance)/.test(t)) return { kind: 'influence', skill: 'intimidation', magnitude: 'costly' }
   if (/(read|sense|study|size up)/.test(t)) return { kind: 'insight', skill: 'insight' }
+  if (/^(i|we) (all )?(draw|attack|climb|leap|vault|run|sneak|grab|push|pull|throw|smash|force|brace|search|examine)\b/.test(t)) return { kind: 'action' }
   return { kind: 'conversation' }
 }
 
 const CLASSIFIER_SYSTEM =
-  'Classify a player utterance to an NPC. Reply with ONLY JSON: {"kind": "conversation"} for plain talk, ' +
-  '{"kind": "insight"} when they probe what the NPC hides/feels, or {"kind": "influence", ' +
+  'Classify a player utterance during a conversation with an NPC. Reply with ONLY JSON: ' +
+  '{"kind": "conversation"} for plain talk, ' +
+  '{"kind": "insight"} when they probe what the NPC hides/feels, {"kind": "influence", ' +
   '"skill": "persuasion"|"deception"|"intimidation", "magnitude": "trivial"|"reasonable"|"costly"|"against_nature"} ' +
-  'when they push the NPC to act/agree. Magnitude = how big the ask is for THIS npc. Most talk is plain conversation.'
+  'when they push the NPC to act/agree, or {"kind": "action"} when the input is primarily a ' +
+  'PHYSICAL action or maneuver rather than something spoken (drawing steel, climbing away, ' +
+  'searching the room). Magnitude = how big the ask is for THIS npc. Most talk is plain conversation.'
 
 export async function runSocialClassifier(env: AgentEnv, utterance: string, npcSummary: string): Promise<SocialClassification> {
   if (env.demo) return cannedClassification(utterance)
@@ -142,10 +236,17 @@ export interface NpcContext {
   memory: string[]
   knowledge: { id: string; reveals: string; condition: string | null }[]
   conversation: { topicStack: string[]; revealedThisScene: string[] }
+  /** The scene's transcript so far - without it the NPC forgets what happened two lines ago
+   *  (the orb handed over and immediately denied, playtest 2026-07-20). */
+  recentLines: string[]
   utterance: { actorCharacterId: string; actorName: string; text: string }
   checkResult: { skill: string; success: boolean; margin: number } | null
   pcs: { characterId: string; name: string; linesThisScene: number }[]
+  /** One personalization line per PC (species traits, background, quirks). */
+  partyProfiles: string[]
   hooks: string[]
+  /** Open beat goals (F08): situations the scene wants resolved - the NPC steers toward them. */
+  beatGoals: string[]
   /** Consistency-regen constraints ("NEVER: ..."), set on the second attempt only. */
   constraint?: string
   /** DM-chosen gist (Slice 2 review console): the reply must follow this direction. */
@@ -196,7 +297,11 @@ const NPC_SYSTEM =
   '[{"type": "join_combat"|"leave"|"give_item"|"canonize_theory", "payload"?: object}]}. ' +
   'Only reveal knowledge whose condition is met by the check result. Openings only after a real ' +
   'insight success, unlocked_by = that roller, consumable by a DIFFERENT pc. Every 3-5 exchanges, ' +
-  'address_pc someone who has spoken little - an invitation, never an interrogation of the idle.'
+  'address_pc someone who has spoken little - an invitation, never an interrogation of the idle. ' +
+  'Unless the moment truly calls for silence, END your reply handing the scene back to the party - ' +
+  'a question, a request, a proposal, an expectation - so they always know a response is wanted; ' +
+  'never trail off on a bare statement. When the conversation has clearly concluded (farewells said, ' +
+  'business done, the party moving on), include proposed_actions [{"type": "leave"}] so the scene can end.'
 
 export async function runNpcAgent(env: AgentEnv, ctx: NpcContext): Promise<NpcAgentOutput> {
   const pcIds = ctx.pcs.map((p) => p.characterId)
@@ -212,7 +317,16 @@ export async function runNpcAgent(env: AgentEnv, ctx: NpcContext): Promise<NpcAg
     `Knowledge (id: what it reveals [condition]): ${ctx.knowledge.map((k) => `${k.id}: ${k.reveals}${k.condition ? ` [requires: ${k.condition}]` : ''}`).join(' | ') || 'none'}`,
     `Already revealed this scene: ${ctx.conversation.revealedThisScene.join(', ') || 'nothing'}`,
     `PCs present (id, name, lines spoken this scene): ${ctx.pcs.map((p) => `${p.characterId} "${p.name}" ${p.linesThisScene}`).join('; ')}`,
+    ctx.partyProfiles.length > 0
+      ? `Who these people are (react to their traits and quirks personally):\n${ctx.partyProfiles.map((p) => `- ${p}`).join('\n')}`
+      : '',
     ctx.hooks.length > 0 ? `Work in naturally if the moment fits: ${ctx.hooks.join(' | ')}` : '',
+    ctx.beatGoals.length > 0
+      ? `Open story situations this scene wants resolved - steer the conversation toward them when natural, never force: ${ctx.beatGoals.join(' | ')}`
+      : '',
+    ctx.recentLines.length > 0
+      ? `THIS SCENE SO FAR (everything here already happened - never contradict or forget it):\n${ctx.recentLines.join('\n')}`
+      : '',
     `${ctx.utterance.actorName} says: "${ctx.utterance.text}"`,
     ctx.checkResult
       ? `Their ${ctx.checkResult.skill} check ${ctx.checkResult.success ? 'SUCCEEDED' : 'FAILED'} (margin ${ctx.checkResult.margin}).`
@@ -220,9 +334,101 @@ export async function runNpcAgent(env: AgentEnv, ctx: NpcContext): Promise<NpcAg
     ctx.direction ? `The DM chose this direction for your reply - follow it closely: "${ctx.direction}"` : '',
     ctx.constraint ? `HARD CONSTRAINTS - the previous draft violated these facts. ${ctx.constraint}` : '',
   ].filter(Boolean).join('\n')
-  const parsed = parseNpcOutput(await agentJson(env, 'npc_agent', NPC_SYSTEM, user, 600), pcIds)
-  if (!parsed.ok) throw new AgentCallError(`NPC output invalid: ${parsed.errors.join('; ')}`)
-  return parsed.data
+  const attempt = async () => {
+    const parsed = parseNpcOutput(await agentJson(env, 'npc_agent', NPC_SYSTEM, user, 600), pcIds)
+    if (!parsed.ok) throw new AgentCallError(`NPC output invalid: ${parsed.errors.join('; ')}`)
+    return parsed.data
+  }
+  // The npc_agent default model fails intermittently on structured output (empty or malformed
+  // JSON, seen live) - one fresh attempt recovers most of these before the player sees a 500.
+  try {
+    return await attempt()
+  } catch {
+    return await attempt()
+  }
+}
+
+// --- Entry mapping (encounter-states 4.1): the cutscene phase's single handler -----------------
+
+export type EntryKind = 'offered' | 'adhoc' | 'fold_in'
+
+export interface EntryMapping {
+  entry: EntryKind
+  interpretation: string
+  /** Scene movement riding on the reply (travel/staging/time) - validated server-side. */
+  sceneEffects: SceneEffects | null
+}
+
+const ENTRY_SYSTEM =
+  'A tabletop RPG is in a CUTSCENE: the narrator just delivered a hook toward the next ' +
+  'encounter. Classify the party\'s reply. Reply with ONLY JSON: {"entry": ' +
+  '"offered"|"adhoc"|"fold_in", "interpretation": string, "scene_effects"?: ' +
+  '{"travel_location"?: string, "stage_npcs"?: [1-3 names], "advance_day"?: boolean}}. ' +
+  '"offered": the reply engages or MOVES TOWARD the offered encounter in any way - attempting ' +
+  'it, approaching its site, walking/climbing/riding onward, picking a direction the hook laid ' +
+  'out, or agreeing to face it. Committing to move IS engagement ("I walk forward", "I follow ' +
+  'the waterfall" - the story must go somewhere with it). "adhoc": the reply is a REAL ' +
+  'endeavor with effort and risk pointed somewhere ELSE than the offered encounter (players ' +
+  'going off-script deserve structure, not silence). "fold_in": ONLY talk and color that ' +
+  'changes nothing about where the party stands - banter, questions, checking gear. If the ' +
+  'reply repeats or continues something already folded in, the party is committing: map it ' +
+  'offered (or adhoc), NEVER fold the same push twice - that reads as the story circling. ' +
+  'Use scene_effects only for movement to a KNOWN listed location, drawing LISTED NPCs into ' +
+  'conversation, or meaningful time passing. When unsure between offered and fold_in, prefer ' +
+  'offered; when unsure between adhoc and fold_in, prefer fold_in.'
+
+function cannedEntryMapping(text: string): EntryMapping {
+  const t = text.toLowerCase()
+  const base = { interpretation: `[demo] ${text}`, sceneEffects: null }
+  if (/\b(take on|begin|face|engage|attempt)\b/.test(t)) return { ...base, entry: 'offered' }
+  if (/\b(instead|off-script|on my own|side venture)\b/.test(t)) return { ...base, entry: 'adhoc' }
+  return { ...base, entry: 'fold_in' }
+}
+
+export interface EntryContext {
+  text: string
+  actorSummary: string
+  sceneSummary: string
+  /** The offered encounter from the open beat's spec, if any. */
+  hook: { kind: string; label: string; stakes: string } | null
+  knownLocations: string[]
+  knownNpcs: string[]
+  recentEvents: string[]
+  /** Recently folded-in replies - a repeat/continuation of one of these must not fold again. */
+  recentFolds: string[]
+}
+
+export async function runEntryMapper(env: AgentEnv, ctx: EntryContext): Promise<EntryMapping> {
+  if (env.demo) return cannedEntryMapping(ctx.text)
+  const user = [
+    `Reply: ${ctx.text}`,
+    `Actor: ${ctx.actorSummary}`,
+    `Scene: ${ctx.sceneSummary}`,
+    ctx.hook
+      ? `Offered encounter: ${ctx.hook.kind} - "${ctx.hook.label}" (stakes: ${ctx.hook.stakes || 'unstated'})`
+      : 'No encounter is on offer right now - only "adhoc" or "fold_in" apply.',
+    `Known locations: ${ctx.knownLocations.join('; ') || 'none listed'}`,
+    `Named NPCs: ${ctx.knownNpcs.join('; ') || 'none listed'}`,
+    `Recent events: ${ctx.recentEvents.join(' | ') || 'none'}`,
+    ctx.recentFolds.length > 0
+      ? `Already folded in (a repeat or continuation of these is COMMITMENT - never fold_in again): ${ctx.recentFolds.map((f) => `"${f}"`).join(' | ')}`
+      : '',
+  ].filter(Boolean).join('\n')
+  const raw = await agentJson(env, 'adjudicator', ENTRY_SYSTEM, user, 300)
+  const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  const entry = (['offered', 'adhoc', 'fold_in'] as const).find((e) => e === obj.entry) ?? 'fold_in'
+  const effects = extractSceneEffects(raw)
+  return {
+    // "offered" with nothing on offer is a model error - degrade to fold_in, never a crash.
+    entry: !ctx.hook && entry === 'offered' ? 'fold_in' : entry,
+    interpretation: typeof obj.interpretation === 'string' && obj.interpretation.trim()
+      ? obj.interpretation.trim()
+      : ctx.text.slice(0, 120),
+    // Progression rides on outcome maps only - strip everything but world movement.
+    sceneEffects: effects
+      ? { ...effects, milestones: [], markEvent: null, encounter: null }
+      : null,
+  }
 }
 
 const GIST_SYSTEM =
@@ -245,6 +451,7 @@ export async function runReplyGists(env: AgentEnv, ctx: NpcContext, rejected?: s
     `NPC: ${ctx.npc.name} (${ctx.npc.faction}). Personality: ${ctx.npc.personality}. ${ctx.npc.description}`,
     `Disposition to each PC (-10..10): ${JSON.stringify(ctx.dispositionByPc)}`,
     `Unrevealed knowledge the NPC holds: ${ctx.knowledge.map((k) => k.reveals).join(' | ') || 'none'}`,
+    ctx.recentLines.length > 0 ? `This scene so far:\n${ctx.recentLines.slice(-6).join('\n')}` : '',
     `${ctx.utterance.actorName} says: "${ctx.utterance.text}"`,
     ctx.checkResult
       ? `Their ${ctx.checkResult.skill} check ${ctx.checkResult.success ? 'SUCCEEDED' : 'FAILED'} (margin ${ctx.checkResult.margin}).`
@@ -256,25 +463,68 @@ export async function runReplyGists(env: AgentEnv, ctx: NpcContext, rejected?: s
   return parseGists(await agentJson(env, 'npc_agent', GIST_SYSTEM, user, 200))
 }
 
-const NARRATOR_SYSTEM =
+const NARRATOR_BASE =
   'You narrate a tabletop RPG. Second person, present tense, 2-4 sentences, vivid but concise. ' +
-  'Never invent facts about named NPCs/items/places beyond the given context. ' +
-  'End every narration at a concrete decision point facing the players - someone awaiting their ' +
-  'answer, a fork, a threat, an open question - never a settled scene. Never presume the party\'s ' +
-  'motivation or feelings; motivation belongs to the players. Vary how beats end - no formulaic ' +
-  'closing line. Output only narration text.'
+  'Never invent facts about named NPCs/items/places beyond the given context. Never mention ' +
+  'dice, rolls, checks, or game mechanics - translate outcomes into fiction. Never presume the ' +
+  'party\'s motivation or feelings; motivation belongs to the players. When a party member\'s ' +
+  'described traits or quirks bear on the moment (a dwarf\'s Darkvision in the dark, a ' +
+  'sailor\'s eye for rigging), let the narration notice it - personal, never generic. ' +
+  'Output only narration text.'
 
-export async function runNarrator(env: AgentEnv, prompt: string, constraint?: string): Promise<string> {
+/**
+ * 'beat' opens situations and must end on a choice; 'outcome' resolves and may settle;
+ * 'exposition' is the cutscene voice (encounter-states Slice 3): longer-form, ends with an
+ * explicit in-fiction ask telegraphing the encounter ahead.
+ */
+export type NarrationStyle = 'beat' | 'outcome' | 'exposition'
+
+const NARRATOR_SYSTEMS: Record<NarrationStyle, string> = {
+  beat:
+    NARRATOR_BASE +
+    ' End every narration at a concrete decision point facing the players - someone awaiting ' +
+    'their answer, a fork, a threat, an open question - never a settled scene. Vary how beats ' +
+    'end - no formulaic closing line. A decision point is a REAL choice or a demanded action: ' +
+    'never re-offer a choice the party already made, and never invent a fork for its own ' +
+    'sake - when the fiction has one way onward, commit them toward it and end at what it ' +
+    'reveals or demands.',
+  outcome:
+    NARRATOR_BASE +
+    ' Narrate the resolved outcome and let the scene settle where it naturally lands - never ' +
+    'force a closing question, but never strand the players either: make the immediate ' +
+    'situation concrete and leave at least one visible thread to pull (a path, a person, a ' +
+    'sound, a detail worth a closer look) so they always know what they could engage with next.',
+  exposition:
+    'You narrate a tabletop RPG. Second person, present tense. This is a CUTSCENE between ' +
+    'encounters: 4-8 sentences of vivid exposition that carries consequences forward and sets ' +
+    'the next situation. Never invent facts about named NPCs/items/places beyond the given ' +
+    'context. Never mention dice, rolls, checks, or game mechanics. Never presume the party\'s ' +
+    'motivation or feelings. Let the party members\' described traits, backgrounds, and quirks ' +
+    'color what each of them would notice or be drawn toward. END with an explicit in-fiction ' +
+    'ask that telegraphs 1-3 concrete directions the party could take - someone waiting on ' +
+    'their answer, a visible approach, a pressing danger. Never re-offer a direction the ' +
+    'party already chose, and never pad a single obvious path into a menu: if one way onward ' +
+    'exists, carry them down it and end at what it reveals. The players\' reply enters the ' +
+    'next encounter. Output only narration text.',
+}
+
+export async function runNarrator(
+  env: AgentEnv,
+  prompt: string,
+  constraint?: string,
+  style: NarrationStyle = 'beat',
+): Promise<string> {
   if (env.demo) return `[demo narration] ${prompt.slice(0, 140)}`
+  const system = NARRATOR_SYSTEMS[style]
   return await callAgentText({
     serviceClient: env.service,
     openRouterApiKey: OPENROUTER_API_KEY,
     userId: env.creatorId,
     adventureId: env.adventureId,
     agentRole: 'narrator',
-    system: constraint ? `${NARRATOR_SYSTEM}\nHard constraints: ${constraint}` : NARRATOR_SYSTEM,
+    system: constraint ? `${system}\nHard constraints: ${constraint}` : system,
     user: prompt,
-    maxTokens: 400,
+    maxTokens: 500,
   })
 }
 
@@ -299,7 +549,9 @@ export async function runNarratorOptions(env: AgentEnv, contextPrompt: string): 
 const CONSISTENCY_SYSTEM =
   'You fact-check a game narration draft against established facts. Reply with ONLY JSON: ' +
   '{"ok": boolean, "violations": [{"claim": string, "conflicts_with": string}]}. Tone and style ' +
-  'are free - flag only factual contradictions (dead people acting, wrong locations, items nobody has).'
+  'are free - flag only DIRECT contradictions of a stated fact (dead people acting, a different ' +
+  'location than the stated one, items nobody has). NEW details, characters, or embellishments ' +
+  'the facts are silent about are the narrator\'s job - never violations. When in doubt, ok: true.'
 
 /** Deterministic pass first (F07 SS6.1); LLM pass only for non-demo (SS6.2). */
 export async function runConsistency(
@@ -351,6 +603,86 @@ export async function runOfferClassifier(env: AgentEnv, offerSummary: string, ut
     )
   } catch {
     return 'unrelated' // classification failure = normal routing, never a blocked table
+  }
+}
+
+const PUZZLE_JUDGE_SYSTEM =
+  'A puzzle is in play in a tabletop RPG and YOU hold its secret solution. Score the party\'s ' +
+  'attempt. Reply with ONLY JSON: {"attempt_result": "solves"|"advances_step"|"mistaken"|"talk", ' +
+  '"note": string (one line for the narrator - NEVER reveal the solution or unearned steps)}. ' +
+  '"solves" only when the attempt actually enacts the solution (or completes the final missing ' +
+  'piece); "advances_step" when it genuinely accomplishes the CURRENT step; "talk" when the ' +
+  'input is a question or conversation rather than an attempt (it costs nothing); "mistaken" for ' +
+  'everything else - wrong ideas, wild guesses, unrelated fiddling. Be strict: reward real ' +
+  'reasoning, not verbs.'
+
+export interface PuzzleJudgment {
+  result: 'solves' | 'advances_step' | 'mistaken' | 'talk'
+  note: string
+}
+
+/** Scores a puzzle attempt against the secret solution (encounter-states Slice 5). */
+export async function runPuzzleJudge(
+  env: AgentEnv,
+  ctx: {
+    solution: string
+    steps: { description: string; done: boolean }[]
+    attempt: string
+    actorName: string
+  },
+): Promise<PuzzleJudgment> {
+  if (env.demo) {
+    const t = ctx.attempt.toLowerCase()
+    if (/\?\s*$/.test(ctx.attempt)) return { result: 'talk', note: '[demo] a question for the DM' }
+    const solutionWords = ctx.solution.toLowerCase().split(/\W+/).filter((w) => w.length >= 5)
+    if (solutionWords.some((w) => t.includes(w))) return { result: 'solves', note: '[demo] the pieces align' }
+    if (/(examine|study|trace|align|press|turn)/.test(t)) return { result: 'advances_step', note: '[demo] a step yields' }
+    return { result: 'mistaken', note: '[demo] nothing gives' }
+  }
+  const raw = await agentJson(env, 'adjudicator', PUZZLE_JUDGE_SYSTEM, [
+    `SECRET solution: ${ctx.solution}`,
+    `Steps (in order):\n${ctx.steps.map((s, i) => `${i + 1}. [${s.done ? 'DONE' : 'open'}] ${s.description}`).join('\n')}`,
+    `Current step: the first open one.`,
+    `${ctx.actorName} attempts: ${ctx.attempt}`,
+  ].join('\n'), 200)
+  const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  const result = (['solves', 'advances_step', 'mistaken', 'talk'] as const).find((r) => r === obj.attempt_result) ?? 'mistaken'
+  return { result, note: typeof obj.note === 'string' ? obj.note.slice(0, 200) : '' }
+}
+
+const EXIT_JUDGE_SYSTEM =
+  'A social encounter in a tabletop RPG has 2-4 authored exit outcomes. Judge whether one has ' +
+  'CLEARLY occurred in the recent exchange. Reply with ONLY JSON: {"exit": "<outcome label ' +
+  'copied EXACTLY>" | null}. Only claim an exit the transcript unambiguously establishes - ' +
+  'agreed, refused outright, enraged, and so on. Merely discussing, hesitating, or trending ' +
+  'toward an outcome is NOT an exit. The usual answer is {"exit": null}.'
+
+/**
+ * Narrow exit detection for social encounters (encounter-states Slice 4): judges ONLY the
+ * authored exits, never open recognition. Demo: an exit label appearing verbatim in the
+ * recent lines counts. Failure degrades to null - the conversation simply continues.
+ */
+export async function runSocialExitJudge(
+  env: AgentEnv,
+  goal: string,
+  exits: { outcome: string; description: string }[],
+  recentLines: string[],
+): Promise<string | null> {
+  if (exits.length === 0) return null
+  if (env.demo) {
+    const text = recentLines.slice(-4).join(' ').toLowerCase()
+    return exits.find((e) => text.includes(e.outcome.toLowerCase().replaceAll('_', ' ')))?.outcome ?? null
+  }
+  try {
+    const raw = await agentJson(env, 'summarizer', EXIT_JUDGE_SYSTEM, [
+      `Goal of the conversation: ${goal || 'unstated'}`,
+      `Authored exits:\n${exits.map((e) => `- ${e.outcome}: ${e.description}`).join('\n')}`,
+      `Recent exchange:\n${recentLines.slice(-8).join('\n')}`,
+    ].join('\n\n'), 100)
+    const exit = (typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>).exit : null)
+    return typeof exit === 'string' && exits.some((e) => e.outcome === exit) ? exit : null
+  } catch {
+    return null
   }
 }
 

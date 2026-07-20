@@ -8,15 +8,17 @@ import { dmSettings } from '../_shared/play/index.ts'
 import type { GameState, Json } from '../_shared/state/index.ts'
 import {
   activeLoop, advanceBeat, completeLoop, computeVarietyFlags, intentPillar, isOffLoop,
-  LOOP_TEMPLATES, nextStreak, PIVOT_REEVALUATE_EVENTS, pivotHandling, pushLoop,
-  streakTriggersClassifier, suspendLoop, varietyGuidance,
+  listMilestoneAtoms, LOOP_TEMPLATES, nextStreak, PIVOT_REEVALUATE_EVENTS, pivotHandling,
+  pushLoop, streakTriggersClassifier, suspendLoop, varietyGuidance,
 } from '../_shared/story/index.ts'
 import type { BeatPlan, CoreLoop, LoopStatus, LoopType, Pillar, VarietyInput } from '../_shared/story/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { narrationBeat } from './narration.ts'
-import { loadPartyCharacters, loadPlayContext, partySkillList } from './orchestrate.ts'
+import { loadPartyCharacters, loadPlayContext, partyProfileLines, partySkillList } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
-import { runBeatPlanner, runHookWeaverLive, runLoopClassifier } from './story-agents.ts'
+import { antagonistTurn } from './steward.ts'
+import { retrieveMemories } from './memory.ts'
+import { runBeatPlanner, runEncounterDesigner, runHookWeaverLive, runLoopClassifier } from './story-agents.ts'
 import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
 
 export async function loadLoops(service: SupabaseClient, adventureId: string): Promise<CoreLoop[]> {
@@ -127,10 +129,10 @@ async function activeObjectiveRow(service: SupabaseClient, state: GameState) {
   if (!state.objectives.currentId) return null
   const { data } = await service
     .from('objectives')
-    .select('id, title, hidden_description')
+    .select('id, title, hidden_description, completion_predicates')
     .eq('id', state.objectives.currentId)
     .maybeSingle()
-  return data as { id: string; title: string; hidden_description: string } | null
+  return data as { id: string; title: string; hidden_description: string; completion_predicates: Json } | null
 }
 
 /**
@@ -165,14 +167,30 @@ export async function planAndOpenBeat(
   const flags = computeVarietyFlags(variety)
   const guidance = varietyGuidance(flags)
 
+  const profileLines = await partyProfileLines(service, party)
+  // Outcome-map vocabulary: the active objective's authored atoms (the planner also maps
+  // onto its own exit_conditions - the parser validates against both).
+  const objectiveAtoms = listMilestoneAtoms(objective?.completion_predicates ?? null)
+  // Retrieval memory (Slice 7): the planner plans past what earlier sessions established.
+  const establishedEarlier = await retrieveMemories(
+    service, env,
+    `${objective?.title ?? loop.type} - ${state.scene.locationName || 'the current scene'}`,
+  )
   const plannerCtx = {
     loop: { type: loop.type, completedBeatNames },
     objective: objective ? { title: objective.title, hiddenDescription: objective.hidden_description } : null,
     sceneSummary: `${state.scene.locationName || 'unknown place'} (${state.scene.mode}), day ${state.scene.day}`,
-    partySummary: party.map((c) => `${c.name} (${c.class_key ?? 'adventurer'} ${c.level})`).join(', '),
+    // Full profile lines (2026-07-20): beats and encounters plan around who these PCs are.
+    partySummary: profileLines.join('\n') ||
+      party.map((c) => `${c.name} (${c.class_key ?? 'adventurer'} ${c.level})`).join(', '),
     poolIngredients: ((pool.data ?? []) as { id: string; type: string; reveals: string }[]),
     varietyGuidance: guidance,
-    plan: { partySize: party.length, partySkills: partySkillList(party) },
+    establishedEarlier,
+    plan: {
+      partySize: party.length,
+      partySkills: partySkillList(party),
+      milestones: [...objectiveAtoms.flags, ...objectiveAtoms.events, ...objectiveAtoms.facts],
+    },
   }
   let parsed = await runBeatPlanner(env, plannerCtx)
   if (!parsed.ok) parsed = await runBeatPlanner(env, plannerCtx)
@@ -185,11 +203,37 @@ export async function planAndOpenBeat(
         ingredientRequests: [],
         braided: [],
         narrationSeed: 'The moment stretches - the next move belongs to the party.',
+        // Null spec: this beat degrades to hook -> ad-hoc entries only.
+        encounter: null,
       }
   if (!parsed.ok) {
     await logEvent(service, env.adventureId, sessionId, 'incident', {
       kind: 'beat_planner_failure', errors: parsed.errors as unknown as Json,
     })
+  }
+
+  // The Encounter Designer fills kind-specific mechanics; stored snake_case on the beat row.
+  let encounterSpec: Json = null
+  if (plan.encounter) {
+    const npcNames = plan.encounter.kind === 'social'
+      ? (((await service.from('npcs').select('name').eq('adventure_id', env.adventureId)).data ?? []) as { name: string }[])
+          .map((n) => n.name)
+      : []
+    const params = await runEncounterDesigner(env, plan.encounter, {
+      size: party.length,
+      skills: partySkillList(party),
+      profiles: profileLines,
+    }, npcNames)
+    encounterSpec = {
+      kind: plan.encounter.kind,
+      label: plan.encounter.label,
+      stakes: plan.encounter.stakes,
+      rationale: plan.encounter.rationale,
+      params,
+      on_success: plan.encounter.onSuccess,
+      on_partial: plan.encounter.onPartial,
+      on_failure: plan.encounter.onFailure,
+    }
   }
 
   // Close the open beat, insert the new one, advance the loop pointer.
@@ -208,6 +252,7 @@ export async function planAndOpenBeat(
       goals: plan.goals as unknown as Json,
       exit_conditions: plan.exitConditions,
       ingredient_requests: plan.ingredientRequests as unknown as Json,
+      encounter_spec: encounterSpec,
       status: 'active',
     })
     .select('id')
@@ -255,6 +300,7 @@ export async function planAndOpenBeat(
     core_loop_id: loop.id, beat_id: beatRow.id, name: plan.name, trigger,
     braided: plan.braided.length as unknown as Json, coop_demand: plan.braided.length > 0,
     variety_flags: flags as unknown as Json,
+    encounter_kind: plan.encounter?.kind ?? null,
   })
 
   // Live Hook Weaver pass (F08 SS6): refresh this objective's live hooks, delivered as agent
@@ -274,12 +320,20 @@ export async function planAndOpenBeat(
     }
   }
 
+  // The beat-opening cutscene: exposition voice, hook telegraphing the authored encounter.
   await narrationBeat(
     service, env, sessionId,
     `${narrationContext ? `${narrationContext} ` : ''}Open the next story beat ("${plan.name}"). ` +
       `Establish these situations without resolving them: ${plan.goals.join(' / ')}. ` +
-      `${plan.narrationSeed} End at a concrete decision point for the players.`,
+      `${plan.narrationSeed} Pick up from where the party actually stands - never presume travel ` +
+      'or actions they did not take.' +
+      (plan.encounter
+        ? ` Telegraph the encounter ahead - "${plan.encounter.label}"` +
+          `${plan.encounter.stakes ? ` (at stake: ${plan.encounter.stakes})` : ''} - and make the ` +
+          'closing ask invite the party into it.'
+        : ''),
     'Beat opened',
+    'exposition',
   )
   return { status: 200, body: { ok: true, beat_id: beatRow.id, name: plan.name, braided: plan.braided.length } }
 }
@@ -402,7 +456,7 @@ export async function idleNudgeAction(service: SupabaseClient, adventureId: stri
 /** Client-swept idle nudge (F08 SS9.1): one in-fiction nudge, never a plot advance. */
 export async function idleNudge(service: SupabaseClient, env: AgentEnv, sessionId: string): Promise<{ status: number; body: Record<string, unknown> }> {
   const state = (await loadState(service, env.adventureId)).state
-  if (!['narration', 'roleplay', 'downtime'].includes(state.scene.mode)) {
+  if (!['narration', 'roleplay', 'downtime', 'puzzle'].includes(state.scene.mode)) {
     return { status: 409, body: { error: 'No nudges in this scene mode' } }
   }
   if (state.dialogue.pending || state.dialogue.typing || state.dm?.pendingReview) {
@@ -417,7 +471,28 @@ export async function idleNudge(service: SupabaseClient, env: AgentEnv, sessionI
   assertOk(error, 'event log load failed')
   const last = (lastEvents ?? [])[0] as { type: string; created_at: string } | undefined
   if (!last) return { status: 409, body: { error: 'Nothing has happened yet' } }
-  if (last.type === 'idle_nudge') {
+  // Escalation ladder, windowed by the last PLAYER action (the old "last event is idle_nudge"
+  // guard never held - every nudge logs narration_published after itself and refired forever;
+  // 13+ unattended nudges seen live on 2026-07-19). Nudge #1 re-vivifies the moment; continued
+  // silence makes the world move once (#2, antagonist stirs); after that the table waits.
+  const { data: activityRows, error: activityError } = await service
+    .from('event_log')
+    .select('id')
+    .eq('adventure_id', env.adventureId)
+    .in('type', ['intent_submitted', 'chat', 'say', 'check_rolled', 'offer_response', 'review_decided', 'social_started', 'demo_step', 'token_moved'])
+    .order('id', { ascending: false })
+    .limit(1)
+  assertOk(activityError, 'event log load failed')
+  const lastActivityId = (activityRows ?? [])[0]?.id as number | undefined
+  let nudgeQuery = service
+    .from('event_log')
+    .select('id', { count: 'exact', head: true })
+    .eq('adventure_id', env.adventureId)
+    .eq('type', 'idle_nudge')
+  if (lastActivityId !== undefined) nudgeQuery = nudgeQuery.gt('id', lastActivityId)
+  const { count: nudgesSince, error: nudgeError } = await nudgeQuery
+  assertOk(nudgeError, 'event log load failed')
+  if ((nudgesSince ?? 0) >= 2) {
     return { status: 409, body: { error: 'Already nudged - waiting on the players' } }
   }
   const thresholdMs = (dmSettings(state).nudgeMinutes ?? DEFAULT_NUDGE_MINUTES) * 60_000
@@ -425,12 +500,39 @@ export async function idleNudge(service: SupabaseClient, env: AgentEnv, sessionI
     return { status: 409, body: { error: 'The table is not idle yet' } }
   }
 
-  await logEvent(service, env.adventureId, sessionId, 'idle_nudge', {})
+  // Phase-aware framing (encounter-states 4.1): mid-encounter the pressure lands inside the
+  // encounter; in a cutscene the standing hook gets re-delivered.
+  const encounter = state.encounter ?? null
+  const phaseNote = encounter
+    ? ` The party is mid-encounter ("${encounter.label}"${encounter.stakes ? ` - at stake: ${encounter.stakes}` : ''}): ` +
+      'apply the pressure INSIDE it, reminding them what still hangs unresolved.'
+    : ' Re-deliver the standing hook freshly - the same ask, made vivid again.'
+
+  const escalate = (nudgesSince ?? 0) === 1
+  await logEvent(service, env.adventureId, sessionId, 'idle_nudge', escalate ? { escalation: true } : {})
+  if (escalate) {
+    // The world does not wait: one antagonist turn plus an intrusion beat, then silence.
+    try {
+      await antagonistTurn(service, env, sessionId, 'idle_escalation')
+    } catch (err) {
+      console.error('idle escalation antagonist turn failed', err)
+    }
+    await narrationBeat(
+      service, env, sessionId,
+      'The players stayed quiet through one gentle prompt, so the world moves without them: ' +
+        'let ONE small, real thing happen now - an arrival, a sound drawing closer, a change ' +
+        'in the scene that hints at forces working off-stage. Raise the stakes of the standing ' +
+        'choice without resolving it for the party and without revealing hidden information.' +
+        phaseNote,
+      'World stirs',
+    )
+    return { status: 200, body: { ok: true, resolved: 'escalated' } }
+  }
   await narrationBeat(
     service, env, sessionId,
     'The players have gone quiet. Produce ONE small in-fiction nudge - an NPC speaks up, a ' +
       'distant sound, someone awaiting an answer presses gently. Do NOT advance the plot, ' +
-      'resolve anything, or reveal new information. End at the same decision point, made vivid again.',
+      'resolve anything, or reveal new information.' + phaseNote,
     'Idle nudge',
   )
   return { status: 200, body: { ok: true, resolved: 'nudged' } }

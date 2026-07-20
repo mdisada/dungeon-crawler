@@ -9,7 +9,8 @@ export type { DemoContext, DemoStep } from './demo-script.ts'
 export { GRID_SIZE, initialGameState } from './types.ts'
 export type {
   ActionEconomy, CheckRulingReview, CombatState, ConversationState, DialogueLine, DialogueState,
-  DiffDomain, DmSettingsState, DmState, FxEvent, GameState, HpState, Json, ObjectivesState,
+  DiffDomain, DmSettingsState, DmState, EncounterKind, EncounterSpecState, EncounterState,
+  FxEvent, GameState, HpState, Json, ObjectivesState,
   ObjectiveView, NarrationReview, NpcReplyReview, OfferBannerView, OpeningState, PendingPromptState,
   PendingReviewState, PlayersState, PlayerView, ProposalEntry, QuestJournalView, ReviewCandidate,
   SceneMode, SceneState, SessionState, SpeakerSlot, StateDiff, TokenState,

@@ -113,8 +113,12 @@ export function sendPlayerIntent(
 export function rollPendingPrompt(
   adventureId: string,
   promptId: string,
+  skill?: string,
 ): Promise<{ total: number; success?: boolean; waiting?: boolean }> {
-  return callSession({ action: 'roll_pending', adventure_id: adventureId, prompt_id: promptId })
+  return callSession({
+    action: 'roll_pending', adventure_id: adventureId, prompt_id: promptId,
+    ...(skill ? { skill } : {}),
+  })
 }
 
 export function claimAssistSlot(
@@ -140,12 +144,68 @@ export function startSocialScene(adventureId: string, npcIds: string[]): Promise
   return callSession({ action: 'start_social', adventure_id: adventureId, npc_ids: npcIds })
 }
 
+/** Player asks the DM for a nudge ("get your bearings") - always lands, climbs the ladder. */
+export function requestHint(adventureId: string): Promise<{ resolved: string; rung: number }> {
+  return callSession({ action: 'hint', adventure_id: adventureId, requested: true })
+}
+
+/** Auto stuck-sweep (client timer, like the idle nudge): the server validates + dedups; 409 is normal. */
+export async function sweepHint(adventureId: string): Promise<boolean> {
+  try {
+    await callSession({ action: 'hint', adventure_id: adventureId })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function endSocialEncounter(adventureId: string): Promise<unknown> {
   return callSession({ action: 'end_encounter', adventure_id: adventureId })
 }
 
 export function createGenericNpc(adventureId: string, roleHint: string): Promise<{ npc_id: string; name: string }> {
   return callSession({ action: 'generic_npc', adventure_id: adventureId, role_hint: roleHint })
+}
+
+// --- Debug telemetry (email-allowlisted, see supabase/functions/session/debug.ts) --------------
+
+export interface DebugUsageStep {
+  id: string
+  agent_role: string
+  model: string
+  kind: 'text' | 'tts' | 'image' | 'embedding'
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  cost_usd: number | string | null
+  latency_ms: number | null
+  created_at: string
+  response_text: string | null
+}
+
+export interface DebugEventRow {
+  id: number
+  type: string
+  created_at: string
+  payload: Record<string, unknown>
+}
+
+export interface DebugStory {
+  mode: string | null
+  location: string | null
+  day: number | null
+  objective: string | null
+  loop: { type: string; beat: string | null; exit_conditions: unknown } | null
+  off_loop_streak: number
+  flags: Record<string, unknown>
+  world: Record<string, unknown>
+  /** The open encounter frame (encounter-states Slice 1), raw from GameState. */
+  encounter: Record<string, unknown> | null
+}
+
+export function fetchDebugUsage(
+  adventureId: string,
+): Promise<{ steps: DebugUsageStep[]; events: DebugEventRow[]; story: DebugStory | null }> {
+  return callSession({ action: 'debug_usage', adventure_id: adventureId })
 }
 
 // --- Slice 2: DM review console ---------------------------------------------------------------
@@ -169,7 +229,7 @@ export function decideReview(
 
 export function setAutoSettings(
   adventureId: string,
-  patch: { autoDialogue?: boolean; autoChecks?: boolean },
+  patch: { autoDialogue?: boolean; autoChecks?: boolean; nudgeMinutes?: number; hintTurns?: number },
 ): Promise<{ settings: { autoDialogue: boolean; autoChecks: boolean } }> {
   return callSession({
     action: 'player_intent',
@@ -178,5 +238,7 @@ export function setAutoSettings(
     command: 'set_auto',
     ...(patch.autoDialogue !== undefined ? { auto_dialogue: patch.autoDialogue } : {}),
     ...(patch.autoChecks !== undefined ? { auto_checks: patch.autoChecks } : {}),
+    ...(patch.nudgeMinutes !== undefined ? { nudge_minutes: patch.nudgeMinutes } : {}),
+    ...(patch.hintTurns !== undefined ? { hint_turns: patch.hintTurns } : {}),
   })
 }

@@ -116,34 +116,34 @@ YOUR TESTS:
       accept in your own words; watch the first beat open. Complete it via the DM override
       (`set_fact boy_found true` from a dm_command, or complete_quest) and watch the payout hit
       the party gold.
-- [ ] Free (demo): decline the offer instead (fresh reseed): confirm the refusal is honored,
+- [x] Free (demo): decline the offer instead (fresh reseed): confirm the refusal is honored,
       then re-woven later from a different angle, and that the third decline stops the asking.
-- [ ] **Paid (~$2-4, say go before running):** one real-model session on your generated
+- [x] **Paid (~$2-4, say go before running):** one real-model session on your generated
       adventure (regenerate the guide first so Stage 6 authors contracts): judge the offer
       scene, the narration's decision-point discipline, and beat pacing. Mid-session,
       deliberately derail (prepped story → start fortifying/side-quest hard) and judge the
       pivot proposal timing + the first pivoted beat. Try one "my theory is..." canonization.
       End the session and read the antagonist report + dial nudges + suspicion tally in the
       event log / proposal tray.
-- [ ] Two-player 15 min (paid, small): confirm one player's accept binds the table after the
+- [x] Two-player 15 min (paid, small): confirm one player's accept binds the table after the
       other objects, and that the journal/banner stay in sync on both screens.
 
 YOUR TASKS:
 
-- [ ] Authorize the paid session(s) above (your OpenRouter key).
-- [ ] Regenerate (or hand-add contracts to) any guide_ready adventures you want to keep — they
+- [x] Authorize the paid session(s) above (your OpenRouter key).
+- [x] Regenerate (or hand-add contracts to) any guide_ready adventures you want to keep — they
       predate quest contracts and will fail Start-Adventure validation until Stage 6 re-runs.
 
 DESIGN REVIEW:
 
-- [ ] Loop template library: are the 10 types + 3-5 beat templates enough at launch (F08 §11)?
-- [ ] Classifier thresholds (0.65 propose / 0.8 auto) and the 3-intent mismatch streak — right,
+- [x] Loop template library: are the 10 types + 3-5 beat templates enough at launch (F08 §11)?
+- [x] Classifier thresholds (0.65 propose / 0.8 auto) and the 3-intent mismatch streak — right,
       from the pivots you saw?
-- [ ] Offer knobs: re-weave budget 2, escalation "halfway to ceiling", 2-open-offer cap,
+- [x] Offer knobs: re-weave budget 2, escalation "halfway to ceiling", 2-open-offer cap,
       haggling margin ≥ 5 = ceiling — do the numbers feel like a real table?
-- [ ] Ending commitment gate (margin ≥ 3, ≥ 30 events, final objective) and BBEG threshold
+- [x] Ending commitment gate (margin ≥ 3, ≥ 30 events, final objective) and BBEG threshold
       (tally 5, 2 sessions) — too eager, too shy?
-- [ ] Idle nudge default (3 min) and tone.
+- [x] Idle nudge default (3 min) and tone.
 
 GATE: one deliberate-derail session where the system stayed a beat ahead of you rather than
 fighting you — plus the offer flow feeling like being asked, not assigned.

@@ -1,0 +1,91 @@
+// Skill-challenge engine (encounter-states Slice 2): X successes before Y failures with
+// tiered outcomes. Pure counting - the server feeds it adjudicated attempt results and acts
+// on the returned status. Teamwork is participation, not turn order: the full tier requires
+// every active PC to have made at least one attempt, and leaning on the same skill again
+// escalates its DC.
+
+export type ChallengeStatus = 'ongoing' | 'full' | 'partial' | 'failed'
+
+export interface SkillChallengeState {
+  neededSuccesses: number
+  maxFailures: number
+  /** Approaches the spec telegraphs; attempts are never restricted to them. */
+  suggestedSkills: string[]
+  /** Attempts per skill so far - drives DC escalation on repeats. */
+  perSkillUses: Record<string, number>
+  successes: number
+  failures: number
+  /** Attempts per PC - the participation ledger (mirrored to EncounterState.contributions). */
+  contributions: Record<string, number>
+  /** Party roster at open time; the full tier requires each to attempt at least once. */
+  activePcIds: string[]
+}
+
+export interface ChallengeSeed {
+  neededSuccesses: number
+  maxFailures: number
+  suggestedSkills: string[]
+  activePcIds: string[]
+}
+
+const clampCount = (n: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(n)))
+
+export function newSkillChallenge(seed: ChallengeSeed): SkillChallengeState {
+  return {
+    neededSuccesses: clampCount(seed.neededSuccesses, 1, 10),
+    maxFailures: clampCount(seed.maxFailures, 1, 10),
+    suggestedSkills: seed.suggestedSkills,
+    perSkillUses: {},
+    successes: 0,
+    failures: 0,
+    contributions: {},
+    activePcIds: seed.activePcIds,
+  }
+}
+
+/** +2 per prior use of the same skill - variety beats hammering one approach. */
+export const DC_ESCALATION_PER_REPEAT = 2
+
+export function escalatedDc(baseDc: number, usesOfSkill: number): number {
+  return baseDc + DC_ESCALATION_PER_REPEAT * Math.max(0, usesOfSkill)
+}
+
+export interface AttemptOutcome {
+  state: SkillChallengeState
+  status: ChallengeStatus
+}
+
+/**
+ * Records one adjudicated attempt. Terminal statuses, encoded precisely:
+ * - `failed`: failures reached maxFailures.
+ * - success tier once successes reach neededSuccesses:
+ *   - `partial` when any active PC never attempted (no full participation), OR when the
+ *     party scraped through exactly at the failure edge (failures === maxFailures - 1,
+ *     with at least one failure - a clean run is never "at the edge").
+ *   - `full` otherwise.
+ * Attempts after a terminal state are a caller bug; the state still counts them.
+ */
+export function recordAttempt(
+  state: SkillChallengeState,
+  characterId: string,
+  skill: string,
+  success: boolean,
+): AttemptOutcome {
+  const key = skill.toLowerCase()
+  const next: SkillChallengeState = {
+    ...state,
+    perSkillUses: { ...state.perSkillUses, [key]: (state.perSkillUses[key] ?? 0) + 1 },
+    successes: state.successes + (success ? 1 : 0),
+    failures: state.failures + (success ? 0 : 1),
+    contributions: { ...state.contributions, [characterId]: (state.contributions[characterId] ?? 0) + 1 },
+  }
+  return { state: next, status: challengeStatus(next) }
+}
+
+export function challengeStatus(state: SkillChallengeState): ChallengeStatus {
+  if (state.failures >= state.maxFailures) return 'failed'
+  if (state.successes < state.neededSuccesses) return 'ongoing'
+  const everyoneContributed = state.activePcIds.every((id) => (state.contributions[id] ?? 0) > 0)
+  const atFailureEdge = state.failures > 0 && state.failures === state.maxFailures - 1
+  return everyoneContributed && !atFailureEdge ? 'full' : 'partial'
+}

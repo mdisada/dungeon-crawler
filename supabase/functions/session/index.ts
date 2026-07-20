@@ -7,6 +7,8 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import { corsHeaders } from '../_shared/cors.ts'
 import { idleNudgeAction } from './beats.ts'
+import { hintAction } from './hints.ts'
+import { debugUsage } from './debug.ts'
 import { playerIntent } from './intent.ts'
 import { endSession, manualCheckpoint, restoreCheckpoint, startSession } from './lifecycle.ts'
 import { activate, admit, join, leave, pickCharacter, regenInvite, setReady } from './membership.ts'
@@ -128,11 +130,17 @@ Deno.serve(async (req) => {
       case 'idle_nudge':
         result = requireAdventure() ?? (await idleNudgeAction(service, adventureId, userId))
         break
+      case 'hint':
+        result = requireAdventure() ?? (await hintAction(service, adventureId, userId, body.requested === true))
+        break
       case 'roll_pending':
         result =
           requireAdventure() ??
           (body.prompt_id
-            ? await rollPending(service, adventureId, userId, String(body.prompt_id))
+            ? await rollPending(
+                service, adventureId, userId, String(body.prompt_id),
+                body.skill ? String(body.skill) : undefined,
+              )
             : { status: 400, body: { error: 'prompt_id required' } })
         break
       case 'claim_assist':
@@ -168,6 +176,9 @@ Deno.serve(async (req) => {
       case 'generic_npc':
         result =
           requireAdventure() ?? (await createGenericNpc(service, adventureId, userId, String(body.role_hint ?? '')))
+        break
+      case 'debug_usage':
+        result = requireAdventure() ?? (await debugUsage(service, adventureId, userData.user.email ?? ''))
         break
       case 'decide_proposal':
         result =

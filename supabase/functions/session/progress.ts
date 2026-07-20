@@ -14,9 +14,9 @@ import { runConsistency } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { loadLoops, planAndOpenBeat } from './beats.ts'
 import { narrationBeat, publishNarration } from './narration.ts'
-import { appendLinesDiff, newLine } from './orchestrate.ts'
+import { appendLinesDiff, newLine, typingDiff } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
-import { maybeReweaveDeclined } from './story.ts'
+import { maybeCompleteQuestForObjective, maybeReweaveDeclined } from './story.ts'
 import { runClimaxAuthor } from './story-agents.ts'
 import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
 
@@ -92,7 +92,7 @@ async function completeObjective(
   sessionId: string,
   completed: ObjectiveRow,
   ordered: ObjectiveRow[],
-): Promise<void> {
+): Promise<boolean> {
   await service.from('objectives').update({ reveal_state: 'completed' }).eq('id', completed.id)
   await logEvent(service, env.adventureId, sessionId, 'objective_completed', {
     objective_id: completed.id, title: completed.title, evaluated: true,
@@ -114,6 +114,15 @@ async function completeObjective(
     ]
     return diffs
   })
+
+  // If this was the last open objective of an accepted quest's contract, close the quest
+  // (loop complete + one-time payout). completeQuest already narrates the resolution, so a
+  // second objective-complete beat would double up - let its narration stand alone.
+  const completedIds = new Set(ordered.filter((o) => o.reveal_state === 'completed').map((o) => o.id))
+  completedIds.add(completed.id)
+  const questCompleted = await maybeCompleteQuestForObjective(service, env, sessionId, completed.id, completedIds)
+  if (questCompleted) return true
+
   await narrationBeat(
     service, env, sessionId,
     `The party just achieved "${completed.title}".` +
@@ -123,6 +132,7 @@ async function completeObjective(
       ' End at a concrete decision point.',
     'Objective complete',
   )
+  return false
 }
 
 /** Re-score candidate endings (deterministic, every pass) and commit when decisively led. */
@@ -233,8 +243,23 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
 /**
  * The story-progress pass: called after checks resolve, world facts change, quests complete,
  * and on DM story commands. Deterministic except the narration it triggers.
+ *
+ * The pass usually runs right after a publish cleared dialogue.typing, yet it carries the
+ * longest agent chains in the app (beat re-plans, the Encounter Designer, ending
+ * commitment) - the table read as stuck during that window (playtest 2026-07-20). Hold the
+ * typing flag for the whole pass; intermediate publishes clear it and the finally re-clears
+ * idempotently.
  */
 export async function evaluateStoryProgress(service: SupabaseClient, env: AgentEnv, sessionId: string): Promise<void> {
+  await commitDiffs(service, env.adventureId, () => [typingDiff(true)]).catch(() => {})
+  try {
+    await runStoryProgressPass(service, env, sessionId)
+  } finally {
+    await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
+  }
+}
+
+async function runStoryProgressPass(service: SupabaseClient, env: AgentEnv, sessionId: string): Promise<void> {
   const state = (await loadState(service, env.adventureId)).state
   const events = await storyEventTags(service, env.adventureId)
   const world = worldFacts(state, events)
@@ -242,11 +267,19 @@ export async function evaluateStoryProgress(service: SupabaseClient, env: AgentE
 
   // 1. Active objective completion (F08 SS9).
   const current = ordered.find((o) => o.id === state.objectives.currentId)
+  let objectiveJustCompleted = false
+  let questJustCompleted = false
   if (current && current.reveal_state === 'active' && evaluatePredicate(current.completion_predicates, world)) {
-    await completeObjective(service, env, sessionId, current, ordered)
+    questJustCompleted = await completeObjective(service, env, sessionId, current, ordered)
+    objectiveJustCompleted = true
   }
 
   // 2. Open beat exit conditions -> the next beat opens (event-driven pacing, F08 SS9.1).
+  // A completed objective also forces a re-plan: the old beat's encounter spec and outcome
+  // vocabulary belong to the finished objective, and leaving it open re-offers a stale
+  // encounter forever (seen in the story sim, 2026-07-19). Skip the forced re-plan when the
+  // objective closed a whole quest: its loop is done and completeQuest may have resumed a
+  // suspended loop whose preserved beat we must not discard - only its own exit predicate reopens it.
   const loops = await loadLoops(service, env.adventureId)
   const loop = activeLoop(loops)
   if (loop?.currentBeatId) {
@@ -255,9 +288,20 @@ export async function evaluateStoryProgress(service: SupabaseClient, env: AgentE
       .select('id, exit_conditions, status')
       .eq('id', loop.currentBeatId)
       .maybeSingle()
-    if (beat?.status === 'active' && beat.exit_conditions && evaluatePredicate(beat.exit_conditions, world)) {
-      await logEvent(service, env.adventureId, sessionId, 'beat_exit_met', { beat_id: beat.id })
-      await planAndOpenBeat(service, env, sessionId, loop.id, 'beat_exit')
+    const exitMet = beat?.status === 'active' && beat.exit_conditions && evaluatePredicate(beat.exit_conditions, world)
+    if (exitMet || (objectiveJustCompleted && !questJustCompleted && beat?.status === 'active')) {
+      await logEvent(service, env.adventureId, sessionId, 'beat_exit_met', {
+        beat_id: beat!.id, ...(exitMet ? {} : { reason: 'objective_completed' }),
+      })
+      try {
+        await planAndOpenBeat(service, env, sessionId, loop.id, exitMet ? 'beat_exit' : 'objective_completed')
+      } catch (err) {
+        console.error('beat re-plan failed', err)
+        await logEvent(service, env.adventureId, sessionId, 'incident', {
+          kind: 'beat_open_failed', trigger: exitMet ? 'beat_exit' : 'objective_completed',
+        })
+        await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
+      }
     }
   }
 

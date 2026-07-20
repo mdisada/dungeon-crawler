@@ -1,12 +1,15 @@
 // Phase 5 live integration suite (DEVELOPMENT-PLAN PHASE 5 AI-tests) against the real project:
 //   - fast-path intents (explicit roll, chat) never touch an LLM (usage_log stays empty -
 //     the whole suite runs on a demo adventure with canned agents: total spend $0)
+//   - the encounter-states machine (Slice 3): full-AI cutscene say/do routes through entry
+//     mapping (folded_in), never free adjudication
 //   - say pipeline: plain conversation replies, influence/insight check prompts with
 //     table-derived DCs, opening emit -> cross-consume with self-consume blocked
 //   - adversarial reveal gating: a "tell me the secret" prompt makes the canned NPC request
 //     every knowledge id; only entitled ingredients get discovered
 //   - group checks (both-roll resolve), assist slots (self-claim denied, second-PC claim),
-//     prompt expiry via resolve_pending (server-validated deadline)
+//     prompt expiry via resolve_pending (server-validated deadline) - exercised in the
+//     assist adventure, where free adjudication still lives
 //   - consistency: dead-NPC narration deterministically blocked -> mechanical fallback
 //   - proposal lifecycle: auto_applied audit rows, pending decide round-trip, expired
 //     proposals cannot be applied; players cannot read proposals
@@ -103,7 +106,11 @@ async function act(token, payload) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const stamp = Date.now()
-const emails = { gm: `p5-gm-${stamp}@example.com`, p2: `p5-p2-${stamp}@example.com` }
+const emails = {
+  gm: `p5-gm-${stamp}@example.com`,
+  p2: `p5-p2-${stamp}@example.com`,
+  p3: `p5-p3-${stamp}@example.com`,
+}
 const userIds = {}
 let pass = 0
 
@@ -126,6 +133,7 @@ async function main() {
   for (const [key, email] of Object.entries(emails)) userIds[key] = await createConfirmedUser(email)
   const gm = await signIn(emails.gm)
   const p2 = await signIn(emails.p2)
+  const p3 = await signIn(emails.p3)
   await serviceRest('POST', 'user_settings?on_conflict=user_id', {
     user_id: userIds.gm, provider: 'openrouter',
   }).catch(() => {})
@@ -198,18 +206,21 @@ async function main() {
   ok('explicit roll resolves engine-only', roll.status === 200 && roll.body.resolved === 'rolled', roll.body)
   ok('roll total = d20 + modifier', roll.body.total === roll.body.d20 + roll.body.modifier, roll.body)
   const chat = await act(p2, { action: 'player_intent', adventure_id: advId, kind: 'say', text: 'Stay close, Ash.' })
-  ok('say with no NPC staged is free chat', chat.status === 200 && chat.body.resolved === 'chat', chat.body)
-  ok('fast path + chat hit no LLM (usage_log unchanged)', (await usageCount(advId)) === usage0)
+  ok('cutscene say routes through entry mapping and folds in (never silence)', chat.status === 200 && chat.body.resolved === 'folded_in', chat.body)
+  const entryEvents = await eventsOf(advId, 'entry_mapped')
+  ok('entry_mapped event logged', entryEvents.length === 1 && entryEvents[0].payload.entry === 'fold_in', entryEvents)
+  ok('fast path + demo entry mapping hit no LLM (usage_log unchanged)', (await usageCount(advId)) === usage0)
 
   console.log('\n[state_version race]')
+  // Explicit rolls: the only concurrent-safe path (adjudicated says set dialogue.typing).
   const [raceA, raceB] = await Promise.all([
-    act(gm, { action: 'player_intent', adventure_id: advId, kind: 'say', text: 'race-line-A' }),
-    act(p2, { action: 'player_intent', adventure_id: advId, kind: 'say', text: 'race-line-B' }),
+    act(gm, { action: 'player_intent', adventure_id: advId, kind: 'roll', skill: 'athletics' }),
+    act(p2, { action: 'player_intent', adventure_id: advId, kind: 'roll', skill: 'insight' }),
   ])
   ok('concurrent intents both accepted', raceA.status === 200 && raceB.status === 200, { a: raceA.body, b: raceB.body })
   const afterRace = await act(gm, { action: 'resync', adventure_id: advId })
   const raceText = JSON.stringify(afterRace.body.state.dialogue.lines)
-  ok('no lost update: both lines present', raceText.includes('race-line-A') && raceText.includes('race-line-B'))
+  ok('no lost update: both roll lines present', raceText.includes('rolls athletics') && raceText.includes('rolls insight'))
 
   console.log('\n[social scene: conversation + adversarial reveal gate]')
   const socialDenied = await act(p2, { action: 'start_social', adventure_id: advId, npc_ids: [maren.id] })
@@ -279,49 +290,6 @@ async function main() {
   ok('scene back to narration, openings cleared',
     sync.body.state.scene.mode === 'narration' && sync.body.state.dialogue.openings.length === 0)
 
-  console.log('\n[group check]')
-  const groupIntent = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'do', text: 'We all sneak past together.' })
-  ok('group check prompted', groupIntent.body.resolved === 'check_prompted' && groupIntent.body.prompt.kind === 'group', groupIntent.body)
-  const groupId = groupIntent.body.prompt.id
-  const gmGroupRoll = await act(gm, { action: 'roll_pending', adventure_id: advId, prompt_id: groupId })
-  ok('first roller waits on the rest', gmGroupRoll.body.waiting === true, gmGroupRoll.body)
-  const dupRoll = await act(gm, { action: 'roll_pending', adventure_id: advId, prompt_id: groupId })
-  ok('double-roll rejected', dupRoll.status === 409)
-  const p2GroupRoll = await act(p2, { action: 'roll_pending', adventure_id: advId, prompt_id: groupId })
-  ok('last roller completes the group', p2GroupRoll.status === 200 && p2GroupRoll.body.waiting === false, p2GroupRoll.body)
-  const groupResolved = await eventsOf(advId, 'group_check_resolved')
-  ok('half-pass rule applied', groupResolved.length === 1 && groupResolved[0].payload.needed === 1, groupResolved[0]?.payload)
-
-  console.log('\n[assist slot]')
-  const assistIntent = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'do', text: 'I brace and hold the gate shut!' })
-  ok('assist slot prompted', assistIntent.body.resolved === 'check_prompted' && assistIntent.body.prompt.kind === 'assist', assistIntent.body)
-  const assistId = assistIntent.body.prompt.id
-  const selfClaim = await act(gm, { action: 'claim_assist', adventure_id: advId, prompt_id: assistId })
-  ok('cannot assist your own attempt', selfClaim.status === 403)
-  const claim = await act(p2, { action: 'claim_assist', adventure_id: advId, prompt_id: assistId })
-  ok('second PC claims the assist', claim.status === 200, claim.body)
-  if (claim.body.resolved === 'primary_prompted') {
-    sync = await act(gm, { action: 'resync', adventure_id: advId })
-    const primary = sync.body.state.dialogue.pending
-    ok('primary check prompted for the actor', primary?.kind === 'check' && primary.actorCharacterId === gmChar.id)
-    const primaryRoll = await act(gm, { action: 'roll_pending', adventure_id: advId, prompt_id: primary.id })
-    ok('primary roll resolves', primaryRoll.status === 200, primaryRoll.body)
-  } else {
-    ok('enable-gated assist failed forward', claim.body.resolved === 'fail_forward', claim.body)
-  }
-  const claimEvents = await eventsOf(advId, 'assist_claimed')
-  ok('assist cooperation event logged', claimEvents.length === 1 && claimEvents[0].payload.by === p2Char.id)
-
-  console.log('\n[prompt expiry via resolve_pending]')
-  const soloIntent = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'do', text: 'I climb the old wall.' })
-  ok('solo check prompted', soloIntent.body.resolved === 'check_prompted' && soloIntent.body.prompt.kind === 'check', soloIntent.body)
-  const soloId = soloIntent.body.prompt.id
-  const early = await act(p2, { action: 'resolve_pending', adventure_id: advId, prompt_id: soloId })
-  ok('sweep before the deadline rejected', early.status === 409, early.body)
-  await sleep(21000)
-  const swept = await act(p2, { action: 'resolve_pending', adventure_id: advId, prompt_id: soloId })
-  ok('expired prompt auto-rolls', swept.status === 200 && swept.body.resolved === 'auto_rolled', swept.body)
-
   console.log('\n[consistency: dead NPC blocked]')
   const factSet = await act(gm, {
     action: 'player_intent', adventure_id: advId, kind: 'dm_command',
@@ -351,7 +319,7 @@ async function main() {
   console.log('\n[slice 2: assist review gate]')
   // Second adventure in assist mode (demo -> canned gists, zero spend). Gate is on by default.
   const [assistAdv] = await serviceRest('POST', 'adventures', {
-    creator_id: userIds.gm, mode: 'assist', min_players: 1, max_players: 2, type: 'one_shot',
+    creator_id: userIds.gm, mode: 'assist', min_players: 1, max_players: 3, type: 'one_shot',
     plot_idea: 'Slice 2 gate test', status: 'guide_ready', demo: true,
     title: 'S2 Gate Test', meta_loop: {},
   })
@@ -368,11 +336,19 @@ async function main() {
     abilities: { str: 14, dex: 12, con: 12, int: 10, wis: 16, cha: 10 },
     skill_proficiencies: ['insight', 'stealth'], hp_max: 10, hp_current: 10,
   })
+  const [p3CharB] = await serviceRest('POST', 'characters', {
+    user_id: userIds.p3, name: 'Corvin', level: 1, is_complete: true,
+    abilities: { str: 16, dex: 12, con: 14, int: 10, wis: 10, cha: 12 },
+    skill_proficiencies: ['athletics', 'stealth'], hp_max: 12, hp_current: 12,
+  })
   ok('assist adventure activates', (await act(gm, { action: 'activate', adventure_id: advB })).status === 200)
   const [{ invite_code: inviteB }] = await serviceRest('GET', `adventures?id=eq.${advB}&select=invite_code`)
   ok('p2 joins assist adventure', (await act(p2, { action: 'join', invite_code: inviteB })).status === 200)
   ok('p2 picks fresh character', (await act(p2, { action: 'pick_character', adventure_id: advB, character_id: p2CharB.id })).status === 200)
   ok('p2 ready', (await act(p2, { action: 'ready', adventure_id: advB, ready: true })).status === 200)
+  ok('p3 joins assist adventure', (await act(p3, { action: 'join', invite_code: inviteB })).status === 200)
+  ok('p3 picks fresh character', (await act(p3, { action: 'pick_character', adventure_id: advB, character_id: p3CharB.id })).status === 200)
+  ok('p3 ready', (await act(p3, { action: 'ready', adventure_id: advB, ready: true })).status === 200)
   const startedB = await act(gm, { action: 'start_session', adventure_id: advB })
   ok('DM starts the assist session', startedB.status === 200, startedB.body)
   ok('DM stages the NPC', (await act(gm, { action: 'start_social', adventure_id: advB, npc_ids: [tila.id] })).status === 200)
@@ -517,6 +493,63 @@ async function main() {
   ok('no ruling staged, narration landed directly',
     !syncB.body.state.dm.pendingReview && syncB.body.state.dialogue.lines.at(-1).speaker === null,
     syncB.body.state.dialogue.lines.at(-1))
+
+  console.log('\n[DM-called skill options: player picks which skill to roll]')
+  const optioned = await act(p2, { action: 'player_intent', adventure_id: advB, kind: 'do', text: 'I search the archive shelves for anything hidden.' })
+  ok('search prompts a check with skill options', optioned.body.resolved === 'check_prompted', optioned.body)
+  syncB = await act(gm, { action: 'resync', adventure_id: advB })
+  const optionPrompt = syncB.body.state.dialogue.pending
+  ok('prompt offers investigation + perception buttons',
+    optionPrompt?.skillOptions?.length === 2 && optionPrompt.skillOptions.includes('perception'), optionPrompt)
+  const picked2 = await act(p2, { action: 'roll_pending', adventure_id: advB, prompt_id: optionPrompt.id, skill: 'perception' })
+  ok('player rolls their picked skill', picked2.status === 200 && picked2.body.skill === 'perception', picked2.body)
+  const pickedRolls = await eventsOf(advB, 'check_rolled')
+  ok('check_rolled recorded the picked skill', pickedRolls.at(-1)?.payload.skill === 'perception', pickedRolls.at(-1))
+
+  // Group checks, assist slots, and prompt expiry live in assist free adjudication now -
+  // the full-AI machine routes cutscene do-intents through entry mapping instead.
+  console.log('\n[group check (assist adjudication)]')
+  const groupIntent = await act(p2, { action: 'player_intent', adventure_id: advB, kind: 'do', text: 'We all sneak past together.' })
+  ok('group check prompted', groupIntent.body.resolved === 'check_prompted' && groupIntent.body.prompt.kind === 'group', groupIntent.body)
+  const groupId = groupIntent.body.prompt.id
+  const p2GroupRoll = await act(p2, { action: 'roll_pending', adventure_id: advB, prompt_id: groupId })
+  ok('first roller waits on the rest', p2GroupRoll.body.waiting === true, p2GroupRoll.body)
+  const dupRoll = await act(p2, { action: 'roll_pending', adventure_id: advB, prompt_id: groupId })
+  ok('double-roll rejected', dupRoll.status === 409)
+  const p3GroupRoll = await act(p3, { action: 'roll_pending', adventure_id: advB, prompt_id: groupId })
+  ok('last roller completes the group', p3GroupRoll.status === 200 && p3GroupRoll.body.waiting === false, p3GroupRoll.body)
+  const groupResolved = await eventsOf(advB, 'group_check_resolved')
+  ok('half-pass rule applied', groupResolved.length === 1 && groupResolved[0].payload.needed === 1, groupResolved[0]?.payload)
+
+  console.log('\n[assist slot (assist adjudication)]')
+  const assistIntent = await act(p2, { action: 'player_intent', adventure_id: advB, kind: 'do', text: 'I brace and hold the gate shut!' })
+  ok('assist slot prompted', assistIntent.body.resolved === 'check_prompted' && assistIntent.body.prompt.kind === 'assist', assistIntent.body)
+  const assistId = assistIntent.body.prompt.id
+  const selfClaim = await act(p2, { action: 'claim_assist', adventure_id: advB, prompt_id: assistId })
+  ok('cannot assist your own attempt', selfClaim.status === 403)
+  const claim = await act(p3, { action: 'claim_assist', adventure_id: advB, prompt_id: assistId })
+  ok('second PC claims the assist', claim.status === 200, claim.body)
+  if (claim.body.resolved === 'primary_prompted') {
+    syncB = await act(gm, { action: 'resync', adventure_id: advB })
+    const primary = syncB.body.state.dialogue.pending
+    ok('primary check prompted for the actor', primary?.kind === 'check' && primary.actorCharacterId === p2CharB.id)
+    const primaryRoll = await act(p2, { action: 'roll_pending', adventure_id: advB, prompt_id: primary.id })
+    ok('primary roll resolves', primaryRoll.status === 200, primaryRoll.body)
+  } else {
+    ok('enable-gated assist failed forward', claim.body.resolved === 'fail_forward', claim.body)
+  }
+  const claimEvents = await eventsOf(advB, 'assist_claimed')
+  ok('assist cooperation event logged', claimEvents.length === 1 && claimEvents[0].payload.by === p3CharB.id)
+
+  console.log('\n[prompt expiry via resolve_pending]')
+  const soloIntent = await act(p2, { action: 'player_intent', adventure_id: advB, kind: 'do', text: 'I climb the old wall.' })
+  ok('solo check prompted', soloIntent.body.resolved === 'check_prompted' && soloIntent.body.prompt.kind === 'check', soloIntent.body)
+  const soloId = soloIntent.body.prompt.id
+  const early = await act(p3, { action: 'resolve_pending', adventure_id: advB, prompt_id: soloId })
+  ok('sweep before the deadline rejected', early.status === 409, early.body)
+  await sleep(21000)
+  const swept = await act(p3, { action: 'resolve_pending', adventure_id: advB, prompt_id: soloId })
+  ok('expired prompt auto-rolls', swept.status === 200 && swept.body.resolved === 'auto_rolled', swept.body)
 
   ok('assist gate suite spent zero LLM calls', (await usageCount(advB)) === 0)
 

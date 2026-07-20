@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { evaluatePredicate } from './evaluate.ts'
+import { evaluatePredicate, listMilestoneAtoms } from './evaluate.ts'
 import type { WorldFacts } from './evaluate.ts'
 
 const world: WorldFacts = {
@@ -18,6 +18,26 @@ describe('evaluatePredicate (deterministic, F08 SS9)', () => {
 
   it('unknown facts never hold (ambiguity goes to the Adjudicator, not to true)', () => {
     expect(evaluatePredicate({ fact: 'never_written', eq: true }, world)).toBe(false)
+  })
+
+  it('listMilestoneAtoms: eq-true flags/facts + events, nested, deduped; scalar facts excluded', () => {
+    const predicate = {
+      any: [
+        { all: [{ flag: 'lantern_relit', eq: true }, { event: 'keeper freed' }] },
+        { flag: 'lantern_relit', eq: true },
+        { flag: 'town_doomed', eq: false },
+        { fact: 'npc.volgarth.status', eq: 'dead' },
+        { fact: 'party_reached_archipelago', eq: true },
+        { fact: 'npc.hemlock.status', in: ['talked_to', 'dead'] },
+        { event: 'wreckers routed' },
+      ],
+    }
+    expect(listMilestoneAtoms(predicate)).toEqual({
+      flags: ['lantern_relit'],
+      events: ['keeper freed', 'wreckers routed'],
+      facts: ['party_reached_archipelago'],
+    })
+    expect(listMilestoneAtoms(null)).toEqual({ flags: [], events: [], facts: [] })
   })
 
   it('flag and event atoms', () => {

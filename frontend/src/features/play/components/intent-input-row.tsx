@@ -1,39 +1,54 @@
+import { Compass } from 'lucide-react'
 import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { SKILL_ABILITY } from '@rules/character'
 
 import { useIntents } from '../hooks/use-intents'
+import { useLineReveal } from '../hooks/use-line-reveal'
 import { usePlay } from '../hooks/use-play-context'
 import { CheckPrompt } from './check-prompt'
 
-const SKILLS = Object.keys(SKILL_ABILITY)
-
 /**
- * The live input surface (F07 SS3.1, all non-battle modes): Say/Do free text, an explicit
- * fast-path skill roll, opening chips (F10 SS3.7), the "DM is thinking" indicator, and the
- * pending-check prompt. Rendered by the play page as an overlay so the scene renderers stay
- * presentation-only.
+ * The live input surface (F07 SS3.1, all non-battle modes): one free-text line to the DM
+ * (the server interprets speech vs action - unified input, 2026-07-20), opening chips
+ * (F10 SS3.7), the "DM is thinking" indicator, and the pending-check prompt. There is no
+ * unprompted roll here: the DM calls for checks and offers the applicable skills as buttons
+ * (2026-07-20 playtest). Rendered by the play page as an overlay so the scene renderers
+ * stay presentation-only.
  */
 export function IntentInputRow() {
   const { state, isSpectator } = usePlay()
-  const { myCharacterId, isBusy, error, clearError, say, act, roll } = useIntents()
+  const { myCharacterId, isBusy, error, clearError, say, requestHint } = useIntents()
   const [draft, setDraft] = useState('')
-  const [skill, setSkill] = useState(SKILLS[0])
+  const activeLine = state.dialogue.lines.find((l) => l.id === state.dialogue.activeLineId) ?? null
+  const { isRevealing } = useLineReveal(activeLine)
 
   if (isSpectator || !myCharacterId || state.session.status !== 'active') return null
 
   const { typing, pending, openings } = state.dialogue
   // pending is nullish (null or, in states seeded before the field existed, undefined) when no
-  // check is live - either way the input stays open.
-  const inputBlocked = isBusy || typing || pending != null
+  // check is live - either way the input stays open. While a line is still being delivered the
+  // input grays out too, so an ENABLED input always means "the table is waiting on you".
+  // isBusy counts as thinking: the request is in flight before the server's typing flag can
+  // arrive, and that gap read as "stuck" in playtests.
+  const isThinking = typing || isBusy
+  const inputBlocked = isThinking || pending != null || isRevealing
+  const placeholder = isThinking
+    ? 'The DM is thinking…'
+    : isRevealing
+      ? activeLine?.speaker
+        ? `${activeLine.speaker} is speaking…`
+        : 'The story unfolds…'
+      : inputBlocked
+        ? 'Waiting on the table…'
+        : 'Tell the DM what you say or do'
   const myOpenings = openings.filter((o) => o.unlockedBy !== myCharacterId)
 
-  async function submit(kind: 'say' | 'do') {
+  async function submit() {
     const text = draft.trim()
     if (!text) return
-    const ok = kind === 'say' ? await say(text) : await act(text)
+    const ok = await say(text)
     if (ok) setDraft('')
   }
 
@@ -55,10 +70,20 @@ export function IntentInputRow() {
 
         {pending && <CheckPrompt />}
 
-        {typing && (
-          <p className="animate-pulse text-center text-xs text-white/70 drop-shadow" role="status">
-            The DM is thinking…
-          </p>
+        {isThinking && (
+          <div className="flex justify-center">
+            <p
+              role="status"
+              className="flex items-center gap-2 rounded-full bg-black/75 px-4 py-1.5 text-xs text-white/90 shadow-lg"
+            >
+              <span aria-hidden className="flex items-center gap-1">
+                <span className="size-1.5 animate-bounce rounded-full bg-white/90" />
+                <span className="size-1.5 animate-bounce rounded-full bg-white/90 [animation-delay:150ms]" />
+                <span className="size-1.5 animate-bounce rounded-full bg-white/90 [animation-delay:300ms]" />
+              </span>
+              The DM is thinking…
+            </p>
+          </div>
         )}
 
         {error && (
@@ -74,50 +99,34 @@ export function IntentInputRow() {
           className="flex gap-2"
           onSubmit={(e: React.FormEvent<HTMLFormElement>) => {
             e.preventDefault()
-            void submit('say')
+            void submit()
           }}
         >
           <Input
             value={draft}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
-            placeholder={inputBlocked ? 'Waiting on the table…' : 'Speak, or describe what you do'}
+            placeholder={placeholder}
             disabled={inputBlocked}
             aria-label="Action or dialogue input"
             className="bg-black/60 text-white placeholder:text-white/40"
           />
           <Button type="submit" variant="secondary" disabled={inputBlocked || !draft.trim()}>
-            Say
+            Send
           </Button>
-          <Button type="button" variant="secondary" disabled={inputBlocked || !draft.trim()} onClick={() => void submit('do')}>
-            Do
+          {/* In-fiction "ask the DM" (2026-07-20): the character takes a moment to get their
+              bearings and the DM offers an escalating nudge. Not a menu, not a mechanic. */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            disabled={inputBlocked}
+            aria-label="Take a moment to get your bearings"
+            title="Take a moment — ask the DM to get your bearings"
+            onClick={() => void requestHint()}
+            className="text-white/70 hover:text-white"
+          >
+            <Compass className="size-4" />
           </Button>
-          <div className="flex">
-            <label htmlFor="roll-skill" className="sr-only">
-              Skill to roll
-            </label>
-            <select
-              id="roll-skill"
-              value={skill}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSkill(e.target.value)}
-              disabled={inputBlocked}
-              className="rounded-l-md border border-r-0 border-input bg-black/60 px-2 text-sm text-white"
-            >
-              {SKILLS.map((s) => (
-                <option key={s} value={s} className="text-black">
-                  {s}
-                </option>
-              ))}
-            </select>
-            <Button
-              type="button"
-              variant="secondary"
-              className="rounded-l-none"
-              disabled={inputBlocked}
-              onClick={() => void roll(skill)}
-            >
-              Roll
-            </Button>
-          </div>
         </form>
       </div>
     </div>

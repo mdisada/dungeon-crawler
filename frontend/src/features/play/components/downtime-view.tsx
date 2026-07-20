@@ -20,6 +20,13 @@ export function DowntimeView({ dialogue }: DowntimeViewProps) {
           {dialogue.lines.length === 0 && (
             <p className="text-stone-500 dark:text-amber-100/50">The party rests…</p>
           )}
+          {dialogue.typing && (
+            <p className="flex items-center gap-1.5" role="status" aria-label="The DM is thinking">
+              <span className="size-2 animate-bounce rounded-full bg-stone-500 dark:bg-amber-100/60" />
+              <span className="size-2 animate-bounce rounded-full bg-stone-500 [animation-delay:150ms] dark:bg-amber-100/60" />
+              <span className="size-2 animate-bounce rounded-full bg-stone-500 [animation-delay:300ms] dark:bg-amber-100/60" />
+            </p>
+          )}
         </div>
       </div>
     </div>

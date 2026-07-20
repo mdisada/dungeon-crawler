@@ -1,6 +1,8 @@
 import { cn } from '@/lib/utils'
 import type { DialogueState, PlayersState, SceneState } from '@rules/state'
 
+import { useLineReveal } from '../hooks/use-line-reveal'
+
 interface RoleplayViewProps {
   scene: SceneState
   dialogue: DialogueState
@@ -16,6 +18,7 @@ interface RoleplayViewProps {
 export function RoleplayView({ scene, dialogue, players }: RoleplayViewProps) {
   const active = dialogue.lines.find((l) => l.id === dialogue.activeLineId) ?? dialogue.lines.at(-1)
   const speakingNpcId = active?.npcId ?? null
+  const { sentences, visibleCount, isRevealing } = useLineReveal(active ?? null)
 
   const left = dialogue.speakers.filter((s) => s.side === 'left')
   const right = dialogue.speakers.filter((s) => s.side === 'right')
@@ -82,8 +85,16 @@ export function RoleplayView({ scene, dialogue, players }: RoleplayViewProps) {
             </span>
           )}
           <p className="min-h-12 text-base leading-relaxed text-white" aria-live="polite">
-            {active?.text ?? '…'}
+            {active ? sentences.slice(0, visibleCount).join('') : '…'}
+            {isRevealing && <span className="inline-block w-2 animate-pulse">…</span>}
           </p>
+          {dialogue.typing && (
+            <p className="mt-1 flex items-center gap-1.5" role="status" aria-label="The DM is thinking">
+              <span className="size-2 animate-bounce rounded-full bg-white/70" />
+              <span className="size-2 animate-bounce rounded-full bg-white/70 [animation-delay:150ms]" />
+              <span className="size-2 animate-bounce rounded-full bg-white/70 [animation-delay:300ms]" />
+            </p>
+          )}
         </div>
       </div>
     </div>

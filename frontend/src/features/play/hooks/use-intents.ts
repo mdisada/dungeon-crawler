@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 import {
-  claimAssistSlot, resolveExpiredPrompt, rollPendingPrompt, sendPlayerIntent,
+  claimAssistSlot, requestHint, resolveExpiredPrompt, rollPendingPrompt, sendPlayerIntent,
 } from '../api/session'
 import { usePlay } from './use-play-context'
 
@@ -36,11 +36,13 @@ export function useIntents() {
     isBusy,
     error,
     clearError: () => setError(null),
+    // Unified input (2026-07-20): everything typed goes as one utterance the server
+    // interprets - the old say/do split lives on only in the wire kind for compatibility.
     say: (text: string, targetId?: string) =>
       run(() => sendPlayerIntent(adventure.id, { kind: 'say', text, target_id: targetId })),
-    act: (text: string) => run(() => sendPlayerIntent(adventure.id, { kind: 'do', text })),
     roll: (skill: string) => run(() => sendPlayerIntent(adventure.id, { kind: 'roll', skill })),
-    rollPending: (promptId: string) => run(() => rollPendingPrompt(adventure.id, promptId)),
+    rollPending: (promptId: string, skill?: string) => run(() => rollPendingPrompt(adventure.id, promptId, skill)),
+    requestHint: () => run(() => requestHint(adventure.id)),
     claimAssist: (promptId: string) => run(() => claimAssistSlot(adventure.id, promptId)),
     resolveExpired: (promptId: string) => run(() => resolveExpiredPrompt(adventure.id, promptId)),
   }

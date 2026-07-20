@@ -69,8 +69,19 @@ export function parseAdjudication(raw: unknown, partySkills: string[]): ParsePla
         requiresAssist = { skill: assistSkill, effect }
       }
     }
+    const primary = rawCheck.skill.toLowerCase()
+    // Optional pickable alternatives ("Does Investigation apply?" "Sure!"): primary first,
+    // deduped, capped at 3.
+    const skillOptions = [
+      primary,
+      ...(Array.isArray(rawCheck.skill_options) ? rawCheck.skill_options : [])
+        .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+        .map((s) => s.toLowerCase())
+        .filter((s) => s !== primary),
+    ].slice(0, 3)
     check = {
-      skill: rawCheck.skill.toLowerCase(),
+      skill: primary,
+      skillOptions,
       dc: clampDc(Number(rawCheck.dc)),
       advDis: asAdvDis(rawCheck.adv_dis),
       rationale: asString(rawCheck.rationale),
@@ -85,7 +96,7 @@ export function parseAdjudication(raw: unknown, partySkills: string[]): ParsePla
     data: {
       interpretation: asString(raw.interpretation, '(no interpretation)'),
       resolution: { type, check, consequencesHint: asString(resolution.consequences_hint) },
-      flags: { impossible: flags.impossible === true, needsDm: flags.needs_dm === true },
+      flags: { impossible: flags.impossible === true, needsDm: flags.needs_dm === true, talk: flags.talk === true },
     },
   }
 }
@@ -97,6 +108,7 @@ const MAGNITUDES = ['trivial', 'reasonable', 'costly', 'against_nature'] as cons
 export function parseSocialClassification(raw: unknown): SocialClassification {
   if (!isObject(raw)) return { kind: 'conversation' }
   if (raw.kind === 'insight') return { kind: 'insight', skill: 'insight' }
+  if (raw.kind === 'action') return { kind: 'action' }
   if (raw.kind === 'influence') {
     const skill = INFLUENCE_SKILLS.find((s) => s === raw.skill) ?? 'persuasion'
     const magnitude = MAGNITUDES.find((m) => m === raw.magnitude) ?? 'reasonable'

@@ -41,6 +41,9 @@ export interface RequiresAssist {
 /** Validated check spec (F07 SS3.3) - DC already clamped to bounds. */
 export interface CheckSpec {
   skill: string
+  /** 1-3 applicable skills the player may pick from ("Does Investigation apply?" "Sure!");
+   *  always non-empty, `skill` first. */
+  skillOptions: string[]
   dc: number
   advDis: AdvDis
   rationale: string
@@ -57,7 +60,8 @@ export interface AdjudicationResolution {
 export interface AdjudicationOutput {
   interpretation: string
   resolution: AdjudicationResolution
-  flags: { impossible: boolean; needsDm: boolean }
+  /** `talk` = the input addresses the DM (a question, table talk) rather than attempting anything. */
+  flags: { impossible: boolean; needsDm: boolean; talk: boolean }
 }
 
 export interface CheckResult {
@@ -78,6 +82,8 @@ export type SocialClassification =
   | { kind: 'conversation' }
   | { kind: 'influence'; skill: 'persuasion' | 'deception' | 'intimidation'; magnitude: SocialMagnitude }
   | { kind: 'insight'; skill: 'insight' }
+  /** A physical action or maneuver, not talk - the caller re-routes it out of the NPC pipeline. */
+  | { kind: 'action' }
 
 /** A social opening (F10 SS3.7): PC A's insight success eases a linked influence attempt by PC B. */
 export interface OpeningView {
@@ -96,6 +102,8 @@ export type PendingPrompt =
       id: string
       actorCharacterId: string
       skill: string
+      /** Player-pickable skills (1-3, `skill` first); absent = the single skill. */
+      skillOptions?: string[]
       advDis: AdvDis
       reason: string
       deadline: string

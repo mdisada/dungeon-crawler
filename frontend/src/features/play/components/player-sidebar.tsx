@@ -1,12 +1,17 @@
+import { Bug, Dices, ScrollText, Swords } from 'lucide-react'
 import { useState } from 'react'
 
-import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
+import { Tabs, TabsList, TabsPanel } from '@/components/ui/tabs'
+import { useSession } from '@/features/auth'
 import { cn } from '@/lib/utils'
 
+import { isDebugUser } from '../debug'
 import { useCharacterSheet } from '../hooks/use-character-sheet'
 import type { CharacterSheet } from '../hooks/use-character-sheet'
 import { useIntents } from '../hooks/use-intents'
 import { usePlay } from '../hooks/use-play-context'
+import { DebugTab } from './debug-tab'
+import { SidebarIconTab } from './sidebar-icon-tab'
 
 /**
  * F06 SS4: objective header, tabbed sheet (Ability & Skills / Combat / Background), persistent
@@ -15,6 +20,8 @@ import { usePlay } from '../hooks/use-play-context'
  */
 export function PlayerSidebar() {
   const { state, userId } = usePlay()
+  const { user } = useSession()
+  const showDebug = isDebugUser(user?.email)
   const me = state.players.list.find((p) => p.userId === userId)
   const sheetState = useCharacterSheet(me?.characterId ?? null)
   const isBattle = state.scene.mode === 'battle'
@@ -74,9 +81,10 @@ export function PlayerSidebar() {
           <Tabs value={tab} onValueChange={(value) => setTab(String(value))} className="flex min-h-0 flex-1 flex-col">
             <div className="border-b p-3">
               <TabsList>
-                <TabsTab value="skills">Ability &amp; Skills</TabsTab>
-                <TabsTab value="combat">Combat</TabsTab>
-                <TabsTab value="background">Background</TabsTab>
+                <SidebarIconTab value="skills" label="Ability & Skills" icon={Dices} />
+                <SidebarIconTab value="combat" label="Combat" icon={Swords} />
+                <SidebarIconTab value="background" label="Background" icon={ScrollText} />
+                {showDebug && <SidebarIconTab value="debug" label="Debug" icon={Bug} />}
               </TabsList>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -89,6 +97,11 @@ export function PlayerSidebar() {
               <TabsPanel value="background" className="mt-0">
                 <BackgroundTab sheet={sheetState.sheet} />
               </TabsPanel>
+              {showDebug && (
+                <TabsPanel value="debug" className="mt-0">
+                  <DebugTab />
+                </TabsPanel>
+              )}
             </div>
           </Tabs>
         )}

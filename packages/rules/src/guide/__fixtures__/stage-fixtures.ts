@@ -117,12 +117,12 @@ export const STAGE3_RESPONSE = `\`\`\`json
     {
       "title": "Find the salvagers' route",
       "hidden_description": "The route to the sunken chapel is the chapter's real prize; Brine's crews cross the harbor floor only on tide-locked nights. Grounded in the night-dive scene and Quill's tide-chart.",
-      "completion_predicates": { "any": [ { "flag": "chapel_route_known", "eq": true }, { "fact": "item.quill_ledger.holder", "eq": "party" } ] }
+      "completion_predicates": { "any": [ { "flag": "chapel_route_known", "eq": true }, { "event": "party took quill's tide-ledger" } ] }
     },
     {
       "title": "Deal with Mother Brine",
       "hidden_description": "Not a kill order - Brine is beloved and killing her openly turns Saltmere hostile. The chapter ends when the party has committed to a stance: exposed her, allied with her, or been marked by the cult.",
-      "completion_predicates": { "fact": "npc.mother_brine.stance_toward_party", "in": ["exposed", "allied", "hostile"] }
+      "completion_predicates": { "any": [ { "flag": "brine_exposed", "eq": true }, { "flag": "brine_allied", "eq": true }, { "flag": "party_marked_by_cult", "eq": true } ] }
     }
   ]
 }

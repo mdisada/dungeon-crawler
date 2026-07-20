@@ -737,3 +737,95 @@ suite now 255 tests); `supabase/functions/guide-pipeline/stages-weave.ts`;
 intent/lifecycle/npc-dialogue/index extended); `frontend/src/features/guide/` (contract card,
 validation, types) and `features/play/` (idle sweep); seed;
 `tests/integration/story-live.mjs` -> 92 checks. All deployed; both functions redeployed.
+
+## 2026-07-19 - Encounter states: totalizing machine + retrieval memory (Slices 1-7)
+
+- **Narrative play is a two-phase machine** (CUTSCENE | ENCOUNTER) in full-AI narrative
+  modes: entry mapping (`offered`/`adhoc`/`fold_in`) replaced free-form say/do adjudication;
+  the transcript milestone recognizer was REMOVED - encounter outcome maps (validated against
+  the authored milestone vocabulary) and in-encounter adjudicator claims are the only
+  progression writers. Assist mode keeps free adjudication (human DM drives).
+- **Embedding model for memory_fragments:** `openai/text-embedding-3-small` via the
+  OpenRouter `/embeddings` endpoint with `dimensions: 1024` ($0.02/M tokens - cheapest
+  reliably-available embeddings model on the account; matches the `vector(1024)` column).
+  Single helper `callEmbedding` in `_shared/llm.ts`, logged to usage_log as kind
+  'embedding'. Retrieval is enrichment only: every failure degrades to "no memories".
+- **Guide-time danger/encounter_table authoring deferred:** locations gained `danger` +
+  `encounter_table` columns and the runtime honors them, but Stage 4/5 prompts do not author
+  them yet - every existing guide lacks them anyway, so the generated fallback table is the
+  operative path. Regenerate guides once stage authoring lands.
+
+## 2026-07-20 - Unified player input (Say/Do removed)
+
+- Playtest decision: the player talks to ONE input and the DM interprets. The UI sends
+  everything as kind 'say' (single Send button; explicit Roll stays); the server treats
+  say/do identically in narrative modes and interprets intent where a decision is needed:
+  the social classifier gained {"kind": "action"} to escape physical actions out of NPC
+  conversations, the Adjudicator gained flags.talk (questions/table talk -> an answered DM
+  reply, never a check), and the Puzzle Judge gained "talk" (questions cost no attempts).
+  Mid-encounter says with nobody staged route to the new encounter_talk handler - inputs
+  never silently vanish. kind 'do' remains accepted on the wire (tests, back-compat);
+  variety/classifier bookkeeping now uses the interpreted pillar, not the button.
+
+## 2026-07-20 - DM-called checks with skill-option buttons
+
+- Table-style check flow (the "Phillip and the gargoyles" pattern): the DM calls for checks;
+  players never roll unprompted. The Adjudicator may offer `skill_options` (up to 3, primary
+  first) on any check; the prompt UI turns them into per-skill Roll buttons and
+  `roll_pending` accepts the picked skill (validated against the offer; modifier per pick;
+  skill challenges carry per-option escalated DCs in the stash). Questions probing hidden
+  info now spec a check instead of a free talk answer - only plain-sight questions stay
+  free. The input row's always-visible skill select + Roll was removed (the character-sheet
+  rolls in the sidebar remain); the fast-path `roll` intent stays on the wire.
+
+## 2026-07-20 - Character-aware play + visible dice
+
+- **Character profiles feed every agent**: `characterProfiles()` (orchestrate.ts) builds one
+  line per PC from race_key -> srd_races traits (Darkvision etc.), background_key,
+  personality/freeform quirks, and background_narrative (all capped). Fed to the Adjudicator
+  (rules on traits: trivializing trait -> auto_success/advantage/lower DC, named in the
+  rationale), the challenge adjudicator, entry mapper, Beat Planner (plans around who the
+  party IS), Narrator (personalization line in NARRATOR_BASE + exposition; party block in
+  the grounded prompt), and the NPC bundle (NPCs react to traits/quirks).
+- **Every rolled check prints its die**: "Kestrel rolls investigation: 7 (d20 5 +2) -
+  failure" transcript lines on solo/group/assist/auto rolls (prompts.ts rollLine). The DC
+  stays hidden; the fast-path roll line was already visible.
+- **Trait-aware encounter design** (same day): both Encounter Designers (authored + ad-hoc)
+  receive the party profile lines and design around them, emitting `trait_notes` in the
+  challenge params; the mid-challenge adjudicator context carries those notes so rulings
+  stay consistent with the design (a dark passage designed as "the dwarf's Darkvision moment"
+  rules that way on every attempt).
+
+## 2026-07-20 - Story-flow playtest fixes (circling + NPC amnesia)
+
+- **Anti-circling**: committing to move IS engagement - the entry mapper maps "I walk
+  forward"-style replies to `offered` (verified live: instant encounter entry), sees its own
+  recently folded-in replies (a repeat/continuation must never fold twice), and fold_in
+  narration now CARRIES the action forward - never re-asking answered questions; single
+  obvious paths get walked, not re-offered as menus. Same guidance added to the narrator's
+  beat/exposition styles (no fake forks, no re-offered choices).
+- **NPC in-scene memory**: runNpcAgent never received the current scene's transcript - only
+  the latest utterance - so NPCs forgot items handed over two lines earlier (the orb,
+  Whispers in the Dark). NpcContext now carries recentLines (last 12) rendered as "THIS
+  SCENE SO FAR (never contradict or forget it)"; the gist path gets the tail too.
+- Known flake, unrelated: the npc_agent default model intermittently returns empty
+  completions (pre-existing, one retry built in) - swap the npc_agent entry in the model map
+  if it recurs in play.
+
+## 2026-07-20 - Stuck-hint ladder (ask-for-hints when players don't know what to do)
+
+- Distinct from the idle nudge (which fires on silence): a "stuck" detector for players who are
+  ACTIVELY trying but not progressing. Pure decision in `packages/rules/src/play/hints.ts`
+  (`decideHint`); the server (`session/hints.ts`) counts no-progress player turns since the last
+  progress event (milestone/beat-exit/objective/encounter_resolved/encounter_opened/scene_travel/
+  offer_accepted/successful encounter_attempt/offered-or-adhoc entry) and delivers an escalating,
+  diegetic nudge drawn from real content.
+- **One 4-rung ladder, two entry points:** (1) re-frame [no new info], (2) orient [surface an
+  undiscovered ingredient or a Hook Weaver seed], (3) steer [next authored puzzle hint / a
+  companion proposes an approach / narrow the challenge in-fiction], (4) fail-forward [resolve the
+  open encounter via its on_failure, or the world opens a path] - never a hard-lock, never a
+  mechanic named. Player-requested (the "get your bearings" compass button) climbs immediately;
+  the full-AI auto-sweep (client timer, 20s after the table settles, like the idle sweep) engages
+  only past `hintTurns` (default 3, DM-configurable via set_auto) and unlocks one rung per ~2
+  no-progress turns. Rung 4 (fail-forward) is full-AI only; assist stops at rung 3 and routes
+  through the narration review gate. Logged `hint_given {rung, source}`.

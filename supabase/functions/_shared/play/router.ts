@@ -3,7 +3,9 @@
 
 // Action Router (F07 SS3.2): deterministic classification, never an LLM. Fast-path kinds go
 // straight to engines; free-text splits between the dialogue pipeline (NPCs staged), free
-// player chat (no NPC in scene, F10 SS8), and the Adjudicator.
+// player chat (battle/puzzle only), and the Adjudicator. Say with nobody staged in freeform
+// scenes goes to the Adjudicator - it is addressed to the DM, and the old chat route answered
+// it with silence (the Bloodfire Volcano dead-end, 2026-07-19).
 
 import type { IntentEnvelope, IntentRoute } from './types.ts'
 
@@ -24,7 +26,9 @@ export function classifyIntent(intent: Pick<IntentEnvelope, 'kind' | 'skill' | '
   }
   if (intent.kind === 'say') {
     const npcInScene = intent.targetId !== null || scene.stagedNpcIds.length > 0
-    return npcInScene ? 'dialogue' : 'chat'
+    if (npcInScene) return 'dialogue'
+    // Mid-encounter table talk stays chat; everywhere else the DM answers via the Adjudicator.
+    return scene.mode === 'battle' || scene.mode === 'puzzle' ? 'chat' : 'adjudicate'
   }
   return 'adjudicate'
 }

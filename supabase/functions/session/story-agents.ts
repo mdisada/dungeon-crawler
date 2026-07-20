@@ -7,6 +7,7 @@ import { callAgentText } from '../_shared/llm.ts'
 import {
   LOOP_TEMPLATES, parseBeatPlan, parsePivot,
 } from '../_shared/story/index.ts'
+import type { Json } from '../_shared/state/index.ts'
 import type {
   BeatParseResult, BeatPlanContext, LoopType, PivotAssessment,
 } from '../_shared/story/index.ts'
@@ -63,11 +64,24 @@ const PLANNER_SYSTEM =
   'ONLY JSON: {"beat": {"name": string, "goals": [1-4 strings], "exit_conditions": predicate, ' +
   '"ingredient_requests": [{"type": "clue"|"secret"|"event"|"item"|"rumor", "purpose": string, ' +
   '"pillar_tags": ["combat"|"social"|"exploration"]}], "braided": [{"goal_pair": [i, j], ' +
-  '"link": {"kind": "dc_mod"}, "skills": [skillA, skillB]}], "narration_seed": string}}. ' +
-  'Predicates use atoms {"flag": name, "eq": value} | {"event": "exact marker text"} | ' +
-  '{"fact": path, "eq"|"in": ...} with {"any": []}/{"all": []}. Braided pairs (two goals for ' +
-  'different PCs whose outcomes modify each other) only when guidance asks for cooperation. ' +
-  'The narration_seed must end at a concrete decision point facing the players.'
+  '"link": {"kind": "dc_mod"}, "skills": [skillA, skillB]}], "narration_seed": string, ' +
+  '"encounter": {"kind": "skill_challenge"|"social"|"puzzle"|"combat", "label": string, "stakes": string, ' +
+  '"rationale": string, "on_success": [milestones], "on_partial": [milestones], ' +
+  '"on_failure": [milestones]}}}. ' +
+  'Exit predicates use ONLY atoms {"flag": "<snake_case_decision_or_milestone>", "eq": true} | ' +
+  '{"event": "exact past-tense marker"} with {"any": []}/{"all": []} - NEVER "fact" atoms (live ' +
+  'play cannot write them). Prefer an "any" of 2-4 flags so multiple player approaches exit the ' +
+  'beat. Braided pairs (two goals for different PCs whose outcomes modify each other) only when ' +
+  'guidance asks for cooperation. The narration_seed must end at a concrete decision point facing the players. ' +
+  'ENCOUNTER: every beat carries exactly one typed encounter - the ONLY way this beat can ' +
+  'resolve. Its outcome maps translate result tiers into milestones, and every entry MUST be ' +
+  'copied EXACTLY from the objective milestones provided or from the atoms of your own ' +
+  'exit_conditions (a full/partial success should exit the beat). Never invent milestone text. ' +
+  'FAIL FORWARD: author exit_conditions as an "any" of BOTH a success atom AND a ' +
+  'consequence/setback atom, and map on_failure to that setback atom - a failed encounter ' +
+  'must still move the story (at a cost), never re-offer the same wall. Objective milestones ' +
+  'must be copied CHARACTER-FOR-CHARACTER (keep spaces - never snake_case them), and when an ' +
+  'objective milestone fits a tier, prefer it over your own exit atoms.'
 
 export interface PlannerContext {
   loop: { type: LoopType; completedBeatNames: string[] }
@@ -76,6 +90,8 @@ export interface PlannerContext {
   partySummary: string
   poolIngredients: { id: string; type: string; reveals: string }[]
   varietyGuidance: string[]
+  /** Retrieved memory fragments (Slice 7) - what earlier sessions established. */
+  establishedEarlier?: string[]
   plan: BeatPlanContext
 }
 
@@ -97,6 +113,15 @@ function cannedBeatPlan(ctx: PlannerContext): unknown {
         ? [{ goal_pair: [0, 1], link: { kind: 'dc_mod' }, skills }]
         : [],
       narration_seed: `[demo seed] The ${name} beat opens; someone must decide what happens next.`,
+      encounter: {
+        kind: 'skill_challenge',
+        label: `[demo] the ${name} challenge`,
+        stakes: `[demo] the ${name} beat hangs on it`,
+        rationale: 'demo',
+        on_success: [`beat ${name} resolved`],
+        on_partial: [`beat ${name} resolved`],
+        on_failure: [],
+      },
     },
   }
 }
@@ -107,12 +132,141 @@ export async function runBeatPlanner(env: AgentEnv, ctx: PlannerContext): Promis
     : await agentJson(env, 'beat_planner', PLANNER_SYSTEM, [
         `Loop: ${ctx.loop.type}; template ${LOOP_TEMPLATES[ctx.loop.type].beats.join(' -> ')}; completed beats: ${ctx.loop.completedBeatNames.join(', ') || 'none'}`,
         ctx.objective ? `Current objective: ${ctx.objective.title} (DM notes: ${ctx.objective.hiddenDescription})` : 'No active objective.',
+        `Objective milestones the outcome maps may copy (exact text): ${(ctx.plan.milestones ?? []).join(' | ') || 'none - map onto your own exit_conditions atoms'}`,
         `Scene: ${ctx.sceneSummary}`,
         `Party: ${ctx.partySummary}`,
         `Undiscovered ingredient pool (reuse these before requesting new ones): ${ctx.poolIngredients.map((p) => `${p.type}: ${p.reveals}`).join(' | ') || 'empty'}`,
+        (ctx.establishedEarlier ?? []).length > 0
+          ? `Established earlier (plan past these, never contradict them):\n${ctx.establishedEarlier!.map((m) => `- ${m}`).join('\n')}`
+          : '',
         ctx.varietyGuidance.length > 0 ? `Variety guidance:\n${ctx.varietyGuidance.join('\n')}` : '',
-      ].filter(Boolean).join('\n'), 700)
+      ].filter(Boolean).join('\n'), 900)
   return parseBeatPlan(raw, ctx.plan)
+}
+
+const DESIGNER_SYSTEM =
+  'You are the Encounter Designer for a tabletop RPG. Fill in the mechanical parameters for ' +
+  'one encounter, designed around WHO the party members are: their species traits, ' +
+  'backgrounds, and quirks shape which approaches are promising (Darkvision makes a dark ' +
+  'passage a dwarf\'s moment; a sailor background makes rigging trivial). Reply with ONLY ' +
+  'JSON. For a skill_challenge: {"params": {"needed_successes": ' +
+  '2-4, "max_failures": 2-3, "suggested_skills": [2-4 skills DRAWN FROM the party skill list], ' +
+  '"trait_notes": one line naming which party traits bear on this encounter and how}}. ' +
+  'For social: {"params": {"goal": string (what the conversation is FOR), "npc_names": [1-3 ' +
+  'names COPIED from the NPC list], "exits": [2-4 of {"outcome": snake_case label, ' +
+  '"description": one line of what reaching it looks like, "tier": "success"|"partial"|"failure"} ' +
+  '- include at least one success and one failure exit]}}. For puzzle: {"params": {"solution": ' +
+  'string (the SECRET answer, concrete and enactable), "steps": [2-4 of {"description": a ' +
+  'discoverable sub-realization, "hint": one in-fiction nudge toward it}], "max_attempts": 2-4, ' +
+  '"fail_consequence": {"kind": "spawn_encounter"|"cost"|"antagonist_step", "params": {}}}}. ' +
+  'For combat: {"params": {}}. Scale needed_successes with party size (never above party size ' +
+  '+ 2) and keep every encounter winnable but tense.'
+
+/** Kind-specific params for an authored beat spec (called at planning time). */
+export async function runEncounterDesigner(
+  env: AgentEnv,
+  spec: { kind: string; label: string; stakes: string; rationale: string },
+  party: { size: number; skills: string[]; profiles?: string[] },
+  npcNames: string[] = [],
+): Promise<Json> {
+  const fallback: Json = spec.kind === 'skill_challenge'
+    ? {
+        needed_successes: Math.min(3, party.size + 1),
+        max_failures: 2,
+        suggested_skills: party.skills.slice(0, 3),
+      }
+    : spec.kind === 'social'
+      ? {
+          goal: spec.label,
+          npc_names: npcNames.slice(0, 1),
+          exits: [
+            { outcome: 'agreed', description: 'The NPC clearly commits to what the party asked.', tier: 'success' },
+            { outcome: 'refused', description: 'The NPC firmly and finally declines.', tier: 'failure' },
+          ],
+        }
+      : spec.kind === 'puzzle'
+        ? {
+            solution: `the way through "${spec.label}"`,
+            steps: [
+              { description: 'Understand what the mechanism responds to', hint: 'Something here reacts when touched.' },
+              { description: 'Work out the correct order', hint: 'The wear marks suggest a sequence.' },
+            ],
+            max_attempts: 3,
+            fail_consequence: { kind: 'antagonist_step', params: {} },
+          }
+        : {}
+  if (env.demo) {
+    return spec.kind === 'skill_challenge'
+      ? { needed_successes: 1, max_failures: 3, suggested_skills: party.skills.slice(0, 2) }
+      : fallback
+  }
+  try {
+    const raw = await agentJson(env, 'encounter_designer', DESIGNER_SYSTEM, [
+      `Encounter: ${spec.kind} - "${spec.label}"`,
+      `Stakes: ${spec.stakes || 'unstated'}`,
+      spec.rationale ? `Planner rationale: ${spec.rationale}` : '',
+      `Party size: ${party.size}; party skills: ${party.skills.join(', ') || 'none listed'}`,
+      (party.profiles ?? []).length > 0
+        ? `Who the party members are (design around their traits):\n${party.profiles!.map((p) => `- ${p}`).join('\n')}`
+        : '',
+      spec.kind === 'social' ? `Named NPCs in the world: ${npcNames.join('; ') || 'none listed'}` : '',
+    ].filter(Boolean).join('\n'), 450)
+    const params = (typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>).params : null)
+    return (typeof params === 'object' && params !== null ? params : fallback) as Json
+  } catch {
+    return fallback // a designer outage degrades to sane defaults, never a blocked beat
+  }
+}
+
+const ADHOC_DESIGNER_SYSTEM =
+  'You are the Encounter Designer for a tabletop RPG. The players went off-script with a real ' +
+  'endeavor of their own - give it structure as a small ad-hoc encounter, designed around WHO ' +
+  'they are (species traits, backgrounds, quirks pick the promising approaches). Reply with ONLY ' +
+  'JSON: {"kind": "skill_challenge"|"combat", "label": string (short), "stakes": string (what ' +
+  'failing costs, one line), "params": {"needed_successes": 1-3, "max_failures": 2-3, ' +
+  '"suggested_skills": [1-3 skills from the party list], "trait_notes": one line naming which ' +
+  'party traits bear on this and how}}. Prefer skill_challenge; combat only ' +
+  'when the endeavor IS a fight.'
+
+export interface AdhocDesign {
+  kind: 'skill_challenge' | 'combat'
+  label: string
+  stakes: string
+  params: Json
+}
+
+/** Micro-encounter for an off-script endeavor (entry mapping 4.1b) - structure, not silence. */
+export async function runAdhocDesigner(
+  env: AgentEnv,
+  endeavor: string,
+  party: { size: number; skills: string[]; profiles?: string[] },
+): Promise<AdhocDesign> {
+  const fallback: AdhocDesign = {
+    kind: 'skill_challenge',
+    label: endeavor.slice(0, 60) || 'An improvised endeavor',
+    stakes: 'Time and standing lost',
+    params: { needed_successes: 2, max_failures: 2, suggested_skills: party.skills.slice(0, 2) },
+  }
+  if (env.demo) return { ...fallback, label: `[demo adhoc] ${endeavor.slice(0, 40)}` }
+  try {
+    const raw = await agentJson(env, 'encounter_designer', ADHOC_DESIGNER_SYSTEM, [
+      `The endeavor: ${endeavor}`,
+      `Party size: ${party.size}; party skills: ${party.skills.join(', ') || 'none listed'}`,
+      (party.profiles ?? []).length > 0
+        ? `Who the party members are (design around their traits):\n${party.profiles!.map((p) => `- ${p}`).join('\n')}`
+        : '',
+    ].filter(Boolean).join('\n'), 300)
+    const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const kind = obj.kind === 'combat' ? 'combat' : 'skill_challenge'
+    return {
+      kind,
+      label: typeof obj.label === 'string' && obj.label.trim() ? obj.label.trim().slice(0, 80) : fallback.label,
+      stakes: typeof obj.stakes === 'string' ? obj.stakes.trim().slice(0, 160) : fallback.stakes,
+      params: (typeof obj.params === 'object' && obj.params !== null ? obj.params : fallback.params) as Json,
+    }
+  } catch {
+    return fallback
+  }
 }
 
 const WEAVER_SYSTEM =

@@ -11,6 +11,8 @@ export interface Stage3Context {
   chapter: ChapterSketch
   chapterNumber: number
   scenes: SceneSketch[]
+  /** 'one_shot' keeps the objective ladder short; longer forms may use the full range. */
+  adventureType?: string
 }
 
 export const OBJECTIVE_TITLE_MAX_WORDS = 6
@@ -22,13 +24,14 @@ export function buildStage3Prompt(ctx: Stage3Context): { system: string; user: s
 Rules:
 - Objective titles are AT MOST ${OBJECTIVE_TITLE_MAX_WORDS} words, phrased short and OPEN ("Defeat Volgarth", "Find the missing caravan") - they must not spoil twists or prescribe a method.
 - hidden_description is DM-only: what this objective is really about, which scenes ground it, and what the party does not yet know. It exists to catch plot holes.
-- completion_predicates is a JSON predicate over world state, NEVER a reference to a specific encounter. Grammar:
-  atom: {"fact": "npc.<name>.status", "in": ["dead","captured","fled","allied"]} or {"fact": "<path>", "eq": <scalar>}
-  atom: {"flag": "<quest_flag_name>", "eq": true}
-  atom: {"event": "party entered <location>"}
+- completion_predicates is a JSON predicate over world state, NEVER a reference to a specific encounter. The live engine can ONLY satisfy atoms from this exact vocabulary - anything else never completes. Grammar:
+  atom: {"flag": "<snake_case_milestone>", "eq": true} - a concrete accomplishment live play can recognize ("lantern_relit", "keeper_freed"). PREFER flags.
+  atom: {"event": "<short past-tense marker>"} - e.g. "party entered the sunken crypt", "the ritual was interrupted".
   combinators: {"any": [<predicate>...]}, {"all": [<predicate>...]}
-- Prefer "any" combinators that honor multiple resolutions (kill OR ally OR outwit).
+- NEVER use "fact" atoms - live play does not write them (NPC status is tracked by internal id, not by name).
+- Prefer "any" combinators that honor multiple resolutions (kill OR ally OR outwit); keep any "all" chain to at most 2 atoms.${''}
 
+${ctx.adventureType === 'one_shot' ? '- This is a ONE-SHOT adventure: author AT MOST 2-3 objectives, each completable within a few scenes of live play.\n' : ''}
 Respond with ONLY a JSON object, no prose, in exactly this shape:
 { "objectives": [ { "title": "...", "hidden_description": "...", "completion_predicates": { ... } } ] }`
 
@@ -43,6 +46,15 @@ Scene sketches:
 ${sceneList}`
 
   return { system, user, maxTokens: 3000 }
+}
+
+function containsFactAtom(predicate: unknown): boolean {
+  if (typeof predicate !== 'object' || predicate === null || Array.isArray(predicate)) return false
+  const p = predicate as Record<string, unknown>
+  if (typeof p.fact === 'string') return true
+  if (Array.isArray(p.any)) return p.any.some(containsFactAtom)
+  if (Array.isArray(p.all)) return p.all.some(containsFactAtom)
+  return false
 }
 
 export function parseStage3(raw: string): ParseResult<ObjectiveDraft[]> {
@@ -61,6 +73,11 @@ export function parseStage3(raw: string): ParseResult<ObjectiveDraft[]> {
       }
       const predicateErrors = validatePredicate(o.completion_predicates, `${path}.completion_predicates`)
       c.errors.push(...predicateErrors)
+      if (predicateErrors.length === 0 && containsFactAtom(o.completion_predicates)) {
+        // Live play can never write fact atoms (F14 milestone vocabulary is flags + events),
+        // so a fact-based objective would be uncompletable - hard-fail into regeneration.
+        c.errors.push(`${path}.completion_predicates: "fact" atoms are not completable by live play - use flags or events`)
+      }
       return {
         title,
         hiddenDescription: c.str(o.hidden_description, `${path}.hidden_description`),

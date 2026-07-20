@@ -50,11 +50,12 @@ function renderAsAsh(state: GameState, ui: React.ReactNode) {
 const future = new Date(Date.now() + 60_000).toISOString()
 
 describe('IntentInputRow', () => {
-  it('offers Say/Do/Roll when the table is idle', () => {
+  it('offers a single Send line to the DM - no unprompted roll controls', () => {
     renderAsAsh(stateWith(() => {}), <IntentInputRow />)
-    expect(screen.getByRole('button', { name: 'Say' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Do' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Roll' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Say' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Do' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Roll' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('Action or dialogue input')).toBeEnabled()
   })
 
@@ -84,6 +85,17 @@ describe('CheckPrompt', () => {
     renderAsAsh(stateWith((s) => { s.dialogue.pending = pending }), <CheckPrompt />)
     expect(screen.getByRole('button', { name: 'Roll' })).toBeInTheDocument()
     expect(screen.getByText(/athletics/)).toBeInTheDocument()
+  })
+
+  it('offers one roll button per DM-called skill option', () => {
+    const pending: PendingPromptState = {
+      kind: 'check', id: 'p1', skill: 'intelligence', skillOptions: ['intelligence', 'investigation'],
+      reason: 'are the gargoyles creatures?', deadline: future, actorCharacterId: 'pc-ash', advDis: 'none',
+    }
+    renderAsAsh(stateWith((s) => { s.dialogue.pending = pending }), <CheckPrompt />)
+    expect(screen.getByRole('button', { name: 'Roll intelligence' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Roll investigation' })).toBeInTheDocument()
+    expect(screen.getByText(/The DM calls for a check/)).toBeInTheDocument()
   })
 
   it('shows waiting copy when the check belongs to someone else', () => {

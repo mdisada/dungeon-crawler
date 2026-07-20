@@ -40,3 +40,35 @@ function holds(p: Predicate, world: WorldFacts): boolean {
   }
   return world.events.has(p.event)
 }
+
+export interface MilestoneAtoms {
+  /** Flag names the story may safely set true (only `eq: true` flag atoms qualify). */
+  flags: string[]
+  /** Exact event marker texts. */
+  events: string[]
+  /** Boolean world-fact paths (only `eq: true` fact atoms - semantically flags). */
+  facts: string[]
+}
+
+/**
+ * Lists the atoms a predicate can be satisfied through - the authored "milestone vocabulary"
+ * the full-AI Adjudicator is allowed to recognize as achieved (F14: the LLM only ever picks
+ * from authored milestones; it can never invent one). Non-boolean fact atoms (eq scalar / in
+ * lists) are excluded: their values are arbitrary and stay DM-override territory.
+ */
+export function listMilestoneAtoms(predicate: unknown): MilestoneAtoms {
+  const flags = new Set<string>()
+  const events = new Set<string>()
+  const facts = new Set<string>()
+  const walk = (node: unknown): void => {
+    if (typeof node !== 'object' || node === null || Array.isArray(node)) return
+    const p = node as Record<string, unknown>
+    if (Array.isArray(p.any)) return p.any.forEach(walk)
+    if (Array.isArray(p.all)) return p.all.forEach(walk)
+    if (typeof p.flag === 'string' && p.flag && p.eq === true) flags.add(p.flag)
+    if (typeof p.event === 'string' && p.event) events.add(p.event)
+    if (typeof p.fact === 'string' && p.fact && p.eq === true) facts.add(p.fact)
+  }
+  walk(predicate)
+  return { flags: [...flags], events: [...events], facts: [...facts] }
+}

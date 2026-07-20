@@ -7,6 +7,7 @@ import { useSession } from '@/features/auth'
 import { cn } from '@/lib/utils'
 
 import { getMemberAdventure } from '../api/lobby'
+import { sweepHint } from '../api/session'
 import { sweepIdleNudge } from '../api/story'
 import { useGameState } from '../hooks/use-game-state'
 import { useMusic } from '../hooks/use-music'
@@ -16,6 +17,7 @@ import { IntentInputRow } from './intent-input-row'
 import { DmOverviewPanel } from './dm-overview-panel'
 import { DmSidebar } from './dm-sidebar'
 import { DowntimeView } from './downtime-view'
+import { EncounterBanner } from './encounter-banner'
 import { FxLayer } from './fx-layer'
 import { LobbyModal } from './lobby-modal'
 import { NarrationView } from './narration-view'
@@ -129,6 +131,25 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
     return () => clearTimeout(timer)
   }, [adventure.id, idleEligible, nudgeMinutes, version])
 
+  // Stuck-hint auto-sweep (2026-07-20): a short grace after the table settles in a narrative
+  // scene, any full-AI player's client checks in; the server validates the no-progress streak
+  // and dedups (409 = not stuck). Longer than a keystroke so an engaged, slow typer isn't
+  // interrupted; the server keeps auto hints to a gentle re-frame until the streak grows.
+  const stuckEligible =
+    game.status === 'ready' &&
+    adventure.mode === 'full_ai' &&
+    game.state.session.status === 'active' &&
+    ['narration', 'roleplay', 'downtime', 'puzzle'].includes(game.state.scene.mode) &&
+    !game.state.dialogue.typing &&
+    !game.state.dialogue.pending
+  useEffect(() => {
+    if (!stuckEligible) return
+    const timer = setTimeout(() => {
+      void sweepHint(adventure.id)
+    }, 20_000)
+    return () => clearTimeout(timer)
+  }, [adventure.id, stuckEligible, version])
+
   if (game.status === 'connecting')
     return <p className="p-8 text-muted-foreground">Connecting to the table…</p>
   if (game.status === 'error')
@@ -143,6 +164,10 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
 
   const { state } = game
   const inLobby = state.session.status !== 'active'
+  // Full-AI has no human DM (F03): the creator's account keeps backend DM authority (server-side
+  // overrides/testing), but the UI must never expose the DM sidebar/overview for it - the
+  // player-facing experience is "the AI runs everything," even for the adventure's creator.
+  const showDmUi = adventure.mode === 'assist' && game.role === 'dm'
 
   const renderer = () => {
     if ((state.scene.mode === 'battle' || state.scene.mode === 'puzzle') && state.combat) {
@@ -176,10 +201,12 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
         <div className="relative flex min-h-0 flex-1">
           <main className="relative min-w-0 flex-1">
             {renderer()}
+            {/* The open encounter frame pins top-center for everyone (encounter-states Slice 1). */}
+            {state.scene.mode !== 'battle' && !inLobby && <EncounterBanner encounter={state.encounter} />}
             {/* Open quest offers pin top-center for everyone (F08 SS2.1). */}
             {state.scene.mode !== 'battle' && !inLobby && <OfferBanner offers={state.objectives.offers} />}
             {/* Objectives + players pinned upper-left for the DM (F06 SS2). */}
-            {game.role === 'dm' && !inLobby && <DmOverviewPanel />}
+            {showDmUi && !inLobby && <DmOverviewPanel />}
             {/* Live input overlay (Phase 5); battle keeps token-drag as its input until F09. */}
             {state.scene.mode !== 'battle' && !inLobby && <IntentInputRow />}
             <FxLayer fx={game.fx} />
@@ -211,7 +238,7 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
                 </Button>
               </div>
               <div className={cn('min-h-0 flex-1', sidebarCollapsed && 'hidden')}>
-                {game.role === 'dm' ? <DmSidebar /> : <PlayerSidebar />}
+                {showDmUi ? <DmSidebar /> : <PlayerSidebar />}
               </div>
             </div>
           </aside>
@@ -222,7 +249,7 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
             aria-expanded={drawerOpen}
             onClick={() => setDrawerOpen((open) => !open)}
           >
-            {drawerOpen ? 'Close panel' : game.role === 'dm' ? 'DM panel' : 'Character'}
+            {drawerOpen ? 'Close panel' : showDmUi ? 'DM panel' : 'Character'}
           </Button>
         </div>
       </div>

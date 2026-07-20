@@ -1,9 +1,12 @@
-// Beat Planner boundary parser (F08 SS4): one beat only, goals phrased as situations, exit
-// conditions in the same predicate atoms as F04, braided pairs gated on the composition
-// profile (emitted only when the party can actually resolve both halves).
+// Beat Planner boundary parser (F08 SS4 + encounter-states Slice 3): one beat only, goals
+// phrased as situations, exit conditions in the same predicate atoms as F04, braided pairs
+// gated on the composition profile (emitted only when the party can actually resolve both
+// halves), and a typed encounter spec whose outcome maps must copy authored milestone atoms
+// exactly - the machine's only progression writers.
 
 import { validatePredicate } from '../guide/predicates.ts'
 import type { Json } from '../state/types.ts'
+import { listMilestoneAtoms } from './evaluate.ts'
 
 export interface IngredientRequest {
   type: 'clue' | 'secret' | 'event' | 'item' | 'rumor'
@@ -18,6 +21,22 @@ export interface BraidedPair {
   skills: [string, string]
 }
 
+export const ENCOUNTER_KINDS = ['skill_challenge', 'puzzle', 'social', 'combat'] as const
+export type BeatEncounterKind = (typeof ENCOUNTER_KINDS)[number]
+
+/** The beat's typed encounter (encounter-states Slice 3). `params` is designed later by the
+ *  Encounter Designer; outcome-map entries are exact copies of authored milestone atoms. */
+export interface BeatEncounterSpec {
+  kind: BeatEncounterKind
+  label: string
+  stakes: string
+  rationale: string
+  params: Json
+  onSuccess: string[]
+  onPartial: string[]
+  onFailure: string[]
+}
+
 export interface BeatPlan {
   name: string
   goals: string[]
@@ -25,11 +44,15 @@ export interface BeatPlan {
   ingredientRequests: IngredientRequest[]
   braided: BraidedPair[]
   narrationSeed: string
+  /** Null only via the deterministic fallback - the beat degrades to ad-hoc entries. */
+  encounter: BeatEncounterSpec | null
 }
 
 export interface BeatPlanContext {
   partySize: number
   partySkills: string[]
+  /** Authored milestone vocabulary (objective atoms) outcome maps may draw from, exact text. */
+  milestones?: string[]
 }
 
 const INGREDIENT_TYPES = ['clue', 'secret', 'event', 'item', 'rumor'] as const
@@ -104,6 +127,66 @@ export function parseBeatPlan(raw: unknown, ctx: BeatPlanContext): BeatParseResu
     : ''
   if (!narrationSeed) errors.push('beat.narration_seed: expected a non-empty string')
 
+  const encounter = parseEncounterSpec(beat.encounter, exitConditions, ctx.milestones ?? [], errors)
+
   if (errors.length > 0) return { ok: false, errors }
-  return { ok: true, plan: { name, goals, exitConditions, ingredientRequests, braided, narrationSeed }, dropped }
+  return { ok: true, plan: { name, goals, exitConditions, ingredientRequests, braided, narrationSeed, encounter }, dropped }
+}
+
+/**
+ * The outcome-map vocabulary is the objective's authored atoms plus the atoms of this very
+ * plan's exit conditions - the planner maps encounter outcomes onto the exits it just wrote.
+ * Entries must be copied EXACTLY; anything else is a hard error so the planner retries.
+ */
+function parseEncounterSpec(
+  raw: unknown,
+  exitConditions: Json,
+  objectiveMilestones: string[],
+  errors: string[],
+): BeatEncounterSpec | null {
+  if (raw == null) {
+    errors.push('beat.encounter: expected an encounter spec (kind, label, stakes, outcome maps)')
+    return null
+  }
+  if (typeof raw !== 'object') {
+    errors.push('beat.encounter: expected an object')
+    return null
+  }
+  const enc = raw as Record<string, unknown>
+  const kind = ENCOUNTER_KINDS.find((k) => k === enc.kind)
+  if (!kind) errors.push(`beat.encounter.kind: expected one of ${ENCOUNTER_KINDS.join('|')}`)
+  const label = typeof enc.label === 'string' && enc.label.trim() ? enc.label.trim() : ''
+  if (!label) errors.push('beat.encounter.label: expected a non-empty string')
+
+  const exitAtoms = listMilestoneAtoms(exitConditions)
+  const vocabulary = new Set([...objectiveMilestones, ...exitAtoms.flags, ...exitAtoms.events, ...exitAtoms.facts])
+  const outcomes = (key: string): string[] => {
+    const list = Array.isArray(enc[key]) ? (enc[key] as unknown[]) : []
+    const entries = list.filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+    for (const entry of entries) {
+      if (!vocabulary.has(entry)) {
+        errors.push(`beat.encounter.${key}: "${entry}" is not an authored milestone (copy exact text)`)
+      }
+    }
+    return entries
+  }
+  const onSuccess = outcomes('on_success')
+  const onPartial = outcomes('on_partial')
+  const onFailure = outcomes('on_failure')
+  // Success must move the spine whenever there is any vocabulary to map onto.
+  if (vocabulary.size > 0 && onSuccess.length === 0) {
+    errors.push('beat.encounter.on_success: expected at least one milestone from the vocabulary')
+  }
+
+  if (errors.length > 0) return null
+  return {
+    kind: kind!,
+    label,
+    stakes: typeof enc.stakes === 'string' ? enc.stakes.trim() : '',
+    rationale: typeof enc.rationale === 'string' ? enc.rationale.trim() : '',
+    params: (enc.params ?? {}) as Json,
+    onSuccess,
+    onPartial,
+    onFailure,
+  }
 }

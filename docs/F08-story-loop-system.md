@@ -113,6 +113,15 @@ Output: { beat: { name, goals: [player-facing situations to establish],
 - Plans **one beat only**. Ingredient requests first try the Ingredient Pool (reuse undiscovered toys); unmet requests go to the Ingredient Generator; new ingredients enter as proposals in assist mode (batch-approve UI: checkbox list).
 - `narration_seed` feeds the Narrator when the beat opens.
 - **Braided goals** (min_players > 1): the Planner may mark simultaneous goal pairs meant for different PCs (distract the captain + search the office), resolved via F7 §3.4. The Variety Manager's cooperation counters (§7) govern when braided beats are appropriate; the Planner receives the party composition profile so goals map onto skills the party actually has.
+- **Every beat now carries a typed encounter spec (2026-07-19, §9.2):** the Planner also emits
+  `encounter: {kind, label, stakes, rationale, on_success/on_partial/on_failure}` — the beat's one
+  resolvable encounter, whose outcome maps are the sole progression writers. Outcome-map atoms are
+  validated against the objective's milestone vocabulary + the beat's own exit-condition atoms
+  (exact copies; drift is rejected → planner retry → template fallback with a null spec that
+  degrades the beat to ad-hoc entries only). The new **Encounter Designer** agent fills the
+  kind-specific mechanics (§9.2.1). The Planner and Designer both receive the party's character
+  profiles (species traits / background / quirks) so encounters are designed around who the party
+  actually is.
 
 ## 5. Ingredient Pool Manager
 
@@ -227,20 +236,121 @@ system follows).
   demanding a player decision, not things that happen to the party.
 - **Pacing is event-driven in full-AI:** beat exit conditions met → Beat Planner plans the next
   beat → Narrator opens it automatically (no button press). "Narrate next" remains a manual
-  override for the creator/DM.
+  override for the creator/DM. **In the encounter-states machine (§9.2) progression is even
+  tighter:** a beat resolves only through its encounter's outcome map, objective completion
+  force-re-plans the open beat (a stale beat can no longer re-offer a dead encounter), and the
+  Narrator's fold-in / hook prompts never re-offer a direction the party already chose or pad a
+  single obvious path into a menu (anti-circling, 2026-07-20).
 - **Idle nudge:** players idle past a threshold (default 3 min, DM-configurable) → one
   in-fiction nudge (an NPC speaks up, a distant sound, the giver presses for an answer). A
-  nudge never advances plot state without player input.
+  nudge never advances plot state without player input. Phase-aware: mid-encounter the nudge
+  applies pressure inside the encounter; in a cutscene it re-delivers the standing hook.
+
+## 9.2 Encounter-states machine (implemented 2026-07-19/20)
+
+Full plan: `docs/PLANS/encounter-states.md`; playtest report + fixes:
+`docs/CHECKPOINTS/ENCOUNTER-STATES-SIM.md`; decisions in `docs/DECISIONS.md` (2026-07-19/20).
+This supersedes the earlier "per-message LLM judgment + transcript recognizer" pacing model:
+in full-AI narrative modes **the story spine advances only through typed, resolvable encounter
+states.**
+
+### 9.2.1 The two phases
+
+Narrative play is always in exactly one phase:
+
+- **CUTSCENE** (`GameState.encounter` is null): the Narrator delivers longer-form exposition
+  (`'exposition'` style, 4–8 sentences) ending on an in-fiction hook telegraphing the offered
+  encounter. Player replies go to **entry mapping** (§9.2.2) — there is no free-form adjudication
+  phase in full-AI.
+- **ENCOUNTER** (`GameState.encounter` set): a typed, resolvable state with an authored spec,
+  a **visible frame** (kind icon + label + progress + stakes + how-to-engage, pinned for
+  everyone — like the check prompt), per-PC contribution tracking, deterministic resolution into
+  a tier (full / partial / failed), and an explicit outcome-to-milestone map. The hidden half
+  (outcome maps, secrets like a puzzle's solution) lives on the `dm` domain; the visible frame on
+  a new `encounter` state domain.
+
+Encounter specs are stored on the beat row (`beats.encounter_spec jsonb`) and instantiated into
+`GameState.encounter` on entry. The **Encounter Designer** agent (`agent_role:
+'encounter_designer'`) expands the Planner's spec into kind-specific mechanics and also structures
+off-script endeavors as ad-hoc micro-encounters; it emits `trait_notes` naming which party traits
+bear on the encounter, which the mid-encounter adjudicator reuses so rulings stay consistent with
+the design.
+
+### 9.2.2 Entry mapping (the cutscene handler)
+
+During CUTSCENE every full-AI say/do goes to the Adjudicator-driven entry mapper, which returns
+`{entry: 'offered' | 'adhoc' | 'fold_in', ...}`:
+
+- **offered** — the reply engages OR **moves toward** the offered encounter (attempting it,
+  approaching its site, walking/climbing onward, picking a direction the hook laid out). Committing
+  to move IS engagement → the beat's authored spec instantiates.
+- **adhoc** — a real endeavor pointed elsewhere → the Encounter Designer spins a micro-encounter
+  (small spec, empty/partial outcome map: agency without spine-skipping).
+- **fold_in** — talk/color that changes nothing about where the party stands. The mapper sees its
+  own recently folded-in replies; a repeat or continuation is treated as commitment (never folds
+  twice — the anti-circling fix, 2026-07-20). Fold narration carries the action forward and never
+  re-asks an answered question or re-offers a chosen path.
+
+### 9.2.3 Encounter kinds
+
+- **Skill challenge:** X successes before Y failures, tiered (full requires every active PC to
+  contribute ≥ 1 success-attempt; partial = successes without full participation OR scraping the
+  failure edge). Repeating a skill escalates its DC (+2/repeat, per-skill). Pure engine in
+  `packages/rules/src/play/skill-challenge.ts`.
+- **Social:** goal + 2–4 authored exits (each mapped to a tier + milestones) + staged NPCs; the
+  F10 pipeline runs unchanged inside. Exit detection after each NPC reply is a narrow structured
+  judge over the authored exits only; disposition ≤ −8 forces a hostile exit; scene end without an
+  exit resolves as `left_unresolved` (see F10 §3.8).
+- **Puzzle:** secret solution + 2–4 steps (each an unlockable hint) + a bounded mistake budget +
+  an authored fail consequence that ALWAYS escalates (spawn / resource cost / antagonist step —
+  never "nothing happens"). Attempts scored by a Puzzle Judge holding the secret;
+  `scene.mode = 'puzzle'` while active. Engine in `packages/rules/src/play/puzzle.ts`.
+- **Random:** per-location authored `danger` (0–5) + dynamic modifiers (antagonist step, noise
+  events), rolled with seeded RNG at transition points only (travel, advance_day, encounter
+  failure, loud actions), logged `random_encounter_roll` (roll/threshold/pick) for the debug tab.
+  A spawn interrupts the open encounter (single-depth `encounter.interrupted` stack) and restores
+  it on resolution. Weighted tables authored per location at guide time; generated fallback when
+  absent. Math in `packages/rules/src/play/danger.ts`.
+- **Combat:** stays the pre-Phase-7 placeholder (instant party victory), routed through the same
+  frame + outcome map.
+
+### 9.2.4 Resolution & progression
+
+On a terminal status the tier selects the outcome map (`on_success`/`on_partial`/`on_failure`),
+`applyMilestones` validates and applies it against the authored vocabulary, the frame closes (or
+restores an interrupted encounter), a resolution cutscene narrates consequences forward + the next
+hook, and `evaluateStoryProgress` runs (which may exit the beat and open the next). **Outcome maps
+and in-encounter adjudicator claims are the only progression writers — the transcript recognizer
+is removed** (a milestone reachable only through free-form fiction is an authoring bug: route it
+through an outcome map). Every encounter event goes to `event_log` (`encounter_opened`,
+`entry_mapped`, `encounter_attempt`, `encounter_resolved` with tier + milestones, `encounter_exit`,
+`encounter_restored`, `random_encounter_roll`).
+
+### 9.2.5 Memory (minimal retrieval slice, F13 preview)
+
+`memory_fragments (adventure_id, kind, content, embedding vector(1024))` + the
+`match_memory_fragments` RPC (pgvector). Encounter resolutions and scene summaries are embedded
+(OpenRouter `text-embedding-3-small` @ 1024 dims); top-K is retrieved at prompt assembly for the
+Narrator (exposition), NPC bundle, and Beat Planner as "Established earlier: …" lines. Strictly
+enrichment — any embed/retrieve failure degrades to no memories; demo adventures skip it. Full F13
+(lore-wide RAG) stays out of scope.
+
+### 9.2.6 Known guide debt
+
+Guides authored before the machine have objective predicates / ending signals keyed on atoms live
+play can't claim, and no per-location `danger`/`encounter_table` (Stage 4/5 authoring is still
+pending; the runtime fallback table covers it). **Regenerate guides** so authored vocabulary lands
+in the machine's claimable shape — see the sim report.
 
 ## 10. Acceptance criteria
 
-- [ ] Simulated transcript fixtures: mystery→siege pivot detected within 5 events at ≥ 0.65 confidence; on-loop play produces no false pivots across a 50-event fixture.
-- [ ] Suspend/resume preserves beat position across an interleaved loop sequence.
-- [ ] Beat Planner reuses pool ingredients before requesting new ones (assert generator not called when pool suffices).
-- [ ] Player-theory canonization creates a consistent ingredient and blocks contradicting ones with a shown conflict.
-- [ ] Steward advances the antagonist plan on clock ticks with no player action; surfacing proposals appear non-blocking.
-- [ ] Variety flags fire per rules and alter Beat Planner output (fixture comparison).
-- [ ] Cooperation counters: `coop_low`, `coop_fatigue`, and `spotlight` fire against seeded event-log fixtures; braided beats emitted only when the composition profile supports the goal pair.
+- [x] Simulated transcript fixtures: mystery→siege pivot detected within 5 events at ≥ 0.65 confidence; on-loop play produces no false pivots across a 50-event fixture.
+- [x] Suspend/resume preserves beat position across an interleaved loop sequence.
+- [x] Beat Planner reuses pool ingredients before requesting new ones (assert generator not called when pool suffices).
+- [x] Player-theory canonization creates a consistent ingredient and blocks contradicting ones with a shown conflict.
+- [x] Steward advances the antagonist plan on clock ticks with no player action; surfacing proposals appear non-blocking.
+- [x] Variety flags fire per rules and alter Beat Planner output (fixture comparison).
+- [x] Cooperation counters: `coop_low`, `coop_fatigue`, and `spotlight` fire against seeded event-log fixtures; braided beats emitted only when the composition profile supports the goal pair.
 - [ ] Interlock guardrail: a personal loop with an interlock remains completable when the linked PC's loop is untouched (predicate fixture).
 - [ ] Ending Steward: deterministic scoring ranks candidate endings from a seeded fixture of
       objective outcomes + NPC states + dial values; a player action that flips the winning signal
@@ -264,6 +374,19 @@ system follows).
 - [ ] Reactive narration: demo/canned narration fixtures end on a decision point; the opening
       premise prompt forbids presumed motivation and stages the entry offer (prompt-contract
       assertion + fixture).
+
+**Encounter-states machine (§9.2, verified 2026-07-19/20 — `story-live.mjs` $0 lifecycle + a
+12-segment paid sim driven to a committed ending):**
+
+- [x] Opened beat carries a canned encounter spec; an "offered" reply enters it; attempts drive it
+      to a tier; the outcome map applies milestones; the beat exits and the next opens.
+- [x] Skill-challenge tiers (participation / edge / DC escalation) unit-tested; social exits +
+      disposition-forced exit; puzzle progress/hints/attempt-exhaustion + escalating consequence;
+      random spawn interrupts and restores the interrupted encounter (single-depth stack).
+- [x] Outcome maps validated against authored vocabulary (drift rejected); recognizer removed;
+      objective completion force-re-plans the open beat.
+- [x] Minimal retrieval memory: pgvector insert + nearest-neighbor retrieval, adventure-scoped,
+      anon-unreadable; embed/retrieve failures degrade to no memories.
 
 ## 11. Open questions
 

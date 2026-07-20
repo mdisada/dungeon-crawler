@@ -438,12 +438,22 @@ async function acceptOffer(
     return diffs
   })
   // The quest's first beat opens immediately (F08 SS9.1 event-driven pacing); the acceptance
-  // reaction folds into its opening narration so the table gets one beat, not two.
-  await planAndOpenBeat(
-    service, env, sessionId, newLoopId, 'quest_accepted',
-    `${character.name} just accepted ${giver}'s offer ("${offer.quest_label}", ${terms.gold} gp promised) - ` +
-      `narrate ${giver}'s reaction first.`,
-  )
+  // reaction folds into its opening narration so the table gets one beat, not two. This is
+  // the longest agent chain in the app - a failure must never wedge the table on typing:true
+  // (the acceptance itself is already durable; the beat can open later via plan_beat/nudge).
+  try {
+    await planAndOpenBeat(
+      service, env, sessionId, newLoopId, 'quest_accepted',
+      `${character.name} just accepted ${giver}'s offer ("${offer.quest_label}", ${terms.gold} gp promised) - ` +
+        `narrate ${giver}'s reaction first.`,
+    )
+  } catch (err) {
+    console.error('beat open after acceptance failed', err)
+    await logEvent(service, env.adventureId, sessionId, 'incident', {
+      kind: 'beat_open_failed', trigger: 'quest_accepted', core_loop_id: newLoopId,
+    })
+    await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
+  }
   return { status: 200, body: { ok: true, resolved: 'offer_accepted', core_loop_id: newLoopId } }
 }
 
@@ -612,9 +622,9 @@ export async function finishNegotiation(
 }
 
 /**
- * DM/creator override (F07 SS5.2 checkbox family): completes the quest's loop and pays the
- * ledger exactly once (idempotency via paid_at). Automatic completion via objective predicates
- * arrives later in Phase 6.
+ * Completes the quest's loop and pays the ledger exactly once (idempotency via paid_at). Reached
+ * two ways: the DM/creator `complete_quest` override (F07 SS5.2), and automatically when a quest's
+ * final objective completes (see maybeCompleteQuestForObjective, F08 SS9).
  */
 export async function completeQuest(
   service: SupabaseClient,
@@ -695,4 +705,31 @@ export async function completeQuest(
     'Quest complete',
   )
   return { status: 200, body: { ok: true, paid, gold: paid ? terms.gold : 0 } }
+}
+
+/**
+ * F08 SS9 deterministic quest completion: when a completed objective was the last open objective
+ * of an accepted quest's contract, close the quest (loop + one-time ledger payout) the same way
+ * the DM `complete_quest` override does. No-op for objectives with no contract or whose contract
+ * still has open objectives. Returns true when a quest was completed.
+ */
+export async function maybeCompleteQuestForObjective(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  completedObjectiveId: string,
+  completedObjectiveIds: Set<string>,
+): Promise<boolean> {
+  const accepted = await offersByStatus(service, env.adventureId, ['accepted'])
+  let completed = false
+  for (const offer of accepted) {
+    if (!offer.contract_id || offer.paid_at) continue
+    const contract = await loadContract(service, env.adventureId, offer.contract_id)
+    const objectiveIds = contract?.objective_ids ?? []
+    if (objectiveIds.length === 0 || !objectiveIds.includes(completedObjectiveId)) continue
+    if (!objectiveIds.every((id) => completedObjectiveIds.has(id))) continue
+    const result = await completeQuest(service, env, sessionId, offer.id)
+    if (result.status === 200) completed = true
+  }
+  return completed
 }
