@@ -13,12 +13,14 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
+import { liveLines } from '../_shared/state/index.ts'
 import type { Json } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { writeMemoryFragment } from './memory.ts'
 import { applyMilestones, milestoneVocabulary } from './milestones.ts'
 import { recordProposal } from './proposals.ts'
 import { runArchivist } from './story-agents.ts'
+import { compactContextDiff } from './orchestrate.ts'
 import { commitDiffs, loadState, logEvent } from './util.ts'
 
 /** How much of the closed phase the Archivist reads. */
@@ -47,7 +49,9 @@ export async function recordSceneLedger(
 ): Promise<LedgerResult> {
   try {
     const state = (await loadState(service, env.adventureId)).state
-    const transcript = state.dialogue.lines
+    // Only the lines belonging to the phase that just closed - anything older is already a
+    // digest, and re-reading it would double-count what previous ledgers recorded.
+    const transcript = liveLines(state)
       .slice(-TRANSCRIPT_WINDOW)
       .map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`)
     if (transcript.length === 0) return EMPTY
@@ -98,6 +102,10 @@ export async function recordSceneLedger(
         })
       }
     }
+
+    // Compaction: the closed phase's raw transcript stops being sent to agents from here on.
+    // Done even when the digest is empty, so the window still advances past a dead phase.
+    await commitDiffs(service, env.adventureId, (s) => [compactContextDiff(s, ledger.digest)])
 
     if (ledger.digest) {
       // Per-PC credit has to survive into memory: coop affinity and spotlight balance read it,

@@ -23,8 +23,8 @@ import { recordSceneLedger } from './ledger.ts'
 import { applyMilestones } from './milestones.ts'
 import { narrationBeat } from './narration.ts'
 import {
-  activePcIds, appendLinesDiff, characterProfiles, loadPartyCharacters, newLine, partySkillList,
-  pendingDiffs, typingDiff,
+  activePcIds, agentContextLines, appendLinesDiff, characterProfiles, loadPartyCharacters,
+  newLine, partySkillList, pendingDiffs, typingDiff,
 } from './orchestrate.ts'
 import type { CharacterRow } from './orchestrate.ts'
 import { evaluateStoryProgress } from './progress.ts'
@@ -453,7 +453,7 @@ export async function handleChallengeIntent(
       objective: null,
       partySkills: partySkillList(party),
       partySize: party.length,
-      recentEvents: state.dialogue.lines.slice(-5).map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`),
+      recentEvents: agentContextLines(state, 5),
       knownLocations: [],
       knownNpcs: [],
       milestones: [],

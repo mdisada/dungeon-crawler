@@ -26,8 +26,9 @@ import {
 import { handlePuzzleIntent, openPuzzleFromSpec } from './puzzle-encounter.ts'
 import { openSocialEncounter } from './social-encounter.ts'
 import {
-  activePcIds, appendLinesDiff, characterProfiles, loadCharacter, loadPartyCharacters,
-  loadPlayContext, newLine, partySkillList, pendingDiffs, skillModifierFor, typingDiff,
+  activePcIds, agentContextLines, appendLinesDiff, characterProfiles, loadCharacter,
+  loadPartyCharacters, loadPlayContext, newLine, partySkillList, pendingDiffs, skillModifierFor,
+  typingDiff,
 } from './orchestrate.ts'
 import { classifyAndHandle, loadLoops, noteIntentForClassifier, planAndOpenBeat } from './beats.ts'
 import { activeLoop, listMilestoneAtoms } from '../_shared/story/index.ts'
@@ -322,7 +323,7 @@ async function adjudicate(
         : null,
       partySkills,
       partySize: party.length,
-      recentEvents: state.dialogue.lines.slice(-5).map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`),
+      recentEvents: agentContextLines(state, 5),
       knownLocations: ((locationRows.data ?? []) as { name: string }[]).map((l) => l.name),
       knownNpcs: ((npcRows.data ?? []) as { name: string }[]).map((n) => n.name),
       milestones: [...new Set([

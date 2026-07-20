@@ -12,7 +12,7 @@ import { runConsistency, runNarrator, runNarratorOptions } from './agents.ts'
 import type { AgentEnv, NarrationStyle } from './agents.ts'
 import { retrieveMemories } from './memory.ts'
 import {
-  appendLinesDiff, loadPartyCharacters, newLine, partyProfileLines, typingDiff,
+  agentContextLines, appendLinesDiff, loadPartyCharacters, newLine, partyProfileLines, typingDiff,
 } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
 import { assertOk, commitDiffs, loadContext, loadState, logEvent } from './util.ts'
@@ -24,7 +24,7 @@ async function adventureNpcs(service: SupabaseClient, adventureId: string): Prom
 }
 
 function factSheet(state: GameState): string {
-  const recent = state.dialogue.lines.slice(-6).map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`)
+  const recent = agentContextLines(state, 6)
   return [
     `Location: ${state.scene.locationName || 'unknown'}; mode: ${state.scene.mode}; day ${state.scene.day}`,
     `Party: ${state.players.list.map((p) => p.name).join(', ')}`,

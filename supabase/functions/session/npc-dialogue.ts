@@ -20,8 +20,8 @@ import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { challengeCheckResolved } from './encounters.ts'
 import { directedNarrationPrompt, narrationBeat, publishNarration, stageNarrationReview } from './narration.ts'
 import {
-  appendLinesDiff, loadPartyCharacters, newLine, partyProfileLines, pcLineCounts, pendingDiffs,
-  typingDiff,
+  agentContextLines, appendLinesDiff, loadPartyCharacters, newLine, partyProfileLines,
+  pcLineCounts, pendingDiffs, typingDiff,
 } from './orchestrate.ts'
 import { retrieveMemories } from './memory.ts'
 import { evaluateStoryProgress } from './progress.ts'
@@ -126,7 +126,7 @@ async function loadNpcBundle(
       topicStack: state.dm?.conversation.topicStack ?? [],
       revealedThisScene: state.dm?.conversation.revealedThisScene ?? [],
     },
-    recentLines: state.dialogue.lines.slice(-12).map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`),
+    recentLines: agentContextLines(state, 12),
     utterance,
     checkResult: checkResult
       ? { skill: checkResult.skill, success: checkResult.success, margin: checkResult.margin }

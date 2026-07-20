@@ -9,8 +9,11 @@ import {
 } from '../_shared/character/index.ts'
 import type { AbilityKey, AbilityScores, SkillName } from '../_shared/character/index.ts'
 import type { PendingPromptState } from '../_shared/state/index.ts'
+import { agentContextLines, nextDigests } from '../_shared/state/index.ts'
 import type { DialogueLine, GameState, Json, StateDiff } from '../_shared/state/index.ts'
 import { assertOk, loadContext } from './util.ts'
+
+export { agentContextLines }
 import type { AdventureRow, MemberRow } from './util.ts'
 
 const LINE_HISTORY_LIMIT = 100
@@ -220,4 +223,21 @@ export function pcLineCounts(state: GameState): Map<string, number> {
     if (characterId) counts.set(characterId, (counts.get(characterId) ?? 0) + 1)
   }
   return counts
+}
+
+/**
+ * Close the window on a phase: its transcript collapses to `digest` and stops being sent to
+ * agents. Called by the scene ledger, which produced the digest. Assembly itself lives in
+ * _shared/state/context-window.ts so it is unit-tested.
+ */
+export function compactContextDiff(state: GameState, digest: string): StateDiff {
+  return {
+    domain: 'dm',
+    patch: {
+      contextWindow: {
+        digests: nextDigests(state.dm?.contextWindow?.digests ?? [], digest),
+        sinceLineId: state.dialogue.lines.at(-1)?.id ?? null,
+      } as unknown as Json,
+    },
+  }
 }

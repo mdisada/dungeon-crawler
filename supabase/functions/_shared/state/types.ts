@@ -315,6 +315,20 @@ export interface DmState {
   story?: { offLoopStreak: number }
   /** Hidden spec of the open encounter; null/absent when no encounter is open. */
   encounterSpec?: EncounterSpecState | null
+  /**
+   * Compacted agent context (optional, absent pre-compaction). Closed phases collapse to a
+   * one-line digest and their raw transcript stops being sent to agents - the payload, not the
+   * chain length, is what grew all session and blew the worker's resource ceiling. Players are
+   * unaffected: dialogue.lines keeps the full scroll-back.
+   */
+  contextWindow?: ContextWindowState
+}
+
+export interface ContextWindowState {
+  /** Newest last, bounded - one per closed phase. */
+  digests: string[]
+  /** Raw lines from this id onward are still live context; everything older is digested. */
+  sinceLineId: string | null
 }
 
 export type EncounterKind = 'skill_challenge' | 'puzzle' | 'social' | 'combat'

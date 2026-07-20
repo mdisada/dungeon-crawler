@@ -18,8 +18,8 @@ import { narrationBeat } from './narration.ts'
 import { endEncounter, startSocial } from './social-staging.ts'
 import { openPuzzleFromSpec } from './puzzle-encounter.ts'
 import {
-  appendLinesDiff, characterProfiles, loadPartyCharacters, newLine, partyProfileLines,
-  partySkillList, typingDiff,
+  agentContextLines, appendLinesDiff, characterProfiles, loadPartyCharacters, newLine,
+  partyProfileLines, partySkillList, typingDiff,
 } from './orchestrate.ts'
 import type { CharacterRow } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
@@ -100,7 +100,7 @@ export async function handleCutsceneIntent(
       hook: spec ? { kind: spec.kind, label: spec.label, stakes: spec.stakes } : null,
       knownLocations: ((locationRows.data ?? []) as { name: string }[]).map((l) => l.name),
       knownNpcs: ((npcRows.data ?? []) as { name: string }[]).map((n) => n.name),
-      recentEvents: state.dialogue.lines.slice(-5).map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`),
+      recentEvents: agentContextLines(state, 5),
       recentFolds,
     })
   } catch (err) {
