@@ -12,6 +12,7 @@
 // Requires the same env as orchestration-live.mjs + OPENROUTER_API_KEY set on the deployed
 // session function. Includes a 70s idle wait for the nudge phase (total runtime ~3 min).
 import { readFileSync } from 'node:fs'
+import { pinTestModels, TEST_MODEL } from './test-model-map.mjs'
 
 function readEnvVar(path, name) {
   const text = readFileSync(path, 'utf8')
@@ -86,10 +87,8 @@ async function main() {
   for (const [key, email] of Object.entries(emails)) userIds[key] = await createConfirmedUser(email)
   const gm = await signIn(emails.gm)
   const p2 = await signIn(emails.p2)
-  await serviceRest('POST', 'user_settings?on_conflict=user_id', {
-    user_id: userIds.gm, provider: 'openrouter',
-  }).catch(() => {})
-  console.log('setup: users created')
+  await pinTestModels(serviceRest, userIds.gm)
+  console.log(`setup: users created (all agents pinned to ${TEST_MODEL})`)
 
   // ---- Authored mini-adventure (real agents: demo false) ----
   const [adventure] = await serviceRest('POST', 'adventures', {

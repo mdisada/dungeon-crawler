@@ -276,7 +276,7 @@ async function main() {
       snap.created.password = password
       writeFileSync(SNAP_FILE, JSON.stringify(snap, null, 2))
       gm = await signIn(email)
-      await serviceRest('POST', 'user_settings?on_conflict=user_id', { user_id: snap.created.userId, provider: 'openrouter' }).catch(() => {})
+      await pinTestModels(serviceRest, snap.created.userId)
 
       const [sourceChar] = await serviceRest('GET', 'characters?is_complete=eq.true&select=*&limit=1')
       if (!sourceChar) throw new Error('no complete character found to clone')

@@ -435,3 +435,46 @@ export async function runClimaxAuthor(
     return `The threads draw together toward ${ending.title}.`
   }
 }
+
+const SUSPICION_SYSTEM =
+  'A tabletop RPG player just spoke, and the line names one or more NPCs. Decide which of them ' +
+  '- if any - the player is treating as untrustworthy, complicit, or behind what is going ' +
+  'wrong. Reply with ONLY JSON: {"suspected": ["exact name", ...]}. Merely mentioning, ' +
+  'greeting, asking after, or worrying ABOUT someone is NOT suspicion; accusation, distrust, ' +
+  'or naming them as a culprit is. Return an empty array when in doubt.'
+
+/**
+ * Replaces a keyword list ("suspect|liar|traitor|...") that could not tell an accusation from
+ * "is Fendel alright?". Called only once a registry NPC is actually named and no antagonist is
+ * committed yet, so this stays a rare, small call rather than a per-utterance tax.
+ */
+export async function runSuspicionJudge(
+  env: AgentEnv,
+  utterance: string,
+  npcNames: string[],
+): Promise<string[]> {
+  if (npcNames.length === 0) return []
+  if (env.demo) {
+    // The $0 suites still need a deterministic path - fixtures, not production semantics.
+    const t = utterance.toLowerCase()
+    return /(suspect|liar|lying|traitor|behind this|don'?t trust)/.test(t) ? npcNames : []
+  }
+  try {
+    const raw = await agentJson(
+      env, 'adjudicator', SUSPICION_SYSTEM,
+      `NPCs named in the line: ${npcNames.join(', ')}\nPlayer said: "${utterance}"`,
+      120,
+    )
+    const suspected = (typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>).suspected : null)
+    if (!Array.isArray(suspected)) return []
+    const known = new Map(npcNames.map((n) => [n.toLowerCase(), n]))
+    return [...new Set(
+      suspected
+        .filter((s): s is string => typeof s === 'string')
+        .map((s) => known.get(s.toLowerCase().trim()))
+        .filter((n): n is string => Boolean(n)),
+    )]
+  } catch {
+    return [] // a judgement failure must never invent an antagonist
+  }
+}

@@ -1,14 +1,14 @@
 // Meta Loop Steward (F08 SS8): the antagonist's off-screen agenda (advancing on world-clock
 // ticks and session end, surfacing as non-blocking proposals whose accepted form is a rumor
-// ingredient) and the suspicion tally behind BBEG commitment. Keyword tagging for suspicion is
-// the SS11 starting heuristic; the Summarizer refines it later.
+// ingredient) and the suspicion tally behind BBEG commitment. Suspicion is JUDGED by a narrow
+// agent (SS11), gated behind a registry name match so the call stays rare.
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import type { Json } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { recordProposal } from './proposals.ts'
-import { runSteward } from './story-agents.ts'
+import { runSteward, runSuspicionJudge } from './story-agents.ts'
 import { assertOk, loadState, logEvent } from './util.ts'
 
 interface MetaLoopRow {
@@ -107,27 +107,35 @@ export async function antagonistTurn(service: SupabaseClient, env: AgentEnv, ses
   }
 }
 
-const SUSPICION_WORDS = /(suspect|suspicious|liar|lying|lies|hiding something|can'?t trust|don'?t trust|behind this|working with|traitor|villain)/
-
 /** BBEG commitment threshold (F08 SS8): tally >= 5 across >= 2 sessions of signals. */
 export const BBEG_TALLY_THRESHOLD = 5
 
 /**
- * Suspicion tagging on player utterances (starting heuristic per F08 SS11): a registry NPC
- * named alongside hostile/suspicious language bumps their tally. At threshold, the BBEG
- * commitment proposal fires - full-AI commits only if the NPC's state doesn't contradict it.
+ * Suspicion tagging on player utterances (F08 SS11): a registry NPC the party treats as
+ * complicit bumps their tally. At threshold, the BBEG commitment proposal fires - full-AI
+ * commits only if the NPC's state doesn't contradict it.
+ *
+ * Whether a line is an accusation is a JUDGEMENT, not a keyword match - the old word list
+ * ("suspect|liar|traitor|...") both missed real accusations and fired on "is Fendel alright?".
+ * The judge is gated behind two cheap structural facts, so it stays rare: a registry NPC must
+ * actually be named, and no antagonist may be committed yet.
  */
 export async function noteSuspicion(service: SupabaseClient, env: AgentEnv, sessionId: string, utterance: string): Promise<void> {
-  if (!SUSPICION_WORDS.test(utterance.toLowerCase())) return
   const { data: npcs } = await service.from('npcs').select('id, name, generated').eq('adventure_id', env.adventureId)
+  // Name matching against the registry is a lookup, not a guess about meaning.
   const mentioned = ((npcs ?? []) as { id: string; name: string; generated: boolean }[])
     .filter((n) => !n.generated && n.name && utterance.toLowerCase().includes(n.name.toLowerCase()))
   if (mentioned.length === 0) return
 
   const meta = await ensureMetaLoop(service, env)
   if (meta.committed_bbeg_npc_id) return
+
+  const suspected = new Set(await runSuspicionJudge(env, utterance, mentioned.map((n) => n.name)))
+  const accused = mentioned.filter((n) => suspected.has(n.name))
+  if (accused.length === 0) return
+
   const tally = { ...meta.suspicion_tally }
-  for (const npc of mentioned) {
+  for (const npc of accused) {
     tally[npc.id] = (tally[npc.id] ?? 0) + 1
     await logEvent(service, env.adventureId, sessionId, 'suspicion_noted', {
       npc_id: npc.id, name: npc.name, tally: tally[npc.id],

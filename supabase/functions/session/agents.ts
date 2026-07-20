@@ -206,7 +206,11 @@ function cannedClassification(text: string): SocialClassification {
   if (/(lie|swear|pretend|totally)/.test(t)) return { kind: 'influence', skill: 'deception', magnitude: 'costly' }
   if (/(threat|or else|last chance)/.test(t)) return { kind: 'influence', skill: 'intimidation', magnitude: 'costly' }
   if (/(read|sense|study|size up)/.test(t)) return { kind: 'insight', skill: 'insight' }
-  if (/^(i|we) (all )?(draw|attack|climb|leap|vault|run|sneak|grab|push|pull|throw|smash|force|brace|search|examine)\b/.test(t)) return { kind: 'action' }
+  // Canned fixture only - the real classifier judges this. Kept so the $0 suites can assert
+  // that a physical action mid-conversation escapes the NPC pipeline.
+  if (/^(i|we) (all )?(draw|attack|climb|leap|vault|run|sneak|grab|push|pull|throw|smash|force|brace|search|examine)\b/.test(t)) {
+    return { kind: 'action' }
+  }
   return { kind: 'conversation' }
 }
 
@@ -215,9 +219,14 @@ const CLASSIFIER_SYSTEM =
   '{"kind": "conversation"} for plain talk, ' +
   '{"kind": "insight"} when they probe what the NPC hides/feels, {"kind": "influence", ' +
   '"skill": "persuasion"|"deception"|"intimidation", "magnitude": "trivial"|"reasonable"|"costly"|"against_nature"} ' +
-  'when they push the NPC to act/agree, or {"kind": "action"} when the input is primarily a ' +
+  'when they push the NPC to act/agree, {"kind": "action"} when the input is primarily a ' +
   'PHYSICAL action or maneuver rather than something spoken (drawing steel, climbing away, ' +
-  'searching the room). Magnitude = how big the ask is for THIS npc. Most talk is plain conversation.'
+  'searching the room), or {"kind": "ask_dm"} when they are asking about PHYSICAL DETAIL OF ' +
+  'THE SURROUNDINGS that no person is being asked for - reading something in front of them, ' +
+  'what else is in the room. Magnitude = how big the ask is for THIS npc.\n' +
+  'Most talk is plain conversation. Decide ask_dm vs conversation by ONE test: could this NPC ' +
+  'answer it from what they know? If yes it is conversation, even when phrased as a question ' +
+  'about the world - "what happened to the keeper?" is asking THEM, not the DM.'
 
 export async function runSocialClassifier(env: AgentEnv, utterance: string, npcSummary: string): Promise<SocialClassification> {
   if (env.demo) return cannedClassification(utterance)
@@ -536,14 +545,20 @@ export async function runNarratorOptions(env: AgentEnv, contextPrompt: string): 
       'Shouting erupts outside - torchlight gathers near the well.',
     ]
   }
-  const raw = await agentJson(
+  // Same intermittent structured-output failure the NPC agent guards against: the model
+  // answers, but not as {"options":[...]}, so the parse yields nothing and narrate_next 502s
+  // ("Narrator produced no options", seen live 2026-07-20). callAgentText's retry only covers
+  // EMPTY completions - a malformed shape needs a fresh attempt here. 300 tokens was also tight
+  // for 4 summaries once leaked reasoning tokens eat the budget.
+  const attempt = async () => parseNarrationOptions(await agentJson(
     env,
     'narrator',
     'Offer 3-4 directions the story could go next. Reply with ONLY JSON: {"options": [{"summary": "one sentence"}]}.',
     contextPrompt,
-    300,
-  )
-  return parseNarrationOptions(raw)
+    600,
+  ))
+  const options = await attempt().catch(() => [])
+  return options.length > 0 ? options : await attempt()
 }
 
 const CONSISTENCY_SYSTEM =

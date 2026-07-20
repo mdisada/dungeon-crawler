@@ -32,6 +32,30 @@ function factSheet(state: GameState): string {
   ].join('\n')
 }
 
+/** "Dead before the story began" is scene-setting, not a contradiction - spell that out. */
+async function preexistingDeadLine(service: SupabaseClient, adventureId: string): Promise<string> {
+  const { data } = await service
+    .from('npcs')
+    .select('name, initial_state')
+    .eq('adventure_id', adventureId)
+    .neq('initial_state', 'alive')
+  const rows = (data ?? []) as { name: string; initial_state: string }[]
+  if (rows.length === 0) return ''
+  const dead = rows.filter((n) => n.initial_state === 'dead').map((n) => n.name)
+  const absent = rows.filter((n) => n.initial_state === 'absent').map((n) => n.name)
+  return (
+    (dead.length > 0
+      ? `
+Already dead before the story began: ${dead.join(', ')}. Their body/legacy may be described, ` +
+        'examined and discussed freely - but they CANNOT speak, act, or appear alive.'
+      : '') +
+    (absent.length > 0
+      ? `
+Not present in the story yet: ${absent.join(', ')} - may be spoken about, but cannot appear.`
+      : '')
+  )
+}
+
 export const MECHANICAL_FALLBACK = 'The attempt is resolved; the outcome stands.'
 
 /**
@@ -49,7 +73,12 @@ export async function publishNarration(
   const state = (await loadState(service, env.adventureId)).state
   const npcs = await adventureNpcs(service, env.adventureId)
   const npcStates = state.dm?.facts.npcStates ?? {}
-  const facts = factSheet(state)
+  // Anyone the guide authored as already dead/absent (a murder victim) may be NAMED, examined
+  // and discussed - that is the whole subject of a mystery. Only speaking or appearing alive is
+  // off limits, which is a judgement, so it goes to the checker as a fact rather than a
+  // deterministic name-match block (which fell back to mechanical text, live 2026-07-21).
+  const preexisting = await preexistingDeadLine(service, env.adventureId)
+  const facts = `${factSheet(state)}${preexisting}`
   // Retrieval memory (Slice 7): long-form cutscenes ground on what past sessions established.
   const memories = style === 'exposition' ? await retrieveMemories(service, env, prompt) : []
   const memoryLines = memories.length > 0

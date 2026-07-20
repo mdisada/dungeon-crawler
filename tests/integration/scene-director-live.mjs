@@ -10,6 +10,7 @@
 //
 // Usage: node tests/integration/scene-director-live.mjs
 import { readFileSync } from 'node:fs'
+import { pinTestModels, TEST_MODEL } from './test-model-map.mjs'
 
 function readEnvVar(path, name) {
   const text = readFileSync(path, 'utf8')
@@ -81,7 +82,7 @@ function note(label, value) {
 async function main() {
   userId = await createConfirmedUser(email)
   const gm = await signIn(email)
-  await serviceRest('POST', 'user_settings?on_conflict=user_id', { user_id: userId, provider: 'openrouter' }).catch(() => {})
+  await pinTestModels(serviceRest, userId)
   console.log('setup: user created')
 
   const [adventure] = await serviceRest('POST', 'adventures', {

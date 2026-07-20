@@ -10,6 +10,7 @@ import { idleNudgeAction } from './beats.ts'
 import { hintAction } from './hints.ts'
 import { debugUsage } from './debug.ts'
 import { playerIntent } from './intent.ts'
+import { runStoryProgressTail } from './progress.ts'
 import { endSession, manualCheckpoint, restoreCheckpoint, startSession } from './lifecycle.ts'
 import { activate, admit, join, leave, pickCharacter, regenInvite, setReady } from './membership.ts'
 import { narrateNext } from './narration.ts'
@@ -37,6 +38,32 @@ Deno.serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization') ?? ''
+
+    // Internal continuation (service-role only): the story-progress pass hands its agent-heavy
+    // tail to a FRESH worker, because WORKER_RESOURCE_LIMIT is a per-worker ceiling that killed
+    // ~19% of player turns when the whole chain ran in one invocation (playtest 2026-07-20).
+    if (authHeader.replace(/^Bearer\s+/i, '') === SUPABASE_SERVICE_ROLE_KEY) {
+      const internalBody = await req.json()
+      if (internalBody.action !== 'story_progress_tail') {
+        return json(400, { error: 'Unsupported internal action' })
+      }
+      const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+      const { data: adventure } = await service
+        .from('adventures')
+        .select('id, creator_id, demo, mode')
+        .eq('id', String(internalBody.adventure_id ?? ''))
+        .maybeSingle()
+      if (!adventure) return json(404, { error: 'Adventure not found' })
+      await runStoryProgressTail(service, {
+        service,
+        adventureId: adventure.id as string,
+        creatorId: adventure.creator_id as string,
+        demo: Boolean(adventure.demo),
+        mode: adventure.mode as 'full_ai' | 'assist' | null,
+      }, String(internalBody.session_id ?? ''))
+      return json(200, { ok: true, resolved: 'story_progress_tail' })
+    }
+
     const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
     })
