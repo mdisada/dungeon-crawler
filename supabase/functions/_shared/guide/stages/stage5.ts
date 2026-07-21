@@ -5,7 +5,10 @@
 // Budget-Engine-validated against the expected party level (F04 SS2). Encounters are candidate
 // routes, never gates - objectives still complete only via predicates.
 
-import { LETHAL_BUDGET_MULTIPLE, validateEncounterBudget, type BudgetVerdict, type DifficultyPreset } from '../budget.ts'
+import {
+  crToXp, LETHAL_BUDGET_MULTIPLE, partyXpBudget, validateEncounterBudget,
+  type BudgetVerdict, type DifficultyPreset,
+} from '../budget.ts'
 import { Check, extractJsonObject } from '../json.ts'
 import type {
   BossUpdateDraft,
@@ -33,13 +36,25 @@ export interface Stage5Output {
   warnings: string[]
 }
 
+/** SRD CR rungs, low to high - enough range for any party this pipeline builds guides for. */
+const CR_LADDER = ['0', '1/8', '1/4', '1/2', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+
 export function buildStage5Prompt(ctx: Stage5Context): { system: string; user: string; maxTokens: number } {
+  // Told the NUMBER, not an adjective. "an encounter the party can handle" produced 1800 XP
+  // fights for a level-1 party against a 50 XP budget (36x, live 2026-07-22, multi-chapter
+  // chapter 1) - the model has no way to know what "handle" costs unless the sum is on the page.
+  const budgetXp = partyXpBudget(ctx.partyLevel, ctx.partySize, ctx.difficultyPreset)
+  const lethalCeiling = budgetXp * LETHAL_BUDGET_MULTIPLE
+  const usableCrs = CR_LADDER.filter((cr) => (crToXp(cr) ?? Infinity) <= lethalCeiling)
+  const maxUsableCr = usableCrs[usableCrs.length - 1] ?? '0'
+  const crExamples = usableCrs.slice(-4).map((cr) => `CR ${cr} = ${crToXp(cr)} XP`).join(', ') || 'CR 0 = 10 XP'
   const system = `You are the Encounter Designer for a tabletop RPG platform. For one chapter, design candidate encounters per objective, plus tactics and phases for any boss NPCs.
 
 Rules:
 - Encounters are CANDIDATE routes to an objective, not mandatory gates. Cover different pillars where sensible: "battle", "social", "environment".
 - 1-2 encounters per objective. Reference objectives by number and locations/NPCs by their key.
-- Battle encounters list enemies with SRD-style CR strings ("1/4", "3"). Target an encounter the party can handle: party of ${ctx.partySize}, level ${ctx.partyLevel}, difficulty ${ctx.difficultyPreset}.
+- Battle encounters list enemies with SRD-style CR strings ("1/4", "3"). Party of ${ctx.partySize}, level ${ctx.partyLevel}, difficulty ${ctx.difficultyPreset}.
+- BUDGET IS ARITHMETIC, NOT ATMOSPHERE. This party's encounter budget is ${budgetXp} XP. Total adjusted XP must land near it and MUST NOT exceed ${lethalCeiling}. The strongest single creature available to you is CR ${maxUsableCr} (${crToXp(maxUsableCr)} XP) - a higher CR cannot be fought at this level however well it suits the scene, and will be cut from the guide. Do the sum before you answer: ${crExamples}. More weak creatures reads as dangerous and stays winnable; one oversized monster is just a dead party.
 - For each boss NPC give a tactics_profile (opening move, priorities, retreat condition) and 2-3 boss_phases (HP-threshold behavior shifts).
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:

@@ -90,6 +90,12 @@ This can be played solo: do not create content that REQUIRES multiple simultaneo
 
   const system = `You are the Ingredient Generator for a tabletop RPG platform. For one chapter, produce NPCs, locations, and ingredients - the toys the DM places in the world.
 
+LENGTH IS A HARD CONSTRAINT. This is the largest response in the pipeline and it is cut off if it
+runs long - a truncated response is not a partial guide, it is NO guide, and multi-chapter
+adventures failed to generate at all this way. Every description, reveals, note and image_prompt
+is ONE short sentence. Never write two sentences where one carries the idea. Completing every
+required entity briefly beats describing a few of them beautifully.
+
 Rules:
 - REQUIRED ENTITIES: the chapter's registry (listed below) names the NPCs/locations the story already established. Every one of them MUST appear in your response as an npc/location row with the EXACT same name (or be reused by existing key). Missing one is a validation failure.
 - Ingredients are TOYS, not railroads: each one is something players can find, use, ignore, or subvert. Never a mandatory step.

@@ -138,7 +138,7 @@ export async function generateParsed<T>(
   parse: (raw: string) => ParseResult<T>,
   priorError: string | null = null,
 ): Promise<T> {
-  const call = (user: string) =>
+  const call = (user: string, maxTokens: number = prompt.maxTokens) =>
     callAgentText({
       serviceClient: db,
       openRouterApiKey,
@@ -147,7 +147,7 @@ export async function generateParsed<T>(
       agentRole,
       system: prompt.system,
       user,
-      maxTokens: prompt.maxTokens,
+      maxTokens,
     })
 
   const invocationStart = Date.now()
@@ -166,16 +166,25 @@ export async function generateParsed<T>(
     throw new AgentCallError(`stage output failed validation (no time budget for an in-invocation retry): ${parsed.errors.slice(0, 8).join('; ')}`)
   }
 
+  // A reply that was CUT OFF cannot be repaired by asking again at the same length - it just gets
+  // cut off again, which is what four identical "Expected ',' or '}'" retries looked like when
+  // multi-chapter stage 4 (every NPC, location and ingredient for a chapter) outgrew its 4000
+  // token budget and no adventure could be generated at all. Retry with room to finish. The cap
+  // is a ceiling, not a spend: a reply that already fits costs exactly the same as before.
+  const truncated = !parsed.ok && parsed.errors.some((e) => e.includes('does not parse'))
   const feedback = `${prompt.user}
 
 Your previous response was rejected by the schema validator:
 ${parsed.errors.slice(0, 12).join('\n')}
-
-Previous response (for reference):
-${first.slice(0, 6000)}
-
+${truncated
+    // Echoing a truncated draft back spends input tokens re-reading a broken object and invites
+    // the model to continue it rather than write a complete one.
+    ? '\nThat response was CUT OFF before it finished. Write the whole object again, and keep every description to one short sentence so it fits.\n'
+    : `\nPrevious response (for reference):\n${first.slice(0, 6000)}\n`}
 Respond again with ONLY the corrected JSON object.`
-  const second = await call(feedback)
+  // Bounded, not doubled: these budgets are sized against the 150s edge-invocation kill, so an
+  // unbounded raise would trade a parse failure for a killed invocation - the worse of the two.
+  const second = await call(feedback, truncated ? Math.min(prompt.maxTokens * 2, 6000) : prompt.maxTokens)
   const reparsed = parse(second)
   if (reparsed.ok) return reparsed.data
   throw new AgentCallError(`stage output failed validation after retry: ${reparsed.errors.slice(0, 8).join('; ')}`)
