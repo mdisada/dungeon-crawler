@@ -88,6 +88,13 @@ Cooperative content (REQUIRED - this adventure has ${ctx.seed.minPlayers}+ playe
       : `
 This can be played solo: do not create content that REQUIRES multiple simultaneous characters.`
 
+  // The required entities are non-negotiable, so the ingredient ask is what has to give when a
+  // chapter has a big cast. Court's multi-chapter stage 4 failed all four retries - truncating,
+  // then malforming under the same pressure - because it was asked for a full ingredient spread
+  // on top of the largest registry in the test set (live 2026-07-22).
+  const mandatoryEntities = ctx.requiredEntities.length
+  const ingredientMax = mandatoryEntities >= 8 ? 6 : INGREDIENTS_PER_CHAPTER.defaultMax
+  const ingredientMin = Math.min(INGREDIENTS_PER_CHAPTER.min, ingredientMax)
   const system = `You are the Ingredient Generator for a tabletop RPG platform. For one chapter, produce NPCs, locations, and ingredients - the toys the DM places in the world.
 
 LENGTH IS A HARD CONSTRAINT. This is the largest response in the pipeline and it is cut off if it
@@ -99,7 +106,7 @@ required entity briefly beats describing a few of them beautifully.
 Rules:
 - REQUIRED ENTITIES: the chapter's registry (listed below) names the NPCs/locations the story already established. Every one of them MUST appear in your response as an npc/location row with the EXACT same name (or be reused by existing key). Missing one is a validation failure.
 - Ingredients are TOYS, not railroads: each one is something players can find, use, ignore, or subvert. Never a mandatory step.
-- ${INGREDIENTS_PER_CHAPTER.defaultMin}-${INGREDIENTS_PER_CHAPTER.defaultMax} ingredients for this chapter, each linked to at least one objective (by objective number) and tagged with the pillars it serves ("combat", "social", "exploration").
+- ${ingredientMin}-${ingredientMax} ingredients for this chapter, each linked to ONE or TWO objectives by number (objective_numbers holds 1-2 entries, never more) and tagged with the pillars it serves ("combat", "social", "exploration").
 - Every scene's cast and places must exist: create the NPCs and locations the scene sketches imply. Mark the chapter's main villain (if present here) as role "boss".
 - "initial_state" is where the NPC stands when play BEGINS: "alive" (default), "dead", or "absent" (alive but not reachable yet). A murder victim, or anyone the premise says is already dead or missing, MUST NOT be "alive" - the live game will otherwise stage them and have them speak.
 - Reuse existing NPCs/locations by their key instead of duplicating them.

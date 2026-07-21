@@ -45,13 +45,17 @@ export function buildStage5Prompt(ctx: Stage5Context): { system: string; user: s
   const usableCrs = CR_LADDER.filter((cr) => (crToXp(cr) ?? Infinity) <= lethalCeiling)
   const maxUsableCr = usableCrs[usableCrs.length - 1] ?? '0'
   const crExamples = usableCrs.slice(-4).map((cr) => `CR ${cr} = ${crToXp(cr)} XP`).join(', ') || 'CR 0 = 10 XP'
+  // A pack of 3-6 costs DOUBLE its raw XP (encounterMultiplier), which is how a "reasonable"
+  // handful of mid-CR creatures reached 4200 adjusted against a 500 budget. The model cannot
+  // hit a target it has to multiply blind, so hand it the raw number a group may spend.
+  const groupRawCap = Math.floor(lethalCeiling / 2)
   const system = `You are the Encounter Designer for a tabletop RPG platform. For one chapter, design candidate encounters per objective, plus tactics and phases for any boss NPCs.
 
 Rules:
 - Encounters are CANDIDATE routes to an objective, not mandatory gates. Cover different pillars where sensible: "battle", "social", "environment".
 - 1-2 encounters per objective. Reference objectives by number and locations/NPCs by their key.
 - Battle encounters list enemies with SRD-style CR strings ("1/4", "3"). Party of ${ctx.partySize}, level ${ctx.partyLevel}, difficulty ${ctx.difficultyPreset}.
-- BUDGET IS ARITHMETIC, NOT ATMOSPHERE. This party's encounter budget is ${budgetXp} XP. Total adjusted XP must land near it and MUST NOT exceed ${lethalCeiling}. The strongest single creature available to you is CR ${maxUsableCr} (${crToXp(maxUsableCr)} XP) - a higher CR cannot be fought at this level however well it suits the scene, and will be cut from the guide. Do the sum before you answer: ${crExamples}. More weak creatures reads as dangerous and stays winnable; one oversized monster is just a dead party.
+- BUDGET IS ARITHMETIC, NOT ATMOSPHERE. This party's encounter budget is ${budgetXp} XP; ${lethalCeiling} is the absolute ceiling. Group size INFLATES the cost - the total is multiplied by 1.5 for two creatures and by 2 for three to six - so the number to check is not the raw sum. Two shapes are safe here, and you must pick one: ONE creature of at most CR ${maxUsableCr} (${crToXp(maxUsableCr)} XP), OR a group of 3-6 whose raw XP - that is (CR XP x count), added up - totals no more than ${groupRawCap} XP. Reference: ${crExamples}. Anything above the ceiling is cut from the guide, so a scene built on it arrives gutted. More weak creatures reads as dangerous and stays winnable; one oversized monster is just a dead party.
 - For each boss NPC give a tactics_profile (opening move, priorities, retreat condition) and 2-3 boss_phases (HP-threshold behavior shifts).
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
