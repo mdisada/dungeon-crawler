@@ -143,19 +143,27 @@ export function parseStage5(raw: string, ctx: Stage5Context): ParseResult<Stage5
     }
   })
 
-  const bossUpdates: BossUpdateDraft[] = c.arr(root.boss_updates ?? [], '$.boss_updates', 0, 10).map((raw, i) => {
-    const path = `$.boss_updates[${i}]`
-    const b = c.obj(raw, path)
-    const npcKey = c.str(b.npc_key, `${path}.npc_key`)
-    if (npcKey && npcKeys.get(npcKey) !== 'boss') {
-      c.errors.push(`${path}.npc_key: "${npcKey}" is not a boss NPC`)
-    }
-    return {
-      npcKey,
-      tacticsProfile: c.obj(b.tactics_profile, `${path}.tactics_profile`) as BossUpdateDraft['tacticsProfile'],
-      bossPhases: c.arr(b.boss_phases, `${path}.boss_phases`, 1, 5) as BossUpdateDraft['bossPhases'],
-    }
-  })
+  // Tactics authored for a NON-boss are DROPPED, not fatal. This killed a whole adventure live
+  // (escort, 2026-07-21: "npc:kaelen" is not a boss NPC, four retries, no guide) - and the repair
+  // loop could never win it, because the model keeps offering tactics for the lieutenant it just
+  // wrote a whole chapter about. Extra tactics for a supporting character are surplus, not
+  // corruption; the boss coverage check below is what actually matters and still runs.
+  const bossUpdates: BossUpdateDraft[] = c.arr(root.boss_updates ?? [], '$.boss_updates', 0, 10)
+    .map((raw, i) => {
+      const path = `$.boss_updates[${i}]`
+      const b = c.obj(raw, path)
+      const npcKey = c.str(b.npc_key, `${path}.npc_key`)
+      if (npcKey && npcKeys.get(npcKey) !== 'boss') {
+        warnings.push(`${path}: dropped tactics for "${npcKey}" - it is not a boss NPC.`)
+        return null
+      }
+      return {
+        npcKey,
+        tacticsProfile: c.obj(b.tactics_profile, `${path}.tactics_profile`) as BossUpdateDraft['tacticsProfile'],
+        bossPhases: c.arr(b.boss_phases, `${path}.boss_phases`, 1, 5) as BossUpdateDraft['bossPhases'],
+      }
+    })
+    .filter((b): b is BossUpdateDraft => b !== null)
 
   const bossKeys = ctx.npcs.filter((n) => n.role === 'boss').map((n) => n.key)
   const updatedKeys = new Set(bossUpdates.map((b) => b.npcKey))

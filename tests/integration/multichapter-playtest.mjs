@@ -456,6 +456,31 @@ async function main() {
   // applyMilestones logs every dropped claim but nothing ever printed them. The TEXT is what
   // distinguishes a paraphrase from a claim that was authored vocabulary when the Archivist
   // saw it and had gone stale by the time it was applied.
+  // The raw text behind every "not an object" 500. Logged server-side since 2026-07-21; without
+  // printing it here the diagnostic may as well not exist.
+  const unparsed = events.filter((e) => e.type === 'agent_output_unparsed')
+  if (unparsed.length > 0) {
+    console.log(`    agent replies UNPARSEABLE: ${unparsed.length}`)
+    unparsed.forEach((e) => console.log(`      [${e.payload?.role}] ${e.payload?.chars} chars: ${JSON.stringify(e.payload?.head)}${e.payload?.tail ? ` ... ${JSON.stringify(e.payload.tail)}` : ''}`))
+    // completion_tokens settles WHY. At or near the role's cap means the reply was cut off and
+    // the budget is the problem; a handful of tokens means the model stopped on its own, which
+    // no cap will fix. Two "fixes" were shipped against this without the number in hand.
+    // Reported per ROLE rather than per broken row: matching a row to its failure by re-parsing
+    // response_text silently matched nothing, and a diagnostic that can quietly return empty is
+    // worse than none. Every call by an affected role, with the cap alongside - if the ceiling is
+    // where these land, the budget is the problem; if they die well short of it, no cap will help.
+    const caps = { adjudicator: 1000, summarizer: 500, consistency_checker: 300, beat_planner: 900 }
+    const affected = [...new Set(unparsed.map((e) => e.payload?.role).filter(Boolean))]
+    const usageRows = await serviceRest('GET', `usage_log?adventure_id=eq.${advId}&select=agent_role,completion_tokens`)
+    affected.forEach((role) => {
+      const toks = usageRows.filter((u) => u.agent_role === role).map((u) => Number(u.completion_tokens) || 0)
+      if (toks.length === 0) return console.log(`      -> ${role}: no usage rows`)
+      const cap = caps[role]
+      const max = Math.max(...toks)
+      const atCap = cap ? toks.filter((t) => t >= cap * 0.9).length : 0
+      console.log(`      -> ${role}: ${toks.length} calls, completion_tokens max=${max} avg=${Math.round(toks.reduce((a, b) => a + b, 0) / toks.length)}${cap ? ` of ${cap} cap; ${atCap} call(s) at >=90% of cap` : ''}`)
+    })
+  }
   const rejectedMilestones = events.filter((e) => e.type === 'scene_effect_rejected' && e.payload?.effect === 'milestone')
   if (rejectedMilestones.length > 0) {
     console.log(`    milestone claims REJECTED: ${rejectedMilestones.length}`)

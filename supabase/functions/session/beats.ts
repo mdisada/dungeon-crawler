@@ -206,6 +206,31 @@ export async function planAndOpenBeat(
   // achievable gain, and re-rolling the same prompt is what produced the invented milestone
   // that stalled the loop (live 2026-07-21).
   if (!parsed.ok) parsed = await runBeatPlanner(env, plannerCtx, parsed.errors)
+  // A beat may parse perfectly and still lead nowhere. Live 2026-07-21, court: the objective
+  // needed "party_met_lord_cassian" and the planner authored "The Unfinished Decree" exiting on
+  // "decree_deciphered" - atoms of its own invention. Six beats resolved, the story read well,
+  // and the objective was never touched, because nothing required the beat to be ABOUT it.
+  // One targeted repair, then fail open: a beat pointing the wrong way still beats no beat.
+  const objectiveVocab = plannerCtx.plan.milestones
+  if (parsed.ok && objectiveVocab.length > 0) {
+    const exits = listMilestoneAtoms(parsed.plan.exitConditions)
+    const touchesObjective = [...exits.flags, ...exits.events, ...exits.facts]
+      .some((a) => objectiveVocab.includes(a))
+    if (!touchesObjective) {
+      const aligned = await runBeatPlanner(env, plannerCtx, [
+        `beat.exit_conditions: not one atom comes from the current objective (${objectiveVocab.join(' | ')}). ` +
+        'This beat would resolve without moving the objective one step. Author it so the party ' +
+        'can reach at least ONE of those milestones, and put that milestone verbatim in ' +
+        'exit_conditions and in the encounter on_success map.',
+      ])
+      if (aligned.ok) {
+        const retryExits = listMilestoneAtoms(aligned.plan.exitConditions)
+        if ([...retryExits.flags, ...retryExits.events, ...retryExits.facts].some((a) => objectiveVocab.includes(a))) {
+          parsed = aligned
+        }
+      }
+    }
+  }
   const plan: BeatPlan = parsed.ok
     ? parsed.plan
     : {
@@ -313,6 +338,9 @@ export async function planAndOpenBeat(
     braided: plan.braided.length as unknown as Json, coop_demand: plan.braided.length > 0,
     variety_flags: flags as unknown as Json,
     encounter_kind: plan.encounter?.kind ?? null,
+    // The beat's OWN encounter, so a spent beat can be told apart from one whose party merely
+    // wandered into an ad-hoc fight. Without it, any resolved encounter looks like the beat's.
+    encounter_label: plan.encounter?.label ?? null,
   })
 
   // Live Hook Weaver pass (F08 SS6): refresh this objective's live hooks, delivered as agent

@@ -80,6 +80,7 @@ Rules:
   atom: {"event": "<short past-tense marker>"} - e.g. "party entered the sunken crypt", "the ritual was interrupted".
   combinators: {"any": [<predicate>...]}, {"all": [<predicate>...]}
 - NEVER use "fact" atoms - live play does not write them (NPC status is tracked by internal id, not by name).
+- The cast is NOT named yet - NPCs are authored after you. So never invent placeholder identities to stand in for them ("claimant_a_arrived", "guard_b_bribed"): at play time an observer sees "Lady Isolde arrived" and has no way to know which letter she was, so that milestone can never be recognised and the objective never completes. Write each atom as something the PARTY accomplished, recognisable from the scene alone ("all_claimants_received", "passage_secured"). Where a step really is per-person, prefer ONE atom covering the set over one atom each.
 - Prefer "any" combinators that honor multiple resolutions (kill OR ally OR outwit); keep any "all" chain to at most 2 atoms.${''}
 
 ${ctx.adventureType === 'one_shot'
@@ -93,9 +94,19 @@ Respond with ONLY a JSON object, no prose, in exactly this shape:
 { "objectives": [ { "title": "...", "hidden_description": "...", "completion_predicates": { ... } } ] }`
 
   const sceneList = ctx.scenes.map((s, i) => `Scene ${i + 1}: ${s.sketch}`).join('\n')
+  // Stage 1's entity registry, which this prompt used to withhold. Without it the only way to
+  // write a milestone about a person was to invent a placeholder for them ("claimant_a_arrived"),
+  // and at play time an observer who sees "Lady Isolde arrived" cannot tell which letter she was,
+  // so the objective never completes. The names exist before this stage runs - pass them on.
+  const cast = (ctx.metaLoop.entities ?? [])
+    .map((e) => `- ${e.name} (${e.kind}): ${e.note}`)
+    .join('\n')
   const user = `Meta loop antagonist: ${ctx.metaLoop.antagonist}
 Stakes: ${ctx.metaLoop.stakes}
-
+${cast ? `
+Named cast and places already fixed by the story spine - milestone atoms about any of them MUST use these exact names, never a placeholder:
+${cast}
+` : ''}
 Chapter ${ctx.chapterNumber}: ${ctx.chapter.title}
 Arc summary: ${ctx.chapter.arcSummary}
 

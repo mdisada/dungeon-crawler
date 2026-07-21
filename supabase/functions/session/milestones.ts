@@ -15,10 +15,17 @@ import { commitDiffs, loadState, logEvent } from './util.ts'
 export async function milestoneVocabulary(
   service: SupabaseClient,
   adventureId: string,
-): Promise<{ flags: string[]; events: string[]; facts: string[] }> {
+): Promise<{
+  flags: string[]
+  events: string[]
+  facts: string[]
+  /** What the current objective is FOR - the atoms alone are identifiers, not meaning. */
+  objective: { title: string; hiddenDescription: string } | null
+}> {
   const flags = new Set<string>()
   const events = new Set<string>()
   const facts = new Set<string>()
+  let objective: { title: string; hiddenDescription: string } | null = null
   const add = (predicate: unknown) => {
     const atoms = listMilestoneAtoms(predicate)
     atoms.flags.forEach((f) => flags.add(f))
@@ -32,25 +39,55 @@ export async function milestoneVocabulary(
     .maybeSingle()
   const currentId = (stateRow?.state as { objectives?: { currentId?: string | null } } | null)?.objectives?.currentId ?? null
   if (currentId) {
-    const { data: objective } = await service
-      .from('objectives')
-      .select('completion_predicates')
-      .eq('id', currentId)
-      .maybeSingle()
-    add(objective?.completion_predicates ?? null)
+    // Current objective AND the one after it. Progression used to be strictly sequential: the
+    // vocabulary held only the current objective, so a party that did the NEXT step first - which
+    // is what parties do whenever objectives are not a straight line - accomplished something the
+    // Archivist had no word for, and the current objective sat unfinished forever (court: 0
+    // objectives in 5 of 5 live runs). Lookahead is 1, not all: claiming a climax atom in scene
+    // one would end the adventure early, and one step of slack is what the fiction actually takes.
+    // Nothing completes out of order - evaluation still only ever fires on the current objective,
+    // so a lookahead atom just waits, already true, for its turn to come round.
+    const [{ data: chapters }, { data: objectiveRows }] = await Promise.all([
+      service.from('chapters').select('id, index').eq('adventure_id', adventureId).order('index'),
+      service.from('objectives').select('id, chapter_id, index, title, hidden_description, completion_predicates').eq('adventure_id', adventureId),
+    ])
+    const chapterOrder = new Map(((chapters ?? []) as { id: string; index: number }[]).map((c) => [c.id, c.index]))
+    const ordered = ((objectiveRows ?? []) as {
+      id: string; chapter_id: string; index: number; title: string | null
+      hidden_description: string | null; completion_predicates: unknown
+    }[]).sort((a, b) => {
+      const byChapter = (chapterOrder.get(a.chapter_id) ?? 0) - (chapterOrder.get(b.chapter_id) ?? 0)
+      return byChapter !== 0 ? byChapter : a.index - b.index
+    })
+    const at = ordered.findIndex((o) => o.id === currentId)
+    if (at >= 0) {
+      add(ordered[at].completion_predicates)
+      objective = {
+        title: ordered[at].title ?? '',
+        hiddenDescription: ordered[at].hidden_description ?? '',
+      }
+      if (ordered[at + 1]) add(ordered[at + 1].completion_predicates)
+    }
   }
+  // EVERY beat this adventure has authored, not just the open one. The ledger runs at phase
+  // exits - precisely when a beat closes and the next opens - so a beat atom the Archivist was
+  // legitimately shown had already left the vocabulary by the time applyMilestones rebuilt it,
+  // and the claim was dropped as unauthored ("bram_escaped_enforcers", live 2026-07-21). Roughly
+  // half of all correct observations died in that window. An atom authored for this adventure is
+  // legitimate vocabulary for the rest of it.
   const { data: loops } = await service
     .from('core_loops')
-    .select('current_beat_id')
+    .select('id')
     .eq('adventure_id', adventureId)
-    .eq('status', 'active')
-    .limit(1)
-  const beatId = (loops ?? [])[0]?.current_beat_id as string | undefined
-  if (beatId) {
-    const { data: beat } = await service.from('beats').select('exit_conditions').eq('id', beatId).maybeSingle()
-    add(beat?.exit_conditions ?? null)
+  const loopIds = ((loops ?? []) as { id: string }[]).map((l) => l.id)
+  if (loopIds.length > 0) {
+    const { data: beats } = await service
+      .from('beats')
+      .select('exit_conditions')
+      .in('core_loop_id', loopIds)
+    for (const beat of (beats ?? []) as { exit_conditions: unknown }[]) add(beat.exit_conditions)
   }
-  return { flags: [...flags], events: [...events], facts: [...facts] }
+  return { flags: [...flags], events: [...events], facts: [...facts], objective }
 }
 
 /**

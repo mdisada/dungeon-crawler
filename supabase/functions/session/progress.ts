@@ -317,17 +317,24 @@ async function runStoryProgressHead(
   env: AgentEnv,
   sessionId: string,
 ): Promise<void> {
-  const state = (await loadState(service, env.adventureId)).state
-  const events = await storyEventTags(service, env.adventureId)
-  const world = worldFacts(state, events)
-  const ordered = await orderedObjectives(service, env.adventureId)
-
   // 1. Active objective completion (F08 SS9).
-  const current = ordered.find((o) => o.id === state.objectives.currentId)
+  // Loops, because the vocabulary now looks one objective ahead: by the time an objective becomes
+  // current its atoms may ALREADY be satisfied, and evaluating once per turn would dribble out
+  // one completion per turn while the party waits for credit they earned several turns ago.
+  // Bounded at 3 - each completion narrates, and three at once is already a lot of story to land
+  // in one beat. Everything is re-read each pass: completeObjective moves currentId and flips
+  // reveal_state in the database, so an in-memory snapshot from before it ran is stale.
   let objectiveJustCompleted = false
   let questJustCompleted = false
-  if (current && current.reveal_state === 'active' && evaluatePredicate(current.completion_predicates, world)) {
-    questJustCompleted = await completeObjective(service, env, sessionId, current, ordered)
+  for (let pass = 0; pass < 3; pass++) {
+    const state = (await loadState(service, env.adventureId)).state
+    const events = await storyEventTags(service, env.adventureId)
+    const world = worldFacts(state, events)
+    const ordered = await orderedObjectives(service, env.adventureId)
+    const current = ordered.find((o) => o.id === state.objectives.currentId)
+    if (!current || current.reveal_state !== 'active') break
+    if (!evaluatePredicate(current.completion_predicates, world)) break
+    questJustCompleted = (await completeObjective(service, env, sessionId, current, ordered)) || questJustCompleted
     objectiveJustCompleted = true
   }
 
@@ -382,16 +389,28 @@ export async function runStoryProgressTail(
         .eq('id', loop.currentBeatId)
         .maybeSingle()
       const exitMet = beat?.status === 'active' && beat.exit_conditions && evaluatePredicate(beat.exit_conditions, world)
-      if (exitMet || (objectiveJustCompleted && !questJustCompleted && beat?.status === 'active')) {
+      // A SPENT beat also forces a re-plan. Every beat carries exactly one encounter - the
+      // planner's own words: "the ONLY way this beat can resolve". When that encounter resolves
+      // without satisfying the exit predicate (a failed roll, a missed opportunity), the beat can
+      // never exit and nothing above would ever re-plan it: the party is left with a live beat
+      // that has no remaining route, and the story simply stops. Live 2026-07-21, court: "the
+      // opportunity to deliver messages has passed", then 18 turns of conversation against a dead
+      // beat, 5 auto-hints pointing at an action no longer on offer, 0 objectives. Failing an
+      // encounter must cost the party something, never the story itself.
+      const beatSpent = !exitMet
+        && beat?.status === 'active'
+        && await beatHasNoRouteLeft(service, env.adventureId, beat.id)
+      const trigger = exitMet ? 'beat_exit' : beatSpent ? 'beat_spent' : 'objective_completed'
+      if (exitMet || beatSpent || (objectiveJustCompleted && !questJustCompleted && beat?.status === 'active')) {
         await logEvent(service, env.adventureId, sessionId, 'beat_exit_met', {
-          beat_id: beat!.id, ...(exitMet ? {} : { reason: 'objective_completed' }),
+          beat_id: beat!.id, ...(exitMet ? {} : { reason: trigger }),
         })
         try {
           await planAndOpenBeat(service, env, sessionId, loop.id, exitMet ? 'beat_exit' : 'objective_completed')
         } catch (err) {
           console.error('beat re-plan failed', err)
           await logEvent(service, env.adventureId, sessionId, 'incident', {
-            kind: 'beat_open_failed', trigger: exitMet ? 'beat_exit' : 'objective_completed',
+            kind: 'beat_open_failed', trigger,
           })
         }
       }
@@ -407,6 +426,43 @@ export async function runStoryProgressTail(
     // Background bookkeeping: a failed tail must never surface to the player mid-turn.
     console.error('story progress tail failed', err)
   }
+}
+
+/**
+ * Has this beat run out of ways to resolve? True once the encounter it opened has resolved and
+ * no new one is open, which - since a beat carries exactly one encounter - means its exit
+ * predicate can never be satisfied by anything still on the table.
+ *
+ * Deliberately requires the beat to have HAD an encounter: a beat whose encounter has not opened
+ * yet is young, not spent, and re-planning it would churn a beat the party never got to play.
+ */
+async function beatHasNoRouteLeft(
+  service: SupabaseClient,
+  adventureId: string,
+  beatId: string,
+): Promise<boolean> {
+  const { data: rows } = await service
+    .from('event_log')
+    .select('type, payload')
+    .eq('adventure_id', adventureId)
+    .in('type', ['beat_opened', 'encounter_opened', 'encounter_resolved'])
+    .order('id')
+  const events = (rows ?? []) as { type: string; payload: Record<string, unknown> | null }[]
+  const openedAt = events.findIndex((e) => e.type === 'beat_opened' && e.payload?.beat_id === beatId)
+  if (openedAt < 0) return false
+  const label = events[openedAt].payload?.encounter_label
+  // A beat that never had an encounter to spend is not spent - leave it alone.
+  if (typeof label !== 'string' || !label) return false
+  const since = events.slice(openedAt + 1)
+  // Matched by label, NOT by counting: the party wandering into an ad-hoc fight and winning it
+  // must not look like the beat's own route being used up, or every beat would be re-planned the
+  // moment anything resolved anywhere.
+  const ownResolved = since.some((e) => e.type === 'encounter_resolved' && e.payload?.label === label)
+  if (!ownResolved) return false
+  // ...and nothing it opened is still running, so there is genuinely nothing left to play.
+  const stillOpen = since.filter((e) => e.type === 'encounter_opened').length
+    > since.filter((e) => e.type === 'encounter_resolved').length
+  return !stillOpen
 }
 
 /** Did the most recent progress-relevant event complete an objective? (tail-worker recovery) */

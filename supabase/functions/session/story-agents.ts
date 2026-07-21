@@ -68,6 +68,12 @@ const PLANNER_SYSTEM =
   '"encounter": {"kind": "skill_challenge"|"social"|"puzzle"|"combat", "label": string, "stakes": string, ' +
   '"rationale": string, "on_success": [milestones], "on_partial": [milestones], ' +
   '"on_failure": [milestones]}}}. ' +
+  // The beat exists to move the CURRENT objective. Without this the planner writes a fine beat
+  // about something else entirely and the objective sits untouched however well play goes.
+  'THE BEAT MUST ADVANCE THE CURRENT OBJECTIVE. When objective milestones are listed below, the ' +
+  'party must be able to reach at least ONE of them by playing this beat, and that milestone ' +
+  'must appear VERBATIM in exit_conditions and in the encounter on_success map. A beat the ' +
+  'objective could not notice is a wasted beat, however good the scene. ' +
   'Exit predicates use ONLY atoms {"flag": "<snake_case_decision_or_milestone>", "eq": true} | ' +
   '{"event": "exact past-tense marker"} with {"any": []}/{"all": []} - NEVER "fact" atoms (live ' +
   'play cannot write them). Prefer an "any" of 2-4 flags so multiple player approaches exit the ' +
@@ -568,12 +574,11 @@ export async function runSuspicionJudge(
 
 const ARCHIVIST_SYSTEM =
   'You are the Archivist of a tabletop RPG session. You do NOT write prose - you record what ' +
-  'just became true, so the game engine can act on it. Reply with ONLY JSON: ' +
-  '{"milestones": ["exact text from the authored list"], "digest": "1-2 sentences: what ' +
-  'changed and who did it", "npc_states": [{"name": "exact NPC name", ' +
-  '"state": "dead"|"absent"|"present"}], ' +
-  '"contributions": [{"name": "exact PC name", "did": "one clause"}], ' +
-  '"contradictions": ["a claim in this scene that contradicts the established facts"]}.\n' +
+  'just became true, so the game engine can act on it. ' +
+  // Shape comes from the json_schema; restating it here only spent tokens and drifted from it.
+  'A json_schema fixes your reply shape exactly - do not restate it. Be terse: digest is 1-2 ' +
+  'sentences on what changed and who did it, each contribution is ONE clause, each contradiction ' +
+  'names the conflicting claim and nothing more.\n' +
   'Rules: milestones MUST be copied verbatim from the authored list - never invent one, and ' +
   'return an empty array if nothing on that list actually happened. Only report an npc_state ' +
   'the scene plainly established - and use "present" for anyone who has now ARRIVED or returned, ' +
@@ -586,6 +591,14 @@ export interface ArchivistContext {
   label: string
   /** The authored milestone vocabulary - the ONLY milestones that may be claimed. */
   vocabulary: string[]
+  /**
+   * What the current objective is FOR. Stage 3 authors these atoms BEFORE stage 4 names the
+   * cast, so it cannot reference people who do not exist yet and falls back to placeholders
+   * ("claimant_a_arrived", live 2026-07-21) - three atoms differing by a letter, with nothing
+   * saying which claimant is which. Bare identifiers are unmappable to a transcript; the
+   * objective's own description is where that meaning actually lives.
+   */
+  objective?: { title: string; hiddenDescription: string } | null
   /** Established facts the scene must not contradict. */
   facts: string[]
   transcript: string[]
@@ -643,7 +656,7 @@ function archivistSchema(ctx: ArchivistContext): { name: string; schema: Record<
             ? { type: 'string', enum: ctx.vocabulary }
             : { type: 'string' },
         },
-        digest: { type: 'string' },
+        digest: { type: 'string', maxLength: 320 },
         npc_states: {
           type: 'array',
           items: {
@@ -662,10 +675,10 @@ function archivistSchema(ctx: ArchivistContext): { name: string; schema: Record<
             type: 'object',
             additionalProperties: false,
             required: ['name', 'did'],
-            properties: { name: { type: 'string', enum: pcNames }, did: { type: 'string' } },
+            properties: { name: { type: 'string', enum: pcNames }, did: { type: 'string', maxLength: 120 } },
           },
         },
-        contradictions: { type: 'array', items: { type: 'string' } },
+        contradictions: { type: 'array', items: { type: 'string', maxLength: 160 }, maxItems: 3 },
         dials: {
           type: 'array',
           items: {
@@ -695,6 +708,9 @@ export async function runArchivist(env: AgentEnv, ctx: ArchivistContext): Promis
   try {
     const raw = await agentJson(env, 'summarizer', ARCHIVIST_SYSTEM, [
       `Closed ${ctx.phase}: ${ctx.label}`,
+      ctx.objective
+        ? `These milestones belong to the objective "${ctx.objective.title}" - ${ctx.objective.hiddenDescription}\nRead each milestone as shorthand for a step of THAT, even when its wording is generic or placeholder-like.`
+        : '',
       `Authored milestones (copy verbatim, or return none): ${ctx.vocabulary.join(' | ') || 'none'}`,
       `Established facts: ${ctx.facts.join(' | ') || 'none'}`,
       `NPCs: ${ctx.npcNames.join(', ') || 'none'}`,
@@ -702,7 +718,7 @@ export async function runArchivist(env: AgentEnv, ctx: ArchivistContext): Promis
         ctx.dials.map((d) => `${d.key} (${d.name}: ${d.description})`).join(' | ') || 'none'}`,
       `PCs: ${ctx.pcNames.join(', ') || 'none'}`,
       `What happened:\n${ctx.transcript.join('\n')}`,
-    ].join('\n'), 500, archivistSchema(ctx))
+    ].filter(Boolean).join('\n'), 500, archivistSchema(ctx))
     if (typeof raw !== 'object' || raw === null) return EMPTY_LEDGER
     const obj = raw as Record<string, unknown>
     const strings = (v: unknown) =>

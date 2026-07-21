@@ -16,6 +16,7 @@ import type {
 } from '../_shared/play/index.ts'
 import { parseOfferResponse } from '../_shared/story/index.ts'
 import type { OfferResponseKind } from '../_shared/story/index.ts'
+import { logEvent } from './util.ts'
 
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? ''
 
@@ -36,7 +37,7 @@ export async function agentJson(
   maxTokens: number,
   schema?: { name: string; schema: Record<string, unknown> },
 ): Promise<unknown> {
-  const text = await callAgentText({
+  const call = (tokens: number) => callAgentText({
     serviceClient: env.service,
     openRouterApiKey: OPENROUTER_API_KEY,
     userId: env.creatorId,
@@ -44,10 +45,34 @@ export async function agentJson(
     agentRole: role,
     system,
     user,
-    maxTokens,
+    maxTokens: tokens,
     schema,
   })
-  return extractJson(text)
+
+  let text = await call(maxTokens)
+  let parsed = extractJson(text)
+  // Retry on the PARSE, not on provider metadata. Every unparseable reply observed live was
+  // truncated JSON - '{\n  "interpretation":' at 21 chars, '{"' at 2 - yet llm.ts's retry keys
+  // off finish_reason === 'length', which this provider does not reliably report when the
+  // budget went to reasoning tokens instead of content. The parse failing is the symptom we
+  // actually care about and the one signal that is always available.
+  if (parsed === null || typeof parsed !== 'object') {
+    text = await call(maxTokens * 2)
+    parsed = extractJson(text)
+  }
+  // Every parse failure so far has been diagnosed by guesswork, because the text that failed is
+  // discarded here and the caller only ever reports "not an object". Raising the token cap on a
+  // truncation theory did not stop the adjudicator 500s (live 2026-07-21), so keep the evidence:
+  // whether this is prose, a fragment, or a valid non-object is the whole question.
+  if (parsed === null || typeof parsed !== 'object') {
+    await logEvent(env.service, env.adventureId, null, 'agent_output_unparsed', {
+      role,
+      chars: text.length,
+      head: text.slice(0, 300),
+      tail: text.length > 300 ? text.slice(-120) : '',
+    }).catch(() => {})
+  }
+  return parsed
 }
 
 /** Shorthand for the JSON Schema shapes below - every property is required under `strict`. */
@@ -185,15 +210,15 @@ function cannedAdjudication(text: string, partySkills: string[]): AdjudicationOu
 }
 
 const ADJUDICATOR_SYSTEM =
-  'You adjudicate free-text player actions in a D&D 5e-style game. Reply with ONLY JSON: ' +
-  '{"interpretation": string, "resolution": {"type": "auto_success"|"auto_fail"|"check", ' +
-  '"check"?: {"skill": string, "skill_options"?: [up to 2 more applicable skills], ' +
-  '"dc": number (5-25), "adv_dis": "none"|"advantage"|"disadvantage", ' +
-  '"rationale": string, "group"?: boolean, "requires_assist"?: {"skill": string, "effect": "enable"|"bonus"}}, ' +
-  '"consequences_hint": string}, "flags": {"impossible"?: boolean, "needs_dm"?: boolean, "talk"?: boolean}, ' +
-  '"scene_effects"?: {"travel_location"?: string, "stage_npcs"?: [1-3 names], "mark_event"?: string, ' +
-  '"advance_day"?: boolean, "encounter"?: {"kind": "combat", "label": string}, "milestones"?: [strings], ' +
-  '"end_scene"?: boolean, "loud"?: boolean}. ' +
+  'You adjudicate free-text player actions in a D&D 5e-style game. ' +
+  // The reply shape is guaranteed by a json_schema, so spelling it out here bought nothing and
+  // cost ~200 tokens of every call - while ALSO contradicting it: the old spec marked fields
+  // "?: optional" when strict mode requires every key. Truncated replies were the result of an
+  // over-long answer, so the budget belongs in the ruling, not in restating the format.
+  'BREVITY IS REQUIRED - the reply is cut off if you overrun. interpretation: at most 15 words, ' +
+  'one clause on what the player is attempting. rationale: at most 12 words. ' +
+  'consequences_hint: at most 12 words. Never pad, never restate the action, never explain your ' +
+  'reasoning beyond those limits. Fields you have nothing to say for take null or false. ' +
   'Trivial actions auto-succeed - never demand rolls for everything; unopposed travel between ' +
   'known locations ALWAYS auto-succeeds. Use "group": true for whole-party actions. Only spec ' +
   'requires_assist with a skill from the party skill list. Add scene_effects when the action ' +
@@ -243,7 +268,9 @@ function sceneEffectsSchema(ctx: AdjudicatorContext): { name: string; schema: Re
       additionalProperties: false,
       required: ['interpretation', 'resolution', 'flags', 'scene_effects'],
       properties: {
-        interpretation: { type: 'string' },
+        // maxLength on every prose field: the schema is the thing the provider enforces, and
+        // these three are the only unbounded text in the hottest call in the app.
+        interpretation: { type: 'string', maxLength: 120 },
         resolution: {
           type: 'object',
           additionalProperties: false,
@@ -259,7 +286,7 @@ function sceneEffectsSchema(ctx: AdjudicatorContext): { name: string; schema: Re
                 skill_options: { type: 'array', items: { type: 'string', enum: skills }, maxItems: 3 },
                 dc: { type: 'integer', minimum: 5, maximum: 25 },
                 adv_dis: { type: 'string', enum: ['none', 'advantage', 'disadvantage'] },
-                rationale: { type: 'string' },
+                rationale: { type: 'string', maxLength: 100 },
                 group: { type: 'boolean' },
                 requires_assist: {
                   type: ['object', 'null'],
@@ -272,7 +299,7 @@ function sceneEffectsSchema(ctx: AdjudicatorContext): { name: string; schema: Re
                 },
               },
             },
-            consequences_hint: { type: 'string' },
+            consequences_hint: { type: 'string', maxLength: 100 },
           },
         },
         flags: {
@@ -703,11 +730,19 @@ export async function runNarratorOptions(env: AgentEnv, contextPrompt: string): 
 }
 
 const CONSISTENCY_SYSTEM =
-  'You fact-check a game narration draft against established facts. Reply with ONLY JSON: ' +
-  '{"ok": boolean, "violations": [{"claim": string, "conflicts_with": string}]}. Tone and style ' +
+  'You fact-check a game narration draft against established facts. ' +
+  // Shape is fixed by CONSISTENCY_SCHEMA; restating it here only spent tokens on a call whose
+  // replies were already coming back truncated ('{"' at 2 chars, live 2026-07-21).
+  'Tone and style ' +
   'are free - flag only DIRECT contradictions of a stated fact (dead people acting, a different ' +
   'location than the stated one, items nobody has). NEW details, characters, or embellishments ' +
-  'the facts are silent about are the narrator\'s job - never violations. When in doubt, ok: true.'
+  'the facts are silent about are the narrator\'s job - never violations. ' +
+  // A blocked draft costs two regenerations and then falls back to a canned mechanical line, so
+  // a false positive is worse for the player than the embellishment it prevented. This one fired
+  // live: "a figure diligently writes" was flagged against "Duke Eldrin is dead".
+  'An UNNAMED person - "a figure", "a scribe", "someone" - is a new character, not a dead one ' +
+  'returning: flag it only if the draft itself says who they are. Judge the words on the page, ' +
+  'never who you suspect they might be. When in doubt, ok: true.'
 
 /** Deterministic pass first (F07 SS6.1); LLM pass only for non-demo (SS6.2). */
 export async function runConsistency(

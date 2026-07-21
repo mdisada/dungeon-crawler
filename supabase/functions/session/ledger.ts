@@ -84,6 +84,7 @@ export async function recordSceneLedger(
       phase,
       label,
       vocabulary,
+      objective: vocab.objective,
       facts,
       transcript,
       npcNames: npcs.map((n) => n.name),
