@@ -22,6 +22,21 @@ const url = readEnvVar('frontend/.env.local', 'VITE_SUPABASE_URL')
 const anonKey = readEnvVar('frontend/.env.local', 'VITE_SUPABASE_PUBLISHABLE_KEY')
 const serviceKey = readEnvVar('backend/.env', 'SUPABASE_SERVICE_ROLE_KEY')
 /** Supports both `--flag value` (separate argv entries) and `--flag=value`. */
+/** Mirror of listMilestoneAtoms - the harness is .mjs and cannot import the rules package. */
+function milestoneAtomsOf(predicate) {
+  const found = []
+  const walk = (node) => {
+    if (typeof node !== 'object' || node === null || Array.isArray(node)) return
+    if (Array.isArray(node.any)) return node.any.forEach(walk)
+    if (Array.isArray(node.all)) return node.all.forEach(walk)
+    if (typeof node.flag === 'string' && node.flag && node.eq === true) found.push(node.flag)
+    if (typeof node.event === 'string' && node.event) found.push(node.event)
+    if (typeof node.fact === 'string' && node.fact && node.eq === true) found.push(`fact:${node.fact}`)
+  }
+  walk(predicate)
+  return found
+}
+
 function argOf(name, fallback) {
   const i = process.argv.indexOf(`--${name}`)
   if (i !== -1 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--')) return process.argv[i + 1]
@@ -69,6 +84,39 @@ const PLOTS = {
     idea: 'A witness who can testify against a city magistrate must reach the assizes eight ' +
       'days away. Three factions want them silenced, the witness does not want to go, and the ' +
       'safest road is the one the party cannot afford to take.',
+  },
+  // The party ended both prior runs standing where they started, with clues still sitting at
+  // locations they never visited. This premise makes moving the whole point: nothing can be
+  // solved from the camp, and every site holds a different piece.
+  expedition: {
+    title: 'The Cartographer\'s Debt',
+    idea: 'A survey company paid for a map of the drowned valley and got back three dead ' +
+      'surveyors and a blank chart. The party must reach four separate sites - a flooded ' +
+      'mill, a boundary stone, a shepherd\'s hut and the old weir - and work out what the ' +
+      'survey found that was worth killing over. Nothing can be learned from the camp.',
+  },
+  // Social-pillar dominant: almost no combat solves anything, and the antagonist is a room of
+  // people with incompatible interests.
+  court: {
+    title: 'The Regency Question',
+    idea: 'A duke has died without naming an heir and three claimants have arrived with ' +
+      'retinues. The party are the only neutral parties trusted to carry messages between ' +
+      'them. Steel settles nothing here; whoever the party makes plausible will rule.',
+  },
+  // Consistency stress: an NPC whose account of events is unreliable, in a place where what
+  // happened is contested. This is the shape that produced speaking-corpse bugs before.
+  horror: {
+    title: 'The Wintering House',
+    idea: 'A remote house where a family overwintered and only the youngest daughter walked ' +
+      'out. She tells the party what happened inside, and her account changes. The house is ' +
+      'still there, and so is whatever she left behind.',
+  },
+  // Moral-dial pressure with no clean answer, to see whether the ledger reads dials honestly.
+  plague: {
+    title: 'The Quarantine at Vennhold',
+    idea: 'A river town has been sealed by order of the crown. Inside, the sick outnumber the ' +
+      'well and the physician is rationing a cure that will not stretch. The party carry the ' +
+      'only writ that can open the gate, and everyone wants it for a different reason.',
   },
 }
 const PLOT_KEYS = Object.keys(PLOTS)
@@ -271,7 +319,7 @@ async function main() {
 
   // ---- What the pipeline actually authored (Phase 4 assertions) ----
   const chapters = await serviceRest('GET', `chapters?adventure_id=eq.${advId}&select=id,index,title,arc_summary&order=index`)
-  const objectives = await serviceRest('GET', `objectives?adventure_id=eq.${advId}&select=id,chapter_id,index,title,reveal_state&order=index`)
+  const objectives = await serviceRest('GET', `objectives?adventure_id=eq.${advId}&select=id,chapter_id,index,title,reveal_state,completion_predicates&order=index`)
   const endings = await serviceRest('GET', `endings?adventure_id=eq.${advId}&select=id,index,title,tone,trigger_conditions&order=index`)
   const npcs = await serviceRest('GET', `npcs?adventure_id=eq.${advId}&select=id,name,role`)
   const locations = await serviceRest('GET', `locations?adventure_id=eq.${advId}&select=id,name`)
@@ -282,7 +330,15 @@ async function main() {
   console.log(`  chapters:   ${chapters.length}`)
   chapters.forEach((c) => console.log(`    ${c.index + 1}. ${c.title}`))
   console.log(`  objectives: ${objectives.length}`)
-  objectives.forEach((o) => console.log(`    - ${o.title} [${o.reveal_state}]`))
+  // The atoms of these predicates ARE the Archivist's entire vocabulary (milestoneVocabulary
+  // builds it from the current objective plus the live beat). Runs where it proposed nothing -
+  // plague 0, court 1 - are indistinguishable from runs where it had nothing to propose unless
+  // the words themselves are on the page.
+  objectives.forEach((o) => {
+    const atoms = milestoneAtomsOf(o.completion_predicates)
+    console.log(`    - ${o.title} [${o.reveal_state}]`)
+    console.log(`        claimable: ${atoms.length > 0 ? atoms.map((a) => JSON.stringify(a)).join(', ') : 'NONE - nothing the Archivist can ever claim'}`)
+  })
   console.log(`  endings:    ${endings.length}`)
   const objIds = new Set(objectives.map((o) => o.id))
   const finalObjId = objectives[objectives.length - 1]?.id
@@ -316,7 +372,9 @@ async function main() {
   console.log(`\n[play] session started ($${(await spentUsd()).toFixed(4)})`)
 
   const turnLog = []
-  for (let i = 0; i < TURNS.length; i++) {
+  const playStarted = Date.now()
+  const turnCap = Math.min(TURNS.length, Number(argOf('turns', String(TURNS.length))))
+  for (let i = 0; i < turnCap; i++) {
     const spent = await spentUsd()
     if (spent > BUDGET) {
       console.log(`  !! budget guard at $${spent.toFixed(4)} after ${i} turns - stopping play`)
@@ -339,6 +397,9 @@ async function main() {
     const after = (await act(token, { action: 'resync', adventure_id: advId })).body.state
     turnLog[turnLog.length - 1].newLines = (after?.dialogue?.lines?.length ?? 0) - linesBefore
   }
+
+  const playSecs = (Date.now() - playStarted) / 1000
+  console.log(`  play took ${playSecs.toFixed(0)}s over ${turnLog.length} turns (${(playSecs / Math.max(turnLog.length, 1)).toFixed(1)}s/turn)`)
 
   // ---- Evidence ----
   const events = await serviceRest('GET', `event_log?adventure_id=eq.${advId}&select=id,type,payload&order=id`)
@@ -391,6 +452,15 @@ async function main() {
   ledgers.forEach((e) => console.log(`    [${e.payload?.phase}] ${e.payload?.label}: ${e.payload?.digest ?? ''}`))
   const objDone = events.filter((e) => e.type === 'objective_completed')
   objDone.forEach((e) => console.log(`    completed: ${e.payload?.title}`))
+  // "proposed 2, applied 0" is the whole story of a stalled run, and the reason was invisible:
+  // applyMilestones logs every dropped claim but nothing ever printed them. The TEXT is what
+  // distinguishes a paraphrase from a claim that was authored vocabulary when the Archivist
+  // saw it and had gone stale by the time it was applied.
+  const rejectedMilestones = events.filter((e) => e.type === 'scene_effect_rejected' && e.payload?.effect === 'milestone')
+  if (rejectedMilestones.length > 0) {
+    console.log(`    milestone claims REJECTED: ${rejectedMilestones.length}`)
+    rejectedMilestones.forEach((e) => console.log(`      x "${e.payload?.proposed}"`))
+  }
 
   console.log('\n[new systems under test]')
   console.log(`  ingredient_revealed:   ${counts('ingredient_revealed')}`)
@@ -441,6 +511,14 @@ async function main() {
     .forEach(([role, v]) => console.log(`  ${role}: ${v.n} calls, $${v.cost.toFixed(4)}`))
   console.log(`  TOTAL: $${total.toFixed(4)}`)
 
+  // --keep leaves the generated guide behind so the next run can skip generation (~90s and
+  // ~$0.006 of every run) with --adventure. The user is kept too: the adventure still points at
+  // it as creator until a later run reassigns creator_id, and deleting it first risks taking
+  // the adventure with it.
+  if (argOf('keep', undefined) !== undefined) {
+    console.log(`\nkept for reuse: --adventure ${advId}`)
+    return
+  }
   await serviceRest('DELETE', `adventures?id=eq.${advId}`)
   await serviceRest('DELETE', `characters?id=eq.${char.id}`)
   await deleteUser(userId)

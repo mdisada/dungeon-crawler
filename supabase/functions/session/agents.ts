@@ -331,7 +331,10 @@ export async function runAdjudicator(
     `Authored milestones (exact text): ${ctx.milestones.join(' | ') || 'none'}`,
     `Recent events: ${ctx.recentEvents.join(' | ') || 'none'}`,
   ].filter(Boolean).join('\n')
-  const raw = await agentJson(env, 'adjudicator', ADJUDICATOR_SYSTEM, user, 600, sceneEffectsSchema(ctx))
+  // 600 was set when this returned prose with optional fields omitted; strict mode makes every
+  // key mandatory, nulls included, and the tail of the object is where scene_effects lives.
+  // max_tokens is a cap, not a spend - raising it costs nothing on replies that stay short.
+  const raw = await agentJson(env, 'adjudicator', ADJUDICATOR_SYSTEM, user, 1000, sceneEffectsSchema(ctx))
   const parsed = parseAdjudication(raw, ctx.partySkills)
   if (!parsed.ok) throw new AgentCallError(`Adjudicator output invalid: ${parsed.errors.join('; ')}`)
   return { ...parsed.data, sceneEffects: extractSceneEffects(raw) }

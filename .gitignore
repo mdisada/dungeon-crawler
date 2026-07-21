@@ -224,3 +224,5 @@ backend/recordings/
 backend/data/
 
 .sql
+# Playtest run logs (paid live runs, regenerated on demand)
+tests/integration/.playtest-logs/

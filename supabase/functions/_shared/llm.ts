@@ -189,14 +189,22 @@ export async function callAgentText(call: AgentTextCall): Promise<string> {
   await logUsage(json)
 
   let content: string | undefined = sanitize(json.choices?.[0]?.message?.content)
-  if (!content) {
+  // A completion cut off at the token cap is NOT empty, so it used to skip the retry below and
+  // hand half-written JSON to the parser, which died as "adjudication: not an object" (live
+  // 2026-07-21, 3 turns lost across two runs). Strict json_schema is what exposed it: the model
+  // must emit every required key, nulls included, so schema'd calls run materially longer than
+  // the prose ones whose budgets were set before schemas existed.
+  const truncated = json.choices?.[0]?.finish_reason === 'length'
+  if (!content || truncated) {
     // Empty completion (seen live with mimo-v2.5 on structured-output calls): the model spent
     // the whole budget on reasoning tokens despite reasoning-off. Retry once with double the
     // budget so the actual content fits; only then give up.
     ;({ res, json } = await post(reasoningOff, maxTokens * 2, schemaOn))
     if (res.ok) {
       await logUsage(json)
-      content = sanitize(json.choices?.[0]?.message?.content)
+      // Keep the retry only if it actually said something. A truncated first reply is useless
+      // JSON but perfectly usable prose, so never trade it for an empty second one.
+      content = sanitize(json.choices?.[0]?.message?.content) ?? content
     }
   }
   if (!content) throw new AgentCallError('Model response had no content')
