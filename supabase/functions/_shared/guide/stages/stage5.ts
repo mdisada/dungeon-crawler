@@ -120,10 +120,17 @@ export function parseStage5(raw: string, ctx: Stage5Context): ParseResult<Stage5
         fattest.count -= 1
         budget = validateEncounterBudget(enemies, ctx.partyLevel, ctx.partySize, ctx.difficultyPreset)
       }
+      // Dropping bodies cannot touch a single high-CR creature, so say what actually happened
+      // rather than reporting a no-op as a fix ("trimmed from 700 to 700", live 2026-07-21).
+      const stillOver = budget.adjustedXp > budget.xpBudget * LETHAL_BUDGET_MULTIPLE
+      const scale = `(target ${budget.xpBudget} for ${ctx.partySize} level-${ctx.partyLevel})`
       warnings.push(
-        `${path}: trimmed from ${before} to ${budget.adjustedXp} adjusted XP (target ` +
-        `${budget.xpBudget} for ${ctx.partySize} level-${ctx.partyLevel}) - the authored count ` +
-        'was over ' + LETHAL_BUDGET_MULTIPLE + 'x and unsurvivable.',
+        before === budget.adjustedXp
+          ? `${path}: ${budget.adjustedXp} adjusted XP ${scale} is over ${LETHAL_BUDGET_MULTIPLE}x ` +
+            'and COULD NOT be trimmed - every enemy is already a single creature. Swap it for a ' +
+            'weaker one by hand; as authored it is a near-certain party kill.'
+          : `${path}: trimmed from ${before} to ${budget.adjustedXp} adjusted XP ${scale} by ` +
+            `dropping duplicate bodies${stillOver ? ', but it is STILL over ' + LETHAL_BUDGET_MULTIPLE + 'x - the remaining single creatures are too strong to fight' : ''}.`,
       )
     }
 
