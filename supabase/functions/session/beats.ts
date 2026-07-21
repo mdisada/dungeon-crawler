@@ -201,11 +201,18 @@ export async function planAndOpenBeat(
       milestones: [...objectiveAtoms.flags, ...objectiveAtoms.events, ...objectiveAtoms.facts],
     },
   }
-  let parsed = await runBeatPlanner(env, plannerCtx)
+  // A THROWN planner error used to escape this function and leave the loop beatless; the parsed
+  // failure path below has a deterministic template fallback, so route transport failures into
+  // it rather than letting them stop the story.
+  const planFailed = (why: string) => ({ ok: false as const, errors: [why] })
+  let parsed = await runBeatPlanner(env, plannerCtx).catch(() => planFailed('beat planner call failed'))
   // One GUIDED repair, not a blind re-roll: the first repair step captures the bulk of the
   // achievable gain, and re-rolling the same prompt is what produced the invented milestone
   // that stalled the loop (live 2026-07-21).
-  if (!parsed.ok) parsed = await runBeatPlanner(env, plannerCtx, parsed.errors)
+  if (!parsed.ok) {
+    parsed = await runBeatPlanner(env, plannerCtx, parsed.errors)
+      .catch(() => planFailed('beat planner repair call failed'))
+  }
   // A beat may parse perfectly and still lead nowhere. Live 2026-07-21, court: the objective
   // needed "party_met_lord_cassian" and the planner authored "The Unfinished Decree" exiting on
   // "decree_deciphered" - atoms of its own invention. Six beats resolved, the story read well,
@@ -217,17 +224,26 @@ export async function planAndOpenBeat(
     const touchesObjective = [...exits.flags, ...exits.events, ...exits.facts]
       .some((a) => objectiveVocab.includes(a))
     if (!touchesObjective) {
-      const aligned = await runBeatPlanner(env, plannerCtx, [
-        `beat.exit_conditions: not one atom comes from the current objective (${objectiveVocab.join(' | ')}). ` +
-        'This beat would resolve without moving the objective one step. Author it so the party ' +
-        'can reach at least ONE of those milestones, and put that milestone verbatim in ' +
-        'exit_conditions and in the encounter on_success map.',
-      ])
-      if (aligned.ok) {
-        const retryExits = listMilestoneAtoms(aligned.plan.exitConditions)
-        if ([...retryExits.flags, ...retryExits.events, ...retryExits.facts].some((a) => objectiveVocab.includes(a))) {
-          parsed = aligned
+      // Guarded: this is an EXTRA agent call inside beat opening, and an agent call that throws
+      // here would escape planAndOpenBeat and leave the loop with no beat at all - which is the
+      // dead end this whole change set exists to remove. An alignment we could not get is a
+      // missed improvement; a beat we failed to open stops the story (live 2026-07-21, horror:
+      // beat_open_failed on trigger beat_exit, 2 objectives -> 0).
+      try {
+        const aligned = await runBeatPlanner(env, plannerCtx, [
+          `beat.exit_conditions: not one atom comes from the current objective (${objectiveVocab.join(' | ')}). ` +
+          'This beat would resolve without moving the objective one step. Author it so the party ' +
+          'can reach at least ONE of those milestones, and put that milestone verbatim in ' +
+          'exit_conditions and in the encounter on_success map.',
+        ])
+        if (aligned.ok) {
+          const retryExits = listMilestoneAtoms(aligned.plan.exitConditions)
+          if ([...retryExits.flags, ...retryExits.events, ...retryExits.facts].some((a) => objectiveVocab.includes(a))) {
+            parsed = aligned
+          }
         }
+      } catch (err) {
+        console.error('beat alignment repair failed, keeping the original plan', err)
       }
     }
   }
