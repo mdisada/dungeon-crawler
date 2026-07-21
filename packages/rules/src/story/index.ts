@@ -34,6 +34,6 @@ export type {
 } from './types.ts'
 export {
   COOP_FATIGUE_STREAK, computeVarietyFlags, dominantPillar, LOOP_TYPE_WINDOW, SAME_TYPE_LIMIT,
-  SPOTLIGHT_MIN_INTENTS, SPOTLIGHT_SHARE, varietyGuidance,
+  SPOTLIGHT_MIN_INTENTS, SPOTLIGHT_SHARE, encounterKindGuidance, varietyGuidance,
 } from './variety.ts'
 export type { VarietyFlags, VarietyInput } from './variety.ts'

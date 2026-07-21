@@ -7,7 +7,8 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { dmSettings } from '../_shared/play/index.ts'
 import type { GameState, Json } from '../_shared/state/index.ts'
 import {
-  activeLoop, advanceBeat, completeLoop, computeVarietyFlags, intentPillar, isOffLoop,
+  activeLoop, advanceBeat, completeLoop, computeVarietyFlags, encounterKindGuidance,
+  intentPillar, isOffLoop,
   listMilestoneAtoms, LOOP_TEMPLATES, nextStreak, PIVOT_REEVALUATE_EVENTS, pivotHandling,
   pushLoop, streakTriggersClassifier, suspendLoop, varietyGuidance,
 } from '../_shared/story/index.ts'
@@ -110,6 +111,9 @@ export async function varietyInput(service: SupabaseClient, adventureId: string,
   }
 
   const beatOpens = events.filter((e) => e.type === 'beat_opened')
+  const recentEncounterKinds = beatOpens
+    .map((e) => String(e.payload.encounter_kind ?? ''))
+    .filter(Boolean)
   let coopDemandStreak = 0
   for (let i = beatOpens.length - 1; i >= 0; i--) {
     if (beatOpens[i].payload.coop_demand === true) coopDemandStreak += 1
@@ -122,6 +126,7 @@ export async function varietyInput(service: SupabaseClient, adventureId: string,
     coopEventsThisSession,
     coopDemandStreak,
     resolvedIntents,
+    recentEncounterKinds,
   }
 }
 
@@ -165,7 +170,11 @@ export async function planAndOpenBeat(
     .filter((b) => b.status === 'completed' || b.status === 'active')
     .map((b) => b.name)
   const flags = computeVarietyFlags(variety)
-  const guidance = varietyGuidance(flags)
+  // The loop template already declares the pillars it turns on; serve the starved ones.
+  const guidance = [
+    ...varietyGuidance(flags),
+    ...encounterKindGuidance(LOOP_TEMPLATES[loop.type].pillars, variety.recentEncounterKinds ?? []),
+  ]
 
   const profileLines = await partyProfileLines(service, party)
   // Outcome-map vocabulary: the active objective's authored atoms (the planner also maps

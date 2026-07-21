@@ -14,12 +14,14 @@ import { activeLoop } from '../_shared/story/index.ts'
 import type { GameState, Json } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { loadLoops } from './beats.ts'
-import { activeEncounter, resolveOpenEncounter } from './encounters.ts'
+import { activeEncounter, openSkillChallengeFromSpec, resolveOpenEncounter } from './encounters.ts'
+import { openBeatSpec } from './entry.ts'
+import { startSocial } from './social-staging.ts'
 import { narrationBeat } from './narration.ts'
 import { loadPlayContext, typingDiff } from './orchestrate.ts'
 import { puzzleSpec } from './puzzle-encounter.ts'
 import { antagonistTurn } from './steward.ts'
-import { runHookWeaverLive } from './story-agents.ts'
+import { runHookWeaverLive, runStallPromoter } from './story-agents.ts'
 import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
 
 interface EventRow {
@@ -186,6 +188,96 @@ export async function hintAction(
   return { status: 200, body: { ok: true, resolved: 'hint', rung } }
 }
 
+/**
+ * Opens the thing the stalled party is reaching for. Returns true when something was staged or
+ * opened, so the caller stops - the new encounter IS the nudge.
+ */
+async function promoteStall(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  state: GameState,
+): Promise<boolean> {
+  const [{ data: npcRows }, { data: inputRows }] = await Promise.all([
+    service.from('npcs').select('id, name, generated, initial_state').eq('adventure_id', env.adventureId),
+    service
+      .from('event_log')
+      .select('payload')
+      .eq('adventure_id', env.adventureId)
+      .eq('type', 'intent_submitted')
+      .order('id', { ascending: false })
+      .limit(8),
+  ])
+  // Only NPCs who can actually be staged: alive, present, authored.
+  const staged = new Set(state.dialogue.speakers.map((sp) => sp.npcId))
+  const liveStates = state.dm?.facts.npcStates ?? {}
+  const candidates = ((npcRows ?? []) as { id: string; name: string; generated: boolean; initial_state?: string }[])
+    .filter((n) => !n.generated && n.name && !staged.has(n.id))
+    .filter((n) => {
+      const st = liveStates[n.id] ?? n.initial_state ?? 'alive'
+      return st !== 'dead' && st !== 'absent'
+    })
+  const recentInputs = ((inputRows ?? []) as { payload: Record<string, Json> }[])
+    .map((e) => String(e.payload.text ?? ''))
+    .filter(Boolean)
+    .reverse()
+  if (recentInputs.length === 0) return false
+
+  const loop = activeLoop(await loadLoops(service, env.adventureId))
+  const { spec } = await openBeatSpec(service, env.adventureId)
+  const opening = await runStallPromoter(env, {
+    recentInputs,
+    sceneSummary: `${state.scene.locationName || 'unknown place'} (${state.scene.mode}), day ${state.scene.day}`,
+    hook: spec ? `${spec.label}${spec.stakes ? ` - at stake: ${spec.stakes}` : ''}` : null,
+    npcNames: candidates.map((n) => n.name),
+    loopType: loop?.type ?? 'custom',
+  })
+  if (opening.action === 'none') return false
+
+  if (opening.action === 'stage_npc') {
+    const ids = opening.npcNames
+      .map((name) => candidates.find((n) => n.name.toLowerCase() === name.toLowerCase())?.id)
+      .filter((id): id is string => Boolean(id))
+    if (ids.length === 0) return false
+    const result = await startSocial(service, env.adventureId, env.creatorId, ids)
+    if (result.status !== 200) return false
+    await logEvent(service, env.adventureId, sessionId, 'stall_promoted', {
+      action: 'stage_npc', npcs: opening.npcNames as unknown as Json, why: opening.why,
+    })
+    await narrationBeat(
+      service, env, sessionId,
+      `The party has been circling with nobody to turn to. ${opening.npcNames.join(' and ')} ` +
+        `arrives or is found - ${opening.why || 'exactly who they have been asking about'}. ` +
+        'Bring them into the scene in one or two sentences and let them speak first, leaving the ' +
+        'next move to the party.',
+      'Someone arrives',
+    )
+    return true
+  }
+
+  const encounter = await openSkillChallengeFromSpec(service, env, sessionId, {
+    kind: 'skill_challenge',
+    label: opening.label || 'The way forward',
+    stakes: opening.why,
+    params: {},
+    // No outcome map: a promoted opening must not hand out progression it did not author.
+    onSuccess: [],
+    onPartial: [],
+    onFailure: [],
+  })
+  await logEvent(service, env.adventureId, sessionId, 'stall_promoted', {
+    action: 'open_encounter', label: encounter.label, why: opening.why,
+  })
+  await narrationBeat(
+    service, env, sessionId,
+    `The party has been circling. Make "${encounter.label}" concrete and immediate in front of ` +
+      `them - ${opening.why || 'the thing they have been reaching for'} - and end demanding ` +
+      'their first move against it.',
+    'A way forward opens',
+  )
+  return true
+}
+
 async function deliverHint(
   service: SupabaseClient,
   env: AgentEnv,
@@ -298,7 +390,12 @@ async function deliverHint(
     )
     return
   }
-  // Cutscene with no encounter: the world opens a path so the party is never stranded.
+  // Cutscene with no encounter: there is nothing to fail forward THROUGH, which is exactly how
+  // ten turns of "who did it" folded into narration while the story stood still (live
+  // 2026-07-21). Put something in front of them first - the promoter opens what they have been
+  // reaching for. It writes no progression; the normal encounter machinery takes it from there.
+  if (await promoteStall(service, env, sessionId, state)) return
+
   try {
     await antagonistTurn(service, env, sessionId, 'hint_fail_forward')
   } catch (err) {

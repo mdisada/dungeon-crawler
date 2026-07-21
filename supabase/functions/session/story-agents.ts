@@ -606,3 +606,81 @@ export async function runArchivist(env: AgentEnv, ctx: ArchivistContext): Promis
     return EMPTY_LEDGER // a failed ledger must never block the phase from closing
   }
 }
+
+const PROMOTER_SYSTEM =
+  'A tabletop RPG party is stalled: several turns have passed with nothing to engage - no ' +
+  'encounter open and nobody to talk to. Decide the ONE concrete thing the world should put in ' +
+  'front of them, drawn from what already exists. Reply with ONLY JSON: ' +
+  '{"action": "stage_npc"|"open_encounter"|"none", "npc_names": ["exact name"], ' +
+  '"encounter_kind": "social"|"skill_challenge"|"puzzle"|"combat", "label": "short name", ' +
+  '"why": "one clause tying it to what the players have been reaching for"}.\n' +
+  'Read what the players actually typed: if they have been asking about a person, put that ' +
+  'person in front of them ("stage_npc"). If they have been probing a place or an obstacle, ' +
+  'open an encounter on it. Choose "none" only when the scene genuinely offers neither. ' +
+  'Names must be copied exactly from the registry given; never invent one.'
+
+export interface PromoterContext {
+  recentInputs: string[]
+  sceneSummary: string
+  /** The standing hook, if the beat still offers one. */
+  hook: string | null
+  npcNames: string[]
+  loopType: string
+}
+
+export interface PromotedOpening {
+  action: 'stage_npc' | 'open_encounter' | 'none'
+  npcNames: string[]
+  encounterKind: 'social' | 'skill_challenge' | 'puzzle' | 'combat'
+  label: string
+  why: string
+}
+
+const NO_OPENING: PromotedOpening = {
+  action: 'none', npcNames: [], encounterKind: 'skill_challenge', label: '', why: '',
+}
+
+/**
+ * The stall promoter: loop-agnostic, and deliberately NOT a progression writer.
+ *
+ * When the party stalls, the fail-forward rung can only resolve an encounter that is already
+ * open - during a cutscene it had nothing to resolve, so ten turns of "who did it" folded into
+ * narration and the story never moved (live 2026-07-21). This decides what to PUT IN FRONT of
+ * them instead. It grants no milestones and skips no spine: it opens the thing they were
+ * already reaching for, and the normal encounter machinery takes it from there.
+ */
+export async function runStallPromoter(env: AgentEnv, ctx: PromoterContext): Promise<PromotedOpening> {
+  if (env.demo) {
+    return ctx.npcNames.length > 0
+      ? { ...NO_OPENING, action: 'stage_npc', npcNames: [ctx.npcNames[0]], why: '[demo] stalled' }
+      : NO_OPENING
+  }
+  try {
+    const raw = await agentJson(env, 'adjudicator', PROMOTER_SYSTEM, [
+      `Loop type: ${ctx.loopType}`,
+      `Scene: ${ctx.sceneSummary}`,
+      ctx.hook ? `Standing hook: ${ctx.hook}` : 'No standing hook.',
+      `NPCs who exist (copy names exactly): ${ctx.npcNames.join(', ') || 'none'}`,
+      `What the players have been typing (oldest first):\n${ctx.recentInputs.join('\n')}`,
+    ].join('\n'), 250)
+    if (typeof raw !== 'object' || raw === null) return NO_OPENING
+    const obj = raw as Record<string, unknown>
+    const action = obj.action === 'stage_npc' || obj.action === 'open_encounter' ? obj.action : 'none'
+    const known = new Map(ctx.npcNames.map((n) => [n.toLowerCase(), n]))
+    const npcNames = (Array.isArray(obj.npc_names) ? obj.npc_names : [])
+      .filter((n): n is string => typeof n === 'string')
+      .map((n) => known.get(n.trim().toLowerCase()))
+      .filter((n): n is string => Boolean(n))
+      .slice(0, 3)
+    const kinds = ['social', 'skill_challenge', 'puzzle', 'combat'] as const
+    return {
+      action: action === 'stage_npc' && npcNames.length === 0 ? 'none' : action,
+      npcNames,
+      encounterKind: kinds.find((k) => k === obj.encounter_kind) ?? 'skill_challenge',
+      label: typeof obj.label === 'string' ? obj.label.slice(0, 80) : '',
+      why: typeof obj.why === 'string' ? obj.why.slice(0, 200) : '',
+    }
+  } catch {
+    return NO_OPENING // a stalled table is bad; a broken one is worse
+  }
+}

@@ -15,6 +15,8 @@ export interface VarietyInput {
   coopDemandStreak: number
   /** Resolved intents per player this session. */
   resolvedIntents: Record<string, number>
+  /** Encounter kinds of recently opened beats, oldest first - drives pillar starvation. */
+  recentEncounterKinds?: string[]
 }
 
 export interface VarietyFlags {
@@ -80,5 +82,42 @@ export function varietyGuidance(flags: VarietyFlags): string[] {
   if (flags.coopLow) lines.push('Weight toward a cooperative goal (braided pair or group effort) - no cooperation happened yet this session.')
   if (flags.coopFatigue) lines.push('Do NOT demand cooperation this beat (keep rewarding it) - the last obstacles all required it.')
   if (flags.spotlight) lines.push(`Create an opening for players other than ${flags.spotlight} - one player is dominating resolved actions.`)
+  return lines
+}
+
+/** Which encounter kinds serve which pillar - the loop template speaks in pillars. */
+export const PILLAR_ENCOUNTER_KINDS: Record<Pillar, string[]> = {
+  social: ['social'],
+  exploration: ['skill_challenge', 'puzzle'],
+  combat: ['combat'],
+}
+
+/**
+ * Encounter-kind guidance from the loop's OWN declared pillars - loop-agnostic by construction.
+ *
+ * Every loop template already declares what it turns on (a mystery is social+exploration, a
+ * dungeon crawl exploration+combat, an intrigue purely social), but nothing acted on it. One
+ * live one-shot planned three skill challenges and zero social encounters, so no NPC was ever
+ * staged and the party spent ten turns asking "who did it" into an empty room (2026-07-21).
+ * The same starvation can happen to any pillar of any loop; this checks all of them.
+ */
+export function encounterKindGuidance(
+  pillars: Pillar[],
+  recentEncounterKinds: string[],
+): string[] {
+  const lines: string[] = []
+  const recent = recentEncounterKinds.slice(-3)
+  for (const pillar of pillars) {
+    const kinds = PILLAR_ENCOUNTER_KINDS[pillar]
+    if (recent.some((k) => kinds.includes(k))) continue
+    lines.push(
+      `This loop turns on ${pillar} and the last beats have not served it: make this beat's ` +
+      `encounter kind ${kinds.map((k) => `"${k}"`).join(' or ')} unless the fiction makes that ` +
+      'impossible.',
+    )
+  }
+  if (recent.length >= 3 && new Set(recent).size === 1) {
+    lines.push(`The last ${recent.length} encounters were all "${recent[0]}" - pick a different kind.`)
+  }
   return lines
 }

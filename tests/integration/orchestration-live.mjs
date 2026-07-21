@@ -309,6 +309,33 @@ async function main() {
   const blockedNarration = await eventsOf(advId, 'consistency_blocked')
   ok('consistency block logged', blockedNarration.length >= 1)
 
+  console.log('\n[stall promoter: a stalled cutscene gets something to engage]')
+  // Live 2026-07-21: ten turns of "who did it" folded into narration because no encounter was
+  // open and nobody was staged, so the fail-forward rung had nothing to resolve. A stalled
+  // cutscene must now produce something to engage instead of another fold.
+  await act(gm, { action: 'end_encounter', adventure_id: advId })
+  const promotedBefore = (await eventsOf(advId, 'stall_promoted')).length
+  let promoted = null
+  for (let i = 0; i < 4 && !promoted; i++) {
+    await act(gm, { action: 'hint', adventure_id: advId, requested: true })
+    const events = await eventsOf(advId, 'stall_promoted')
+    if (events.length > promotedBefore) promoted = events[events.length - 1]
+  }
+  ok('a stalled cutscene promotes an opening rather than folding again', Boolean(promoted), promoted)
+  if (promoted) {
+    ok(
+      'the promoted opening is something the party can engage',
+      promoted.payload.action === 'stage_npc' || promoted.payload.action === 'open_encounter',
+      promoted.payload,
+    )
+    sync = await act(gm, { action: 'resync', adventure_id: advId })
+    ok(
+      'the opening is live in state (staged speaker or open encounter)',
+      sync.body.state.dialogue.speakers.length > 0 || Boolean(sync.body.state.encounter),
+      { speakers: sync.body.state.dialogue.speakers.length, encounter: sync.body.state.encounter?.kind ?? null },
+    )
+  }
+
   console.log('\n[narrate_next options flow]')
   const narrateDenied = await act(p2, { action: 'narrate_next', adventure_id: advId })
   ok('player cannot narrate_next', narrateDenied.status === 403)
