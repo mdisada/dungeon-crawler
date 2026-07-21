@@ -182,6 +182,64 @@ const DESIGNER_SYSTEM =
   'For combat: {"params": {}}. Scale needed_successes with party size (never above party size ' +
   '+ 2) and keep every encounter winnable but tense.'
 
+/**
+ * Per-kind schema for the designer's params. The social case is the one that matters: the
+ * planner named a "Vault Custodian" who does not exist and the social encounter failed to open
+ * three times in one run (live 2026-07-21), because "COPIED from the NPC list" was a request,
+ * not a constraint. An enum of the real registry makes a phantom NPC unrepresentable.
+ */
+function designerSchema(
+  kind: string,
+  npcNames: string[],
+  partySkills: string[],
+): { name: string; schema: Record<string, unknown> } | undefined {
+  const wrap = (params: Record<string, unknown>, required: string[]) => ({
+    name: `encounter_params_${kind}`,
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['params'],
+      properties: {
+        params: { type: 'object', additionalProperties: false, required, properties: params },
+      },
+    },
+  })
+  if (kind === 'social') {
+    // Enums cannot be empty; with no registry NPCs the beat has nobody to name anyway.
+    if (npcNames.length === 0) return undefined
+    return wrap({
+      goal: { type: 'string' },
+      npc_names: { type: 'array', items: { type: 'string', enum: npcNames }, minItems: 1, maxItems: 3 },
+      exits: {
+        type: 'array',
+        minItems: 2,
+        maxItems: 4,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['outcome', 'description', 'tier'],
+          properties: {
+            outcome: { type: 'string' },
+            description: { type: 'string' },
+            tier: { type: 'string', enum: ['success', 'partial', 'failure'] },
+          },
+        },
+      },
+    }, ['goal', 'npc_names', 'exits'])
+  }
+  if (kind === 'skill_challenge') {
+    return wrap({
+      needed_successes: { type: 'integer', minimum: 2, maximum: 4 },
+      max_failures: { type: 'integer', minimum: 2, maximum: 3 },
+      suggested_skills: partySkills.length > 0
+        ? { type: 'array', items: { type: 'string', enum: partySkills }, minItems: 2, maxItems: 4 }
+        : { type: 'array', items: { type: 'string' } },
+      trait_notes: { type: 'string' },
+    }, ['needed_successes', 'max_failures', 'suggested_skills', 'trait_notes'])
+  }
+  return undefined // puzzle/combat shapes stay loose; their parsers already tolerate variation
+}
+
 /** Kind-specific params for an authored beat spec (called at planning time). */
 export async function runEncounterDesigner(
   env: AgentEnv,
@@ -230,7 +288,7 @@ export async function runEncounterDesigner(
         ? `Who the party members are (design around their traits):\n${party.profiles!.map((p) => `- ${p}`).join('\n')}`
         : '',
       spec.kind === 'social' ? `Named NPCs in the world: ${npcNames.join('; ') || 'none listed'}` : '',
-    ].filter(Boolean).join('\n'), 450)
+    ].filter(Boolean).join('\n'), 450, designerSchema(spec.kind, npcNames, party.skills))
     const params = (typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>).params : null)
     return (typeof params === 'object' && params !== null ? params : fallback) as Json
   } catch {

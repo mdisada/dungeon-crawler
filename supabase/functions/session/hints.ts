@@ -61,6 +61,32 @@ function isProgress(e: EventRow): boolean {
   }
 }
 
+/**
+ * Consecutive turns the entry mapper folded away, newest first.
+ *
+ * This is the honest measure of a dead table, and noProgressTurns is not: encounters opening
+ * and resolving COUNT as progress and reset that streak, so a dungeon that churned 6 encounters
+ * still folded 15 of 26 turns while the promoter never fired (live 2026-07-21). A fold means
+ * the mapper found nothing in the input worth opening - several in a row means the party has
+ * nothing to act on, whatever else the log says.
+ */
+async function foldStreak(service: SupabaseClient, adventureId: string): Promise<number> {
+  const { data } = await service
+    .from('event_log')
+    .select('type, payload')
+    .eq('adventure_id', adventureId)
+    .in('type', ['entry_mapped', 'encounter_opened', 'social_started'])
+    .order('id', { ascending: false })
+    .limit(12)
+  let streak = 0
+  for (const e of (data ?? []) as EventRow[]) {
+    if (e.type !== 'entry_mapped') break // something opened - not a dead table
+    if (e.payload.entry !== 'fold_in') break
+    streak += 1
+  }
+  return streak
+}
+
 /** Player turns + hints delivered since the last progress event (the ladder window). */
 async function stuckWindow(
   service: SupabaseClient,
@@ -136,10 +162,11 @@ export async function maybeAutoHint(
   // only fold into narration. Waiting out the full ladder there burned five turns before
   // anything opened, twice, in live one-shots (2026-07-21). Promote immediately instead.
   const deadTable = !state.encounter && state.dialogue.speakers.length === 0
-  if (deadTable && noProgressTurns >= DEAD_TABLE_TURNS) {
+  const folds = deadTable ? await foldStreak(service, env.adventureId) : 0
+  if (deadTable && (folds >= DEAD_TABLE_TURNS || noProgressTurns >= DEAD_TABLE_TURNS)) {
     if (await promoteStall(service, env, sessionId, state)) {
       await logEvent(service, env.adventureId, sessionId, 'hint_given', {
-        rung: 0, source: 'dead_table', no_progress_turns: noProgressTurns,
+        rung: 0, source: 'dead_table', no_progress_turns: noProgressTurns, fold_streak: folds,
       })
       return
     }

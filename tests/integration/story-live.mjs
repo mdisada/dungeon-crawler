@@ -309,7 +309,11 @@ async function main() {
   ok('visible encounter frame is live', state.encounter?.kind === 'skill_challenge' && state.encounter?.label === specBeat.encounter_spec.label, state.encounter)
   const entryMapped = await eventsOf(advId, 'entry_mapped')
   ok('entry_mapped logged the offered entry', entryMapped.some((e) => e.payload.entry === 'offered'), entryMapped)
-  for (let i = 0; i < 8; i++) {
+  // Each attempt costs TWO iterations (one to prompt the check, one to roll it), so a bound of
+  // 8 allowed only ~4 attempts against a 2-success/2-failure challenge - right at the edge, and
+  // it failed intermittently on unlucky dice (2026-07-21). 20 iterations is ~10 attempts, which
+  // no legal challenge can outlast.
+  for (let i = 0; i < 20; i++) {
     state = await resyncState(gm, advId)
     if (!state.encounter) break
     if (state.dialogue.pending) {
@@ -529,7 +533,11 @@ async function main() {
   ok('interrupted encounter restored after the spawn resolved',
     state.encounter?.label === 'Ford the drowned road' && !state.encounter?.interrupted, state.encounter)
   ok('encounter_restored logged', (await eventsOf(advId, 'encounter_restored')).length >= 1)
-  for (let i = 0; i < 8; i++) {
+  // Each attempt costs TWO iterations (one to prompt the check, one to roll it), so a bound of
+  // 8 allowed only ~4 attempts against a 2-success/2-failure challenge - right at the edge, and
+  // it failed intermittently on unlucky dice (2026-07-21). 20 iterations is ~10 attempts, which
+  // no legal challenge can outlast.
+  for (let i = 0; i < 20; i++) {
     state = await resyncState(gm, advId)
     if (!state.encounter) break
     if (state.dialogue.pending) {
