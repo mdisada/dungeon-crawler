@@ -32,6 +32,28 @@ const BUDGET = Number(argOf('budget', '0.6'))
 /** one_shot is the cheap, fast shape - fewer chapters means far fewer pipeline stages. */
 const ADVENTURE_TYPE = argOf('type', 'multi_chapter')
 
+/**
+ * Transient network failures killed two paid runs mid-generation ("fetch failed"), losing the
+ * guide spend each time. Retry the TRANSPORT only - an HTTP error response is the caller's
+ * business, but a socket that never connected is worth another go.
+ */
+async function withRetry(label, fn, attempts = 4) {
+  let lastError
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn()
+    } catch (err) {
+      lastError = err
+      const transient = err instanceof TypeError || /fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(err?.message ?? err))
+      if (!transient) throw err
+      const waitMs = 1000 * 2 ** i
+      console.log(`  (transient ${label} failure: ${err?.message ?? err} - retry ${i + 1}/${attempts - 1} in ${waitMs}ms)`)
+      await new Promise((r) => setTimeout(r, waitMs))
+    }
+  }
+  throw lastError
+}
+
 const password = `Test-password-${Date.now()}!`
 const admin = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, 'Content-Type': 'application/json' }
 const FALLBACK = 'The attempt is resolved; the outcome stands.'
@@ -58,27 +80,33 @@ async function signIn(email) {
   return body.access_token
 }
 async function serviceRest(method, path, payload) {
-  const res = await fetch(`${url}/rest/v1/${path}`, {
-    method, headers: { ...admin, Prefer: 'return=representation' },
-    body: payload === undefined ? undefined : JSON.stringify(payload),
+  return withRetry(`${method} ${path}`, async () => {
+    const res = await fetch(`${url}/rest/v1/${path}`, {
+      method, headers: { ...admin, Prefer: 'return=representation' },
+      body: payload === undefined ? undefined : JSON.stringify(payload),
+    })
+    const body = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(`service ${method} ${path} failed: ${res.status} ${JSON.stringify(body)}`)
+    return body
   })
-  const body = await res.json().catch(() => null)
-  if (!res.ok) throw new Error(`service ${method} ${path} failed: ${res.status} ${JSON.stringify(body)}`)
-  return body
 }
 async function act(token, payload) {
-  const res = await fetch(`${url}/functions/v1/session`, {
-    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+  return withRetry(`session ${payload.action}`, async () => {
+    const res = await fetch(`${url}/functions/v1/session`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    return { status: res.status, body: await res.json().catch(() => ({})) }
   })
-  return { status: res.status, body: await res.json().catch(() => ({})) }
 }
 async function pipeline(token, payload) {
-  const res = await fetch(`${url}/functions/v1/guide-pipeline`, {
-    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+  return withRetry(`pipeline ${payload.action}`, async () => {
+    const res = await fetch(`${url}/functions/v1/guide-pipeline`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    return { status: res.status, body: await res.json().catch(() => ({})) }
   })
-  return { status: res.status, body: await res.json().catch(() => ({})) }
 }
 
 // Deliberately poor input: lowercase, typos, one-word replies, questions instead of actions.
