@@ -33,21 +33,30 @@ function factSheet(state: GameState): string {
 }
 
 /** "Dead before the story began" is scene-setting, not a contradiction - spell that out. */
-async function preexistingDeadLine(service: SupabaseClient, adventureId: string): Promise<string> {
+async function deadRosterLine(
+  service: SupabaseClient,
+  adventureId: string,
+  npcStates: Record<string, string>,
+): Promise<string> {
   const { data } = await service
     .from('npcs')
-    .select('name, initial_state')
+    .select('id, name, initial_state')
     .eq('adventure_id', adventureId)
-    .neq('initial_state', 'alive')
-  const rows = (data ?? []) as { name: string; initial_state: string }[]
+  // Both sources: authored start state AND anyone who has died or left during play. The narrator
+  // must be able to NAME them - a mystery discusses its victim constantly - but never have them
+  // speak or walk. Stating that as a fact beats blocking every mention, which silenced the
+  // narrator six times in one session (live 2026-07-21).
+  const rows = ((data ?? []) as { id: string; name: string; initial_state: string }[])
+    .map((n) => ({ name: n.name, state: npcStates[n.id] ?? n.initial_state ?? 'alive' }))
+    .filter((n) => n.state !== 'alive')
   if (rows.length === 0) return ''
-  const dead = rows.filter((n) => n.initial_state === 'dead').map((n) => n.name)
-  const absent = rows.filter((n) => n.initial_state === 'absent').map((n) => n.name)
+  const dead = rows.filter((n) => n.state === 'dead').map((n) => n.name)
+  const absent = rows.filter((n) => n.state === 'absent').map((n) => n.name)
   return (
     (dead.length > 0
       ? `
-Already dead before the story began: ${dead.join(', ')}. Their body/legacy may be described, ` +
-        'examined and discussed freely - but they CANNOT speak, act, or appear alive.'
+DEAD: ${dead.join(', ')}. Name them, describe their body, discuss them and investigate ` +
+        'them freely - but they CANNOT speak, act, or appear alive.'
       : '') +
     (absent.length > 0
       ? `
@@ -77,7 +86,7 @@ export async function publishNarration(
   // and discussed - that is the whole subject of a mystery. Only speaking or appearing alive is
   // off limits, which is a judgement, so it goes to the checker as a fact rather than a
   // deterministic name-match block (which fell back to mechanical text, live 2026-07-21).
-  const preexisting = await preexistingDeadLine(service, env.adventureId)
+  const preexisting = await deadRosterLine(service, env.adventureId, npcStates)
   const facts = `${factSheet(state)}${preexisting}`
   // Retrieval memory (Slice 7): long-form cutscenes ground on what past sessions established.
   const memories = style === 'exposition' ? await retrieveMemories(service, env, prompt) : []

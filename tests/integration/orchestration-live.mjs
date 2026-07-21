@@ -305,9 +305,12 @@ async function main() {
   ok('action referencing the dead NPC still resolves', ghost.status === 200, ghost.body)
   sync = await act(gm, { action: 'resync', adventure_id: advId })
   const lastLine = sync.body.state.dialogue.lines.at(-1)
-  ok('narration fell back to the mechanical description', lastLine.text === 'The attempt is resolved; the outcome stands.', lastLine)
-  const blockedNarration = await eventsOf(advId, 'consistency_blocked')
-  ok('consistency block logged', blockedNarration.length >= 1)
+  // Narration may NAME the dead - a mystery discusses its victim constantly, and blocking every
+  // mention silenced the narrator six times in one live session (2026-07-21). What must never
+  // happen is the dead SPEAKING, which the staging guard and the npcReply check enforce.
+  ok('narration about a dead NPC is not silenced', lastLine.text !== 'The attempt is resolved; the outcome stands.', lastLine)
+  const staged = await act(gm, { action: 'start_social', adventure_id: advId, npc_ids: [volgarth.id] })
+  ok('a dead NPC cannot be staged to speak', staged.status === 409, staged.body)
 
   console.log('\n[stall promoter: a stalled cutscene gets something to engage]')
   // Live 2026-07-21: ten turns of "who did it" folded into narration because no encounter was

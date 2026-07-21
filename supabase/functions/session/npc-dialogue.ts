@@ -173,13 +173,13 @@ export async function npcReply(
   const npcFactSheet =
     `Location: the party and ${npc.name} are together at ${state.scene.locationName || 'an unknown place'} ` +
     `(scene mode: ${state.scene.mode}, day ${state.scene.day}), speaking face to face.`
-  let verdict = await runConsistency(env, output.dialogue, npcs, npcStates, npcFactSheet)
+  let verdict = await runConsistency(env, output.dialogue, npcs, npcStates, npcFactSheet, { draftIsNpcSpeech: true })
   if (!verdict.ok) {
     const constraint = verdict.violations.map((v) => `${v.claim} (${v.conflictsWith})`).join('; ')
     await logEvent(service, env.adventureId, sessionId, 'consistency_blocked', { draft: output.dialogue, violations: constraint })
     if (!env.demo) {
       output = await runNpcAgent(env, buildContext(`NEVER: ${constraint}`, direction))
-      verdict = await runConsistency(env, output.dialogue, npcs, npcStates, npcFactSheet)
+      verdict = await runConsistency(env, output.dialogue, npcs, npcStates, npcFactSheet, { draftIsNpcSpeech: true })
     }
     if (env.demo || !verdict.ok) {
       await logEvent(service, env.adventureId, sessionId, 'incident', { kind: 'npc_consistency_failure', npc_id: npcId })
@@ -243,6 +243,7 @@ export async function npcReply(
       const { data: registryNpcs } = await service.from('npcs').select('id, name').eq('adventure_id', env.adventureId)
       const theoryVerdict = await runConsistency(
         env, theory, ((registryNpcs ?? []) as { id: string; name: string }[]), npcStates, '',
+        { draftAssertsCanon: true },
       )
       const auto = env.mode === 'full_ai' && theoryVerdict.ok
       await recordProposal(service, {

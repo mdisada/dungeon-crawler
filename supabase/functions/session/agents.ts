@@ -575,16 +575,46 @@ export async function runConsistency(
   npcs: { id: string; name: string }[],
   npcStates: Record<string, string>,
   factSheet: string,
+  opts?: { draftIsNpcSpeech?: boolean; draftAssertsCanon?: boolean },
 ): Promise<ConsistencyVerdict> {
   const violations: ConsistencyVerdict['violations'] = []
-  for (const npc of npcs) {
-    const state = npcStates[npc.id]
-    if ((state === 'dead' || state === 'absent') && npc.name && draft.toLowerCase().includes(npc.name.toLowerCase())) {
-      violations.push({ claim: `mentions ${npc.name}`, conflictsWith: `${npc.name} is ${state}` })
+  // Naming a dead NPC is only a contradiction when the draft IS that NPC talking. A murder
+  // mystery says its victim's name constantly - blocking every mention made the narrator fall
+  // back to mechanical text six times in one session, unable to describe the body it was
+  // standing over (live 2026-07-21). The dead are kept off stage by the staging guard and by
+  // this check on their own dialogue; narration may discuss them freely, and the LLM checker
+  // still catches a draft that has them walking and speaking.
+  if (opts?.draftIsNpcSpeech) {
+    // STRUCTURAL, not textual: this draft IS the speech of the NPCs passed in, so a dead or
+    // absent speaker is a contradiction no matter what the words say. Matching their name
+    // against the text was the old shape and it confused MENTIONING a fact with VIOLATING it.
+    for (const npc of npcs) {
+      const state = npcStates[npc.id]
+      if (state === 'dead' || state === 'absent') {
+        violations.push({ claim: `speaks as ${npc.name}`, conflictsWith: `${npc.name} is ${state}` })
+      }
     }
   }
   if (violations.length > 0) return { ok: false, violations }
-  if (env.demo) return { ok: true, violations: [] }
+  if (env.demo) {
+    // Canned checker for the $0 suites, and ONLY for drafts that assert new canon (a player
+    // theory being made true). Production sends that judgement to the LLM with the dead/absent
+    // roster in the fact sheet; demo has no model, so the fixture approximates it by name -
+    // legitimate in a test double, never in production. Narration is deliberately exempt:
+    // matching a name against prose is what silenced the narrator about its own murder victim.
+    if (!opts?.draftAssertsCanon) return { ok: true, violations: [] }
+    const deadMentioned = npcs.filter((n) =>
+      (npcStates[n.id] === 'dead' || npcStates[n.id] === 'absent') &&
+      n.name && draft.toLowerCase().includes(n.name.toLowerCase()))
+    return deadMentioned.length === 0
+      ? { ok: true, violations: [] }
+      : {
+          ok: false,
+          violations: deadMentioned.map((n) => ({
+            claim: `[demo] mentions ${n.name}`, conflictsWith: `${n.name} is ${npcStates[n.id]}`,
+          })),
+        }
+  }
   try {
     return parseConsistency(
       await agentJson(env, 'consistency_checker', CONSISTENCY_SYSTEM, `Facts:\n${factSheet}\n\nDraft:\n${draft}`, 300),
