@@ -25,7 +25,10 @@ import {
   buildStage3Prompt, MULTI_CHAPTER_OBJECTIVES, MULTI_CHAPTER_TOTAL_OBJECTIVES, ONE_SHOT_OBJECTIVES,
   parseStage3,
 } from './stage3.ts'
-import { entityNameMatches, maxCoopDemanding, parseStage4, validateCoopConformance, validateEntityCoverage } from './stage4.ts'
+import {
+  buildStage4Prompt, entityNameMatches, maxCoopDemanding, parseStage4, validateCoopConformance,
+  validateEntityCoverage,
+} from './stage4.ts'
 import { parseStage5 } from './stage5.ts'
 import { parseStage6 } from './stage6.ts'
 import { parseStage7, validateRegistryCoverage } from './stage7.ts'
@@ -556,5 +559,30 @@ describe('stage 8 (ending designer)', () => {
         STAGE8_OBJECTIVE_COUNT,
       ).some((w) => w.includes('final objective')),
     ).toBe(true)
+  })
+})
+
+describe('stage 4 established-entity contract', () => {
+  // Live 2026-07-21: stage 4 runs per chapter and used to see only names, so a later chapter
+  // made Elara Voss the victim's wife, his poisoner, AND the servant framing someone else.
+  it('carries facts from earlier chapters into the prompt, not just names', () => {
+    const { user } = buildStage4Prompt({
+      ...STAGE4_CONTEXT,
+      existingNpcs: [{
+        key: 'npc:elara',
+        name: 'Elara Voss',
+        facts: ['wife of the victim', 'is dead when play begins'],
+      }],
+      existingLocations: [],
+    })
+    expect(user).toContain('never author anything that contradicts it')
+    expect(user).toContain('Elara Voss')
+    expect(user).toContain('wife of the victim')
+    expect(user).toContain('is dead when play begins')
+  })
+
+  it('says nothing about existing entities in the first chapter', () => {
+    const { user } = buildStage4Prompt({ ...STAGE4_CONTEXT, existingNpcs: [], existingLocations: [] })
+    expect(user).not.toContain('never author anything that contradicts it')
   })
 })

@@ -43,20 +43,41 @@ export async function runStage4(env: StageEnv, chapterId: string): Promise<void>
   // Entities from other chapters are reusable by slug key instead of duplicating them.
   const { data: otherNpcs, error: npcError } = await env.db
     .from('npcs')
-    .select('id, name')
+    .select('id, name, role, description, initial_state')
     .eq('adventure_id', env.adventure.id)
     .neq('chapter_id', chapterId)
     .order('created_at')
   assertOk(npcError, 'npcs load failed')
   const { data: otherLocations, error: locError } = await env.db
     .from('locations')
-    .select('id, name')
+    .select('id, name, description')
     .eq('adventure_id', env.adventure.id)
     .neq('chapter_id', chapterId)
     .order('created_at')
   assertOk(locError, 'locations load failed')
   const existingNpcs = slugKeys(otherNpcs ?? [], 'npc')
   const existingLocations = slugKeys(otherLocations ?? [], 'loc')
+
+  // What earlier chapters already made true of these entities. Their own row is one source;
+  // every ingredient placed on them is another - an NPC's secrets ARE facts about them, and
+  // that is where the contradictions came from (a wife in one chapter, the poisoner in another).
+  const { data: priorIngredients } = await env.db
+    .from('ingredients')
+    .select('reveals, placement')
+    .eq('adventure_id', env.adventure.id)
+    .neq('chapter_id', chapterId)
+  const revealsByEntityId = new Map<string, string[]>()
+  for (const row of (priorIngredients ?? []) as { reveals: string; placement: Record<string, unknown> }[]) {
+    const id = (row.placement?.npc_id ?? row.placement?.location_id) as string | undefined
+    if (!id || !row.reveals) continue
+    revealsByEntityId.set(id, [...(revealsByEntityId.get(id) ?? []), row.reveals])
+  }
+  const npcFacts = (row: { id: string; role?: string; description?: string; initial_state?: string }) => [
+    row.description ?? '',
+    row.role === 'boss' ? 'is the chapter villain' : '',
+    row.initial_state && row.initial_state !== 'alive' ? `is ${row.initial_state} when play begins` : '',
+    ...(revealsByEntityId.get(row.id) ?? []),
+  ].filter(Boolean)
 
   const ctx = {
     seed: toSeed(env.adventure),
@@ -66,8 +87,12 @@ export async function runStage4(env: StageEnv, chapterId: string): Promise<void>
     scenes,
     objectives,
     requiredEntities: (chapter.entities as EntityRef[] | null) ?? [],
-    existingNpcs: existingNpcs.list.map(({ key, name }) => ({ key, name })),
-    existingLocations: existingLocations.list.map(({ key, name }) => ({ key, name })),
+    existingNpcs: existingNpcs.list.map(({ key, name, row }) => ({ key, name, facts: npcFacts(row) })),
+    existingLocations: existingLocations.list.map(({ key, name, row }) => ({
+      key,
+      name,
+      facts: [row.description ?? '', ...(revealsByEntityId.get(row.id) ?? [])].filter(Boolean),
+    })),
   }
   const output = await env.generate('ingredient_generator', buildStage4Prompt(ctx), (raw) => parseStage4(raw, ctx))
 

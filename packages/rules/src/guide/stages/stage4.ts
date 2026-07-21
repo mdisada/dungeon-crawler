@@ -20,6 +20,23 @@ import type {
   SceneSketch,
 } from '../types.ts'
 
+export interface EstablishedEntity {
+  key: string
+  name: string
+  /** What earlier chapters already made true of this entity - the anti-contradiction contract. */
+  facts?: string[]
+}
+
+/** Renders the established-entity contract; empty when nothing exists yet (chapter 1). */
+function establishedLines(label: string, entities: EstablishedEntity[]): string {
+  if (entities.length === 0) return ''
+  const rows = entities.map((e) => {
+    const facts = (e.facts ?? []).filter(Boolean)
+    return `- ${e.key} (${e.name})${facts.length > 0 ? `: ${facts.join('; ')}` : ''}`
+  })
+  return `Existing ${label} (reuse by key). What follows is ALREADY TRUE of them - never author anything that contradicts it:\n${rows.join('\n')}`
+}
+
 export interface Stage4Context {
   seed: AdventureSeed
   metaLoop: MetaLoop
@@ -29,9 +46,15 @@ export interface Stage4Context {
   objectives: ObjectiveDraft[]
   /** The chapter's entity list (F04 SS2.1): every entry MUST come back as a row or reuse. */
   requiredEntities: EntityRef[]
-  /** NPCs/locations already generated for earlier chapters, reusable by key. */
-  existingNpcs: { key: string; name: string }[]
-  existingLocations: { key: string; name: string }[]
+  /**
+   * NPCs/locations already generated for earlier chapters, reusable by key - WITH what those
+   * chapters established about them. Stage 4 runs once per chapter, and passing bare names let
+   * chapter 4 author an entity that contradicted chapter 1: one generated guide made Elara Voss
+   * simultaneously the victim's wife, the poisoner of his tea, and the servant framing someone
+   * else for the murder (live 2026-07-21). No stage was wrong alone; none could see the others.
+   */
+  existingNpcs: EstablishedEntity[]
+  existingLocations: EstablishedEntity[]
 }
 
 export interface Stage4Output {
@@ -96,12 +119,8 @@ Respond with ONLY a JSON object, no prose, in exactly this shape:
     .join('\n')
   const sceneList = ctx.scenes.map((s, i) => `Scene ${i + 1}: ${s.sketch}`).join('\n')
   const existing = [
-    ctx.existingNpcs.length > 0
-      ? `Existing NPCs (reuse by key): ${ctx.existingNpcs.map((n) => `${n.key} (${n.name})`).join(', ')}`
-      : '',
-    ctx.existingLocations.length > 0
-      ? `Existing locations (reuse by key): ${ctx.existingLocations.map((l) => `${l.key} (${l.name})`).join(', ')}`
-      : '',
+    establishedLines('NPCs', ctx.existingNpcs),
+    establishedLines('locations', ctx.existingLocations),
   ]
     .filter(Boolean)
     .join('\n')
