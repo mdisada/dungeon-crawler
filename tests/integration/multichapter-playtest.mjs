@@ -29,6 +29,8 @@ function argOf(name, fallback) {
   return inline ? inline.slice(name.length + 3) : fallback
 }
 const BUDGET = Number(argOf('budget', '0.6'))
+/** one_shot is the cheap, fast shape - fewer chapters means far fewer pipeline stages. */
+const ADVENTURE_TYPE = argOf('type', 'multi_chapter')
 
 const password = `Test-password-${Date.now()}!`
 const admin = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, 'Content-Type': 'application/json' }
@@ -127,7 +129,7 @@ async function main() {
     console.log(`adventure: ${advId} (resumed, reassigned to this run's user)`)
   } else {
     const [adventure] = await serviceRest('POST', 'adventures', {
-      creator_id: userId, mode: 'full_ai', min_players: 1, max_players: 1, type: 'multi_chapter',
+      creator_id: userId, mode: 'full_ai', min_players: 1, max_players: 1, type: ADVENTURE_TYPE,
       status: 'draft', demo: false, title: 'The Ashfall Inheritance',
       plot_idea:
         'In a mountain mining town, the mine owner is found dead the night before he was to sign ' +
@@ -135,7 +137,7 @@ async function main() {
         'work out who killed him before the thaw brings the magistrate.',
     })
     advId = adventure.id
-    console.log(`adventure: ${advId}`)
+    console.log(`adventure: ${advId} (${ADVENTURE_TYPE})`)
   }
 
   const spentUsd = async () => {
@@ -300,7 +302,18 @@ async function main() {
   console.log(`  checks prompted/rolled:      ${counts('check_prompted')}/${counts('check_rolled')}`)
   console.log(`  objectives completed:        ${counts('objective_completed')}`)
   console.log(`  beats opened / exits met:    ${counts('beat_opened')}/${counts('beat_exit_met')}`)
-  console.log(`  idle nudges:                 ${counts('idle_nudge')}`)
+  console.log(`  idle nudges / auto hints:    ${counts('idle_nudge')}/${events.filter((e) => e.type === 'hint_given').length}`)
+  const beatKinds = {}
+  events.filter((e) => e.type === 'beat_opened').forEach((e) => {
+    const k = e.payload?.encounter_kind ?? 'none'
+    beatKinds[k] = (beatKinds[k] ?? 0) + 1
+  })
+  console.log(`  beat encounter kinds:        ${JSON.stringify(beatKinds)}`)
+  const ledgers = events.filter((e) => e.type === 'scene_ledger')
+  const proposed = ledgers.reduce((n, e) => n + (e.payload?.proposed?.length ?? 0), 0)
+  const applied = ledgers.reduce((n, e) => n + (e.payload?.applied?.length ?? 0), 0)
+  console.log(`  scene ledgers: ${ledgers.length} (milestones proposed ${proposed}, applied ${applied})`)
+  ledgers.forEach((e) => console.log(`    [${e.payload?.phase}] ${e.payload?.label}: ${e.payload?.digest ?? ''}`))
   const objDone = events.filter((e) => e.type === 'objective_completed')
   objDone.forEach((e) => console.log(`    completed: ${e.payload?.title}`))
 

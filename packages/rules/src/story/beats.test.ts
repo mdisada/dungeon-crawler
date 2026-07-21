@@ -88,13 +88,15 @@ describe('parseBeatPlan', () => {
     expect(result.plan.encounter?.onSuccess).toEqual(['guide_saved'])
   })
 
-  it('rejects outcome-map entries that are not exact authored atoms', () => {
+  it('never lets an inexact atom become a real outcome map', () => {
     const bad = clone()
     bad.beat.encounter.on_success = ['Beast_Found']
     const result = parseBeatPlan(bad, ctx)
+    // Dropped, not honoured - and with nothing left in on_success the beat cannot move the
+    // spine, so this specific case is still fatal.
     expect(result.ok).toBe(false)
     if (result.ok) return
-    expect(result.errors.some((e) => e.includes('Beast_Found'))).toBe(true)
+    expect(result.errors.some((e) => e.includes('on_success'))).toBe(true)
   })
 
   it('rejects a spec whose on_success maps nothing despite available vocabulary', () => {
@@ -124,5 +126,46 @@ describe('parseBeatPlan', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.plan.encounter?.onSuccess).toEqual([])
+  })
+})
+
+describe('outcome maps degrade instead of killing the beat', () => {
+  // Live 2026-07-21: the planner wrote "The cult silenced Elara before she could reveal the
+  // truth" into on_failure. Hard-failing there left the loop with no active beat, which
+  // starved the scene ledger of vocabulary and stalled progression entirely.
+  const ctx = { partySize: 1, partySkills: ['investigation'], milestones: ['study_secured'] }
+  const plan = (encounter: Record<string, unknown>) => ({
+    beat: {
+      name: 'The Locked Study',
+      goals: ['find the way in'],
+      exit_conditions: { flag: 'study_secured', eq: true },
+      narration_seed: 'The study door is bolted from inside.',
+      encounter,
+    },
+  })
+
+  it('drops an invented milestone but keeps the beat', () => {
+    const result = parseBeatPlan(plan({
+      kind: 'skill_challenge',
+      label: 'Force the study',
+      on_success: ['study_secured'],
+      on_failure: ['The cult silenced Elara before she could reveal the truth'],
+    }), ctx)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.plan.encounter?.onSuccess).toEqual(['study_secured'])
+    expect(result.plan.encounter?.onFailure).toEqual([])
+    expect(result.dropped.some((d) => d.includes('not authored'))).toBe(true)
+  })
+
+  it('still fails when success maps onto nothing - that cannot move the spine', () => {
+    const result = parseBeatPlan(plan({
+      kind: 'skill_challenge',
+      label: 'Force the study',
+      on_success: ['something invented'],
+    }), ctx)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some((e) => e.includes('on_success'))).toBe(true)
   })
 })

@@ -126,7 +126,27 @@ function cannedBeatPlan(ctx: PlannerContext): unknown {
   }
 }
 
-export async function runBeatPlanner(env: AgentEnv, ctx: PlannerContext): Promise<BeatParseResult> {
+/**
+ * `priorErrors` turns a retry into a REPAIR. A blind re-roll of the identical prompt is the
+ * documented no-op ("the retry loop that looks like progress and does nothing"), and it is what
+ * this agent used to do - the planner was never told which milestone it invented, so it
+ * invented another. guide-pipeline's generateParsed already carries errors forward; this brings
+ * the session-side planner in line. Empirically the first repair step captures most of the
+ * achievable gain, so one guided attempt is worth more than several blind ones.
+ */
+export async function runBeatPlanner(
+  env: AgentEnv,
+  ctx: PlannerContext,
+  priorErrors?: string[],
+): Promise<BeatParseResult> {
+  const repair = (priorErrors ?? []).length === 0
+    ? ''
+    : [
+        'Your previous plan was REJECTED by the validator:',
+        ...priorErrors!.slice(0, 8),
+        'Fix exactly these problems. Outcome-map entries must be copied character-for-character ' +
+          'from the milestone list above - if none fits a tier, leave that tier empty.',
+      ].join('\n')
   const raw = env.demo
     ? cannedBeatPlan(ctx)
     : await agentJson(env, 'beat_planner', PLANNER_SYSTEM, [

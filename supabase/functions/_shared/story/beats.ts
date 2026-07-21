@@ -130,7 +130,7 @@ export function parseBeatPlan(raw: unknown, ctx: BeatPlanContext): BeatParseResu
     : ''
   if (!narrationSeed) errors.push('beat.narration_seed: expected a non-empty string')
 
-  const encounter = parseEncounterSpec(beat.encounter, exitConditions, ctx.milestones ?? [], errors)
+  const encounter = parseEncounterSpec(beat.encounter, exitConditions, ctx.milestones ?? [], errors, dropped)
 
   if (errors.length > 0) return { ok: false, errors }
   return { ok: true, plan: { name, goals, exitConditions, ingredientRequests, braided, narrationSeed, encounter }, dropped }
@@ -139,13 +139,14 @@ export function parseBeatPlan(raw: unknown, ctx: BeatPlanContext): BeatParseResu
 /**
  * The outcome-map vocabulary is the objective's authored atoms plus the atoms of this very
  * plan's exit conditions - the planner maps encounter outcomes onto the exits it just wrote.
- * Entries must be copied EXACTLY; anything else is a hard error so the planner retries.
+ * Entries must be copied EXACTLY; anything else is dropped and noted (see below).
  */
 function parseEncounterSpec(
   raw: unknown,
   exitConditions: Json,
   objectiveMilestones: string[],
   errors: string[],
+  dropped: string[],
 ): BeatEncounterSpec | null {
   if (raw == null) {
     errors.push('beat.encounter: expected an encounter spec (kind, label, stakes, outcome maps)')
@@ -163,20 +164,32 @@ function parseEncounterSpec(
 
   const exitAtoms = listMilestoneAtoms(exitConditions)
   const vocabulary = new Set([...objectiveMilestones, ...exitAtoms.flags, ...exitAtoms.events, ...exitAtoms.facts])
-  const outcomes = (key: string): string[] => {
+  // Off-vocabulary entries are DROPPED, not fatal. This parser used to be the only guardrail
+  // in the codebase that hard-failed on an unauthored claim - applyMilestones, the reveal gate,
+  // the suspicion judge and the scene ledger all drop the bad item and carry on ("the LLM
+  // proposes, the guardrails decide"). Failing here killed the whole beat over one invented
+  // sentence in on_failure, which left the loop with no active beat, which starved the scene
+  // ledger of vocabulary and stalled progression outright (live 2026-07-21).
+  const outcomes = (key: string): { kept: string[]; dropped: string[] } => {
     const list = Array.isArray(enc[key]) ? (enc[key] as unknown[]) : []
     const entries = list.filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
-    for (const entry of entries) {
-      if (!vocabulary.has(entry)) {
-        errors.push(`beat.encounter.${key}: "${entry}" is not an authored milestone (copy exact text)`)
-      }
-    }
-    return entries
+    const kept = entries.filter((e) => vocabulary.has(e))
+    return { kept, dropped: entries.filter((e) => !vocabulary.has(e)) }
   }
-  const onSuccess = outcomes('on_success')
-  const onPartial = outcomes('on_partial')
-  const onFailure = outcomes('on_failure')
-  // Success must move the spine whenever there is any vocabulary to map onto.
+  const success = outcomes('on_success')
+  const partial = outcomes('on_partial')
+  const failure = outcomes('on_failure')
+  const onSuccess = success.kept
+  const onPartial = partial.kept
+  // on_failure may legitimately be empty: a fail-forward that maps to no milestone is correct,
+  // and demanding one is what tempts the model to invent prose in the first place.
+  const onFailure = failure.kept
+  for (const [key, result] of [['on_success', success], ['on_partial', partial], ['on_failure', failure]] as const) {
+    for (const entry of result.dropped) {
+      dropped.push(`${key} milestone "${entry}" (not authored)`)
+    }
+  }
+  // Only this is fatal: a success that maps onto nothing cannot move the spine.
   if (vocabulary.size > 0 && onSuccess.length === 0) {
     errors.push('beat.encounter.on_success: expected at least one milestone from the vocabulary')
   }

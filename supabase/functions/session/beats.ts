@@ -193,7 +193,10 @@ export async function planAndOpenBeat(
     },
   }
   let parsed = await runBeatPlanner(env, plannerCtx)
-  if (!parsed.ok) parsed = await runBeatPlanner(env, plannerCtx)
+  // One GUIDED repair, not a blind re-roll: the first repair step captures the bulk of the
+  // achievable gain, and re-rolling the same prompt is what produced the invented milestone
+  // that stalled the loop (live 2026-07-21).
+  if (!parsed.ok) parsed = await runBeatPlanner(env, plannerCtx, parsed.errors)
   const plan: BeatPlan = parsed.ok
     ? parsed.plan
     : {

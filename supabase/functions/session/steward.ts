@@ -107,6 +107,9 @@ export async function antagonistTurn(service: SupabaseClient, env: AgentEnv, ses
   }
 }
 
+/** A bare third-person subject - the word boundaries matter, or "the" matches "he". */
+const THIRD_PERSON_SUBJECT = /\b(he|she|they|him|her|them|his|hers|their)\b/i
+
 /** BBEG commitment threshold (F08 SS8): tally >= 5 across >= 2 sessions of signals. */
 export const BBEG_TALLY_THRESHOLD = 5
 
@@ -122,10 +125,20 @@ export const BBEG_TALLY_THRESHOLD = 5
  */
 export async function noteSuspicion(service: SupabaseClient, env: AgentEnv, sessionId: string, utterance: string): Promise<void> {
   const { data: npcs } = await service.from('npcs').select('id, name, generated').eq('adventure_id', env.adventureId)
+  const registry = ((npcs ?? []) as { id: string; name: string; generated: boolean }[])
+    .filter((n) => !n.generated && n.name)
   // Name matching against the registry is a lookup, not a guess about meaning.
-  const mentioned = ((npcs ?? []) as { id: string; name: string; generated: boolean }[])
-    .filter((n) => !n.generated && n.name && utterance.toLowerCase().includes(n.name.toLowerCase()))
-  if (mentioned.length === 0) return
+  let mentioned = registry.filter((n) => utterance.toLowerCase().includes(n.name.toLowerCase()))
+  if (mentioned.length === 0) {
+    // Real players say "he", not "Maester Tomas" - the tally stayed at zero across every
+    // playtest because of it. A bare third-person pronoun resolves to whoever is on stage,
+    // which is who the party is talking about. Still structural: no staged speaker, no subject.
+    if (!THIRD_PERSON_SUBJECT.test(utterance)) return
+    const staged = (await loadState(service, env.adventureId)).state.dialogue.speakers
+    if (staged.length !== 1) return // ambiguous with 0 or 2+ on stage - do not guess
+    mentioned = registry.filter((n) => n.id === staged[0].npcId)
+    if (mentioned.length === 0) return
+  }
 
   const meta = await ensureMetaLoop(service, env)
   if (meta.committed_bbeg_npc_id) return
