@@ -26,6 +26,8 @@ export interface Stage5Context {
 export interface Stage5Output {
   encounters: (EncounterDraft & { budget: BudgetVerdict | null })[]
   bossUpdates: BossUpdateDraft[]
+  /** Deterministic repairs made here (trimmed encounters); surfaced as stage-5 guide_warnings. */
+  warnings: string[]
 }
 
 export function buildStage5Prompt(ctx: Stage5Context): { system: string; user: string; maxTokens: number } {
@@ -64,6 +66,7 @@ export function parseStage5(raw: string, ctx: Stage5Context): ParseResult<Stage5
   if (!extracted.ok) return extracted
 
   const c = new Check()
+  const warnings: string[] = []
   const root = extracted.data
   const npcKeys = new Map(ctx.npcs.map((n) => [n.key, n.role]))
   const locationKeys = new Set(ctx.locations.map((l) => l.key))
@@ -94,17 +97,30 @@ export function parseStage5(raw: string, ctx: Stage5Context): ParseResult<Stage5
       })
     }
 
-    const budget =
+    let budget =
       type === 'battle' && enemies
         ? validateEncounterBudget(enemies, ctx.partyLevel, ctx.partySize, ctx.difficultyPreset)
         : null
-    // Over-budget is an editor warning; wildly over-budget is a broken encounter. Reject it so
-    // the repair pass re-rolls with the numbers in hand, rather than shipping a guaranteed TPK.
-    if (budget && budget.adjustedXp > budget.xpBudget * LETHAL_BUDGET_MULTIPLE) {
-      c.errors.push(
-        `${path}.enemies: ${budget.adjustedXp} adjusted XP is over ${LETHAL_BUDGET_MULTIPLE}x the ` +
-        `${budget.xpBudget} XP target for ${ctx.partySize} level-${ctx.partyLevel} character(s) - ` +
-        'cut the count or the CR',
+    // Wildly over-budget encounters get TRIMMED, not rejected. Rejecting them was a hard parse
+    // error, and on a dungeon_crawl - where the combat pillar means the model keeps authoring
+    // big fights - the repair loop exhausted every attempt and the WHOLE ADVENTURE failed to
+    // generate (live 2026-07-21). A guaranteed TPK is bad; a guide that cannot be created is
+    // worse. Dropping duplicate bodies is deterministic, keeps the authored cast, and always
+    // terminates.
+    if (enemies && budget && budget.adjustedXp > budget.xpBudget * LETHAL_BUDGET_MULTIPLE) {
+      const before = budget.adjustedXp
+      while (
+        budget.adjustedXp > budget.xpBudget * LETHAL_BUDGET_MULTIPLE &&
+        enemies.some((e) => e.count > 1)
+      ) {
+        const fattest = enemies.filter((e) => e.count > 1).sort((a, b) => b.count - a.count)[0]
+        fattest.count -= 1
+        budget = validateEncounterBudget(enemies, ctx.partyLevel, ctx.partySize, ctx.difficultyPreset)
+      }
+      warnings.push(
+        `${path}: trimmed from ${before} to ${budget.adjustedXp} adjusted XP (target ` +
+        `${budget.xpBudget} for ${ctx.partySize} level-${ctx.partyLevel}) - the authored count ` +
+        'was over ' + LETHAL_BUDGET_MULTIPLE + 'x and unsurvivable.',
       )
     }
 
@@ -139,5 +155,5 @@ export function parseStage5(raw: string, ctx: Stage5Context): ParseResult<Stage5
     }
   }
 
-  return c.result({ encounters, bossUpdates })
+  return c.result({ encounters, bossUpdates, warnings })
 }

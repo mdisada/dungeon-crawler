@@ -223,6 +223,98 @@ const ADJUDICATOR_SYSTEM =
   'that probes for HIDDEN or uncertain information ("any hint the gargoyles are creatures, ' +
   'not decorations?") is an attempt: spec a check for it instead.'
 
+/**
+ * The Adjudicator's world-effects, with every reference field enum'd to what actually exists.
+ *
+ * These are the three the server has been silently dropping: travel_location misses matchByName
+ * and logs scene_effect_rejected (travel fired 0-3 times across every run, which is why location
+ * clues kept being unreachable), stage_npcs names people who are not in the registry, and
+ * milestones get discarded by applyMilestones for paraphrasing. Each one is a set we are already
+ * holding - so hand it to the model as a closed choice instead of hoping it copies correctly.
+ */
+function sceneEffectsSchema(ctx: AdjudicatorContext): { name: string; schema: Record<string, unknown> } {
+  const enumOrString = (values: string[]) =>
+    values.length > 0 ? { type: 'string', enum: values } : { type: 'string' }
+  const skills = ctx.partySkills.length > 0 ? ctx.partySkills : ['']
+  return {
+    name: 'adjudication',
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['interpretation', 'resolution', 'flags', 'scene_effects'],
+      properties: {
+        interpretation: { type: 'string' },
+        resolution: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['type', 'check', 'consequences_hint'],
+          properties: {
+            type: { type: 'string', enum: ['auto_success', 'auto_fail', 'check'] },
+            check: {
+              type: ['object', 'null'],
+              additionalProperties: false,
+              required: ['skill', 'skill_options', 'dc', 'adv_dis', 'rationale', 'group', 'requires_assist'],
+              properties: {
+                skill: { type: 'string', enum: skills },
+                skill_options: { type: 'array', items: { type: 'string', enum: skills }, maxItems: 3 },
+                dc: { type: 'integer', minimum: 5, maximum: 25 },
+                adv_dis: { type: 'string', enum: ['none', 'advantage', 'disadvantage'] },
+                rationale: { type: 'string' },
+                group: { type: 'boolean' },
+                requires_assist: {
+                  type: ['object', 'null'],
+                  additionalProperties: false,
+                  required: ['skill', 'effect'],
+                  properties: {
+                    skill: { type: 'string', enum: skills },
+                    effect: { type: 'string', enum: ['enable', 'bonus'] },
+                  },
+                },
+              },
+            },
+            consequences_hint: { type: 'string' },
+          },
+        },
+        flags: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['impossible', 'needs_dm', 'talk'],
+          properties: {
+            impossible: { type: 'boolean' },
+            needs_dm: { type: 'boolean' },
+            talk: { type: 'boolean' },
+          },
+        },
+        scene_effects: {
+          type: ['object', 'null'],
+          additionalProperties: false,
+          required: [
+            'travel_location', 'stage_npcs', 'mark_event', 'advance_day', 'encounter',
+            'milestones', 'end_scene', 'loud',
+          ],
+          properties: {
+            travel_location: {
+              anyOf: [enumOrString(ctx.knownLocations), { type: 'null' }],
+            },
+            stage_npcs: { type: 'array', items: enumOrString(ctx.knownNpcs), maxItems: 3 },
+            mark_event: { type: ['string', 'null'] },
+            advance_day: { type: 'boolean' },
+            encounter: {
+              type: ['object', 'null'],
+              additionalProperties: false,
+              required: ['kind', 'label'],
+              properties: { kind: { type: 'string', enum: ['combat'] }, label: { type: 'string' } },
+            },
+            milestones: { type: 'array', items: enumOrString(ctx.milestones), maxItems: 3 },
+            end_scene: { type: 'boolean' },
+            loud: { type: 'boolean' },
+          },
+        },
+      },
+    },
+  }
+}
+
 export async function runAdjudicator(
   env: AgentEnv,
   ctx: AdjudicatorContext,
@@ -239,7 +331,7 @@ export async function runAdjudicator(
     `Authored milestones (exact text): ${ctx.milestones.join(' | ') || 'none'}`,
     `Recent events: ${ctx.recentEvents.join(' | ') || 'none'}`,
   ].filter(Boolean).join('\n')
-  const raw = await agentJson(env, 'adjudicator', ADJUDICATOR_SYSTEM, user, 600)
+  const raw = await agentJson(env, 'adjudicator', ADJUDICATOR_SYSTEM, user, 600, sceneEffectsSchema(ctx))
   const parsed = parseAdjudication(raw, ctx.partySkills)
   if (!parsed.ok) throw new AgentCallError(`Adjudicator output invalid: ${parsed.errors.join('; ')}`)
   return { ...parsed.data, sceneEffects: extractSceneEffects(raw) }

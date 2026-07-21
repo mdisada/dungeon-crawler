@@ -300,6 +300,21 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
     assertOk(error, 'budget warnings insert failed')
   }
 
+  // Deterministic trims made by the parser (an unsurvivable encounter cut down to size) are
+  // recorded too - the guide still generates, but the DM sees what was changed and why.
+  if (output.warnings.length > 0) {
+    const { error } = await env.db.from('guide_warnings').insert(
+      output.warnings.map((message) => ({
+        adventure_id: env.adventure.id,
+        stage: 5,
+        target_table: 'encounters',
+        target_id: null,
+        message,
+      })),
+    )
+    assertOk(error, 'stage-5 trim warnings insert failed')
+  }
+
   for (const update of output.bossUpdates) {
     const npc = npcKeys.byKey.get(update.npcKey)
     if (!npc) continue
