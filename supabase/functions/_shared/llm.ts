@@ -71,6 +71,17 @@ export interface AgentTextCall {
   system: string
   user: string
   maxTokens: number
+  /**
+   * JSON Schema for the reply. Every curated model advertises `structured_outputs` (verified
+   * against the OpenRouter models API, 2026-07-21), and the Settings picker only offers curated
+   * models - but model_map is free-form jsonb, so a rejected schema falls back to the prose
+   * path rather than failing the call.
+   *
+   * This guarantees SHAPE ONLY. Semantic validation stays exactly where it is: a
+   * schema-conformant reply can still claim an off-vocabulary milestone, and the parsers in
+   * _shared/play and _shared/story are what catch that.
+   */
+  schema?: { name: string; schema: Record<string, unknown> }
 }
 
 /** Thrown when the caller's settings route this request somewhere we can't serve (local mode). */
@@ -92,7 +103,7 @@ export async function callAgentText(call: AgentTextCall): Promise<string> {
   if (!isAgentRole(agentRole)) throw new AgentCallError(`Unknown agent_role: ${agentRole}`)
   const model = resolveModel(agentRole, (settings.model_map as Record<string, string>) ?? {})
 
-  const requestBody = (withReasoningOff: boolean, tokens: number) =>
+  const requestBody = (withReasoningOff: boolean, tokens: number, withSchema: boolean) =>
     JSON.stringify({
       model,
       messages: [
@@ -102,6 +113,14 @@ export async function callAgentText(call: AgentTextCall): Promise<string> {
       max_tokens: tokens,
       stream: false,
       usage: { include: true },
+      ...(withSchema && call.schema
+        ? {
+            response_format: {
+              type: 'json_schema',
+              json_schema: { name: call.schema.name, strict: true, schema: call.schema.schema },
+            },
+          }
+        : {}),
       // Pipeline calls are structured-output jobs: hybrid reasoning models (deepseek v4) can
       // burn the whole completion budget on reasoning tokens and return EMPTY content (seen
       // live in the Phase 3b smoke test). Ask for reasoning off; fall back without the field
@@ -109,11 +128,11 @@ export async function callAgentText(call: AgentTextCall): Promise<string> {
       ...(withReasoningOff ? { reasoning: { enabled: false } } : {}),
     })
 
-  const post = async (withReasoningOff: boolean, tokens: number) => {
+  const post = async (withReasoningOff: boolean, tokens: number, withSchema = true) => {
     const res = await fetch(OPENROUTER_CHAT_URL, {
       method: 'POST',
       headers: { Authorization: `Bearer ${openRouterApiKey}`, 'Content-Type': 'application/json' },
-      body: requestBody(withReasoningOff, tokens),
+      body: requestBody(withReasoningOff, tokens, withSchema),
     })
     return { res, json: await res.json() }
   }
@@ -152,10 +171,17 @@ export async function callAgentText(call: AgentTextCall): Promise<string> {
   }
 
   let reasoningOff = true
-  let { res, json } = await post(reasoningOff, maxTokens)
+  let schemaOn = Boolean(call.schema)
+  let { res, json } = await post(reasoningOff, maxTokens, schemaOn)
+  // A 4xx can mean the provider rejected reasoning-off OR the schema; peel them off in turn
+  // rather than failing a call the prose path could still serve.
+  if (res.status >= 400 && res.status < 500 && schemaOn) {
+    schemaOn = false
+    ;({ res, json } = await post(reasoningOff, maxTokens, schemaOn))
+  }
   if (res.status >= 400 && res.status < 500) {
     reasoningOff = false
-    ;({ res, json } = await post(reasoningOff, maxTokens))
+    ;({ res, json } = await post(reasoningOff, maxTokens, schemaOn))
   }
   if (!res.ok) {
     throw new AgentCallError(`OpenRouter error (${res.status}): ${json?.error?.message ?? 'unknown'}`)
@@ -167,7 +193,7 @@ export async function callAgentText(call: AgentTextCall): Promise<string> {
     // Empty completion (seen live with mimo-v2.5 on structured-output calls): the model spent
     // the whole budget on reasoning tokens despite reasoning-off. Retry once with double the
     // budget so the actual content fits; only then give up.
-    ;({ res, json } = await post(reasoningOff, maxTokens * 2))
+    ;({ res, json } = await post(reasoningOff, maxTokens * 2, schemaOn))
     if (res.ok) {
       await logUsage(json)
       content = sanitize(json.choices?.[0]?.message?.content)

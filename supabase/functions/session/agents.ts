@@ -28,7 +28,14 @@ export interface AgentEnv {
   mode: 'full_ai' | 'assist' | null
 }
 
-export async function agentJson(env: AgentEnv, role: string, system: string, user: string, maxTokens: number): Promise<unknown> {
+export async function agentJson(
+  env: AgentEnv,
+  role: string,
+  system: string,
+  user: string,
+  maxTokens: number,
+  schema?: { name: string; schema: Record<string, unknown> },
+): Promise<unknown> {
   const text = await callAgentText({
     serviceClient: env.service,
     openRouterApiKey: OPENROUTER_API_KEY,
@@ -38,8 +45,46 @@ export async function agentJson(env: AgentEnv, role: string, system: string, use
     system,
     user,
     maxTokens,
+    schema,
   })
   return extractJson(text)
+}
+
+/** Shorthand for the JSON Schema shapes below - every property is required under `strict`. */
+const obj = (properties: Record<string, unknown>, required?: string[]) => ({
+  type: 'object',
+  properties,
+  required: required ?? Object.keys(properties),
+  additionalProperties: false,
+})
+const str = { type: 'string' }
+const strArray = { type: 'array', items: { type: 'string' } }
+
+/** The narrator's option list - a wrong shape here 502'd narrate_next (live 2026-07-21). */
+export const NARRATION_OPTIONS_SCHEMA = {
+  name: 'narration_options',
+  schema: obj({
+    options: { type: 'array', items: obj({ summary: str }), minItems: 3, maxItems: 4 },
+  }),
+}
+
+/** The consistency verdict. */
+export const CONSISTENCY_SCHEMA = {
+  name: 'consistency_verdict',
+  schema: obj({
+    ok: { type: 'boolean' },
+    violations: { type: 'array', items: obj({ claim: str, conflicts_with: str }) },
+  }),
+}
+
+/** Utterance routing inside a conversation. */
+export const CLASSIFICATION_SCHEMA = {
+  name: 'social_classification',
+  schema: obj({
+    kind: { type: 'string', enum: ['conversation', 'insight', 'influence', 'action', 'ask_dm'] },
+    skill: { type: 'string', enum: ['persuasion', 'deception', 'intimidation', 'insight', ''] },
+    magnitude: { type: 'string', enum: ['trivial', 'reasonable', 'costly', 'against_nature', ''] },
+  }),
 }
 
 export interface AdjudicatorContext {
@@ -232,7 +277,7 @@ export async function runSocialClassifier(env: AgentEnv, utterance: string, npcS
   if (env.demo) return cannedClassification(utterance)
   try {
     return parseSocialClassification(
-      await agentJson(env, 'adjudicator', CLASSIFIER_SYSTEM, `NPC: ${npcSummary}\nUtterance: ${utterance}`, 120),
+      await agentJson(env, 'adjudicator', CLASSIFIER_SYSTEM, `NPC: ${npcSummary}\nUtterance: ${utterance}`, 120, CLASSIFICATION_SCHEMA),
     )
   } catch {
     return { kind: 'conversation' } // classification failure = no roll, never a blocked table
@@ -556,6 +601,7 @@ export async function runNarratorOptions(env: AgentEnv, contextPrompt: string): 
     'Offer 3-4 directions the story could go next. Reply with ONLY JSON: {"options": [{"summary": "one sentence"}]}.',
     contextPrompt,
     600,
+    NARRATION_OPTIONS_SCHEMA,
   ))
   const options = await attempt().catch(() => [])
   return options.length > 0 ? options : await attempt()
@@ -617,7 +663,7 @@ export async function runConsistency(
   }
   try {
     return parseConsistency(
-      await agentJson(env, 'consistency_checker', CONSISTENCY_SYSTEM, `Facts:\n${factSheet}\n\nDraft:\n${draft}`, 300),
+      await agentJson(env, 'consistency_checker', CONSISTENCY_SYSTEM, `Facts:\n${factSheet}\n\nDraft:\n${draft}`, 300, CONSISTENCY_SCHEMA),
     )
   } catch {
     return { ok: true, violations: [] } // checker outage must not block play; incidents log elsewhere
