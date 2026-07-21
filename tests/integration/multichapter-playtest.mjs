@@ -309,6 +309,9 @@ async function main() {
     beatKinds[k] = (beatKinds[k] ?? 0) + 1
   })
   console.log(`  beat encounter kinds:        ${JSON.stringify(beatKinds)}`)
+  const promotions = events.filter((e) => e.type === 'stall_promoted')
+  console.log(`  stall promotions:            ${promotions.length}`)
+  promotions.forEach((e) => console.log(`    ${e.payload?.action}: ${e.payload?.label ?? (e.payload?.npcs ?? []).join(', ')} - ${e.payload?.why ?? ''}`))
   const ledgers = events.filter((e) => e.type === 'scene_ledger')
   const proposed = ledgers.reduce((n, e) => n + (e.payload?.proposed?.length ?? 0), 0)
   const applied = ledgers.reduce((n, e) => n + (e.payload?.applied?.length ?? 0), 0)

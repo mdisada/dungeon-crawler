@@ -24,6 +24,12 @@ import { antagonistTurn } from './steward.ts'
 import { runHookWeaverLive, runStallPromoter } from './story-agents.ts'
 import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
 
+/**
+ * No-progress turns before a table with nothing to engage gets an opening put in front of it.
+ * Lower than the hint ladder's thresholds on purpose - there is nothing here to hint AT.
+ */
+const DEAD_TABLE_TURNS = 3
+
 interface EventRow {
   id: number
   type: string
@@ -123,6 +129,22 @@ export async function maybeAutoHint(
   if (state.dialogue.pending || state.dialogue.typing || state.dm?.pendingReview) return
 
   const { noProgressTurns, hintsSinceProgress } = await stuckWindow(service, env.adventureId)
+
+  // A DEAD TABLE is a different condition from a stuck one, and deserves a different answer.
+  // Stuck-on-a-challenge earns the gentle ladder: re-frame, orient, steer. But a cutscene with
+  // no encounter open and nobody staged offers the party NOTHING to act on - every input can
+  // only fold into narration. Waiting out the full ladder there burned five turns before
+  // anything opened, twice, in live one-shots (2026-07-21). Promote immediately instead.
+  const deadTable = !state.encounter && state.dialogue.speakers.length === 0
+  if (deadTable && noProgressTurns >= DEAD_TABLE_TURNS) {
+    if (await promoteStall(service, env, sessionId, state)) {
+      await logEvent(service, env.adventureId, sessionId, 'hint_given', {
+        rung: 0, source: 'dead_table', no_progress_turns: noProgressTurns,
+      })
+      return
+    }
+  }
+
   const { rung } = decideHint({
     noProgressTurns,
     hintsSinceProgress,
