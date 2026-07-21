@@ -127,6 +127,15 @@ function cannedBeatPlan(ctx: PlannerContext): unknown {
 }
 
 /**
+ * No json_schema here, deliberately. Half the outcome-map vocabulary is the atoms of this very
+ * response's exit_conditions (see parseEncounterSpec), which cannot be enumerated in a schema
+ * built before the call. An enum of only the objective milestones would forbid the fail-forward
+ * mapping the prompt asks for - on_failure pointing at a setback atom that is never an objective
+ * milestone - and would force on_success to claim an objective milestone even when none fits,
+ * turning a dropped entry into false progression. The parser drops off-vocabulary entries, so
+ * the failure this would prevent is already soft. Closing it properly means splitting into two
+ * calls (plan the beat, then map outcomes against the atoms it just wrote).
+ *
  * `priorErrors` turns a retry into a REPAIR. A blind re-roll of the identical prompt is the
  * documented no-op ("the retry loop that looks like progress and does nothing"), and it is what
  * this agent used to do - the planner was never told which milestone it invented, so it
