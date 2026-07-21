@@ -522,6 +522,8 @@ export interface ArchivistContext {
   transcript: string[]
   npcNames: string[]
   pcNames: string[]
+  /** Declared story dials, so trajectory is judged in the same read as everything else. */
+  dials: { key: string; name: string; description: string }[]
 }
 
 export interface ArchivistOutput {
@@ -530,10 +532,11 @@ export interface ArchivistOutput {
   npcStates: { name: string; state: 'dead' | 'absent' }[]
   contributions: { name: string; did: string }[]
   contradictions: string[]
+  dials: DialMove[]
 }
 
 const EMPTY_LEDGER: ArchivistOutput = {
-  milestones: [], digest: '', npcStates: [], contributions: [], contradictions: [],
+  milestones: [], digest: '', npcStates: [], contributions: [], contradictions: [], dials: [],
 }
 
 /**
@@ -558,6 +561,8 @@ export async function runArchivist(env: AgentEnv, ctx: ArchivistContext): Promis
       `Authored milestones (copy verbatim, or return none): ${ctx.vocabulary.join(' | ') || 'none'}`,
       `Established facts: ${ctx.facts.join(' | ') || 'none'}`,
       `NPCs: ${ctx.npcNames.join(', ') || 'none'}`,
+      `Story dials (move only these, only when this phase clearly shifted one): ${
+        ctx.dials.map((d) => `${d.key} (${d.name}: ${d.description})`).join(' | ') || 'none'}`,
       `PCs: ${ctx.pcNames.join(', ') || 'none'}`,
       `What happened:\n${ctx.transcript.join('\n')}`,
     ].join('\n'), 500)
@@ -566,6 +571,7 @@ export async function runArchivist(env: AgentEnv, ctx: ArchivistContext): Promis
     const strings = (v: unknown) =>
       Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string' && s.trim().length > 0) : []
     const known = new Set(ctx.npcNames.map((n) => n.toLowerCase()))
+    const knownDials = new Set(ctx.dials.map((d) => d.key))
     const pcs = new Set(ctx.pcNames.map((n) => n.toLowerCase()))
     return {
       milestones: strings(obj.milestones),
@@ -586,6 +592,15 @@ export async function runArchivist(env: AgentEnv, ctx: ArchivistContext): Promis
         return name && did && pcs.has(name.toLowerCase()) ? [{ name, did }] : []
       }),
       contradictions: strings(obj.contradictions).slice(0, 5),
+      dials: (Array.isArray(obj.dials) ? obj.dials : []).flatMap((d) => {
+        if (typeof d !== 'object' || d === null) return []
+        const row = d as Record<string, unknown>
+        const key = typeof row.key === 'string' ? row.key : ''
+        const delta = Number(row.delta)
+        // Unknown keys are dropped like every other off-vocabulary claim; applyDialNudge clamps.
+        if (!knownDials.has(key) || !Number.isFinite(delta) || delta === 0) return []
+        return [{ dial: key, delta, why: typeof row.why === 'string' ? row.why : '' }]
+      }),
     }
   } catch {
     return EMPTY_LEDGER // a failed ledger must never block the phase from closing

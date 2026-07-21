@@ -13,7 +13,6 @@ import type { EndingCandidate, EndingWorld, WorldFacts } from '../_shared/story/
 import { runConsistency } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { loadLoops, planAndOpenBeat } from './beats.ts'
-import { runDialPass } from './dials.ts'
 import { recordSceneLedger } from './ledger.ts'
 import { narrationBeat, publishNarration } from './narration.ts'
 import { appendLinesDiff, newLine, typingDiff } from './orchestrate.ts'
@@ -400,17 +399,6 @@ export async function runStoryProgressTail(
 
     // 3. Declined offers may re-weave once enough play has passed (F08 SS6).
     await maybeReweaveDeclined(service, env, sessionId)
-
-    // 3b. Dials move on completed objectives, not only at session end - a one-shot played in one
-    // sitting otherwise never reaches its endings' dial thresholds. Runs before ending scoring so
-    // the new values count this pass; never blocks progression.
-    if (objectiveJustCompleted) {
-      try {
-        await runDialPass(service, env, sessionId, 'objective_completed')
-      } catch (err) {
-        console.error('dial pass failed', err)
-      }
-    }
 
     // 4. Ending scoring + (late, decisive) commitment (F08 SS8.1).
     const refreshed = (await loadState(service, env.adventureId)).state

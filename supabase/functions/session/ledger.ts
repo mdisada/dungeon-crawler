@@ -16,6 +16,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { liveLines } from '../_shared/state/index.ts'
 import type { Json } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
+import { applyDialNudges } from './dials.ts'
 import { writeMemoryFragment } from './memory.ts'
 import { applyMilestones, milestoneVocabulary } from './milestones.ts'
 import { recordProposal } from './proposals.ts'
@@ -64,6 +65,12 @@ export async function recordSceneLedger(
       .select('id, name')
       .eq('adventure_id', env.adventureId)
     const npcs = (npcRows ?? []) as { id: string; name: string }[]
+    const { data: adventureRow } = await service
+      .from('adventures')
+      .select('story_dials')
+      .eq('id', env.adventureId)
+      .single()
+    const dials = (adventureRow?.story_dials ?? []) as { key: string; name: string; description: string }[]
 
     const facts = Object.entries(state.dm?.facts.world ?? {})
       .filter(([, v]) => v === true)
@@ -81,6 +88,7 @@ export async function recordSceneLedger(
       transcript,
       npcNames: npcs.map((n) => n.name),
       pcNames: state.players.list.map((p) => p.name),
+      dials,
     })
 
     const gated = env.mode === 'assist'
@@ -106,6 +114,12 @@ export async function recordSceneLedger(
     // Compaction: the closed phase's raw transcript stops being sent to agents from here on.
     // Done even when the digest is empty, so the window still advances past a dead phase.
     await commitDiffs(service, env.adventureId, (s) => [compactContextDiff(s, ledger.digest)])
+
+    // Dial movement rides this same read - it used to be a second summarizer call over the
+    // same transcript at the same moment (objective completion).
+    if (!gated && ledger.dials.length > 0) {
+      await applyDialNudges(service, env, sessionId, ledger.dials)
+    }
 
     if (ledger.digest) {
       // Per-PC credit has to survive into memory: coop affinity and spotlight balance read it,

@@ -332,7 +332,7 @@ async function main() {
   console.log(`  disposition_changed:   ${counts('disposition_changed')}`)
   console.log(`  suspicion_noted:       ${counts('suspicion_noted')}`)
   events.filter((e) => e.type === 'suspicion_noted').forEach((e) => console.log(`    - ${e.payload?.name} (tally ${e.payload?.tally})`))
-  console.log(`  dial passes / nudges:  ${counts('dial_pass')}/${counts('dial_nudged')}`)
+  console.log(`  dial nudges:           ${counts('dial_nudged')} (judged by the scene ledger)`)
   events.filter((e) => e.type === 'dial_nudged').forEach((e) => console.log(`    - ${e.payload?.dial} ${e.payload?.from}->${e.payload?.to}: ${e.payload?.why}`))
   console.log(`  ending commitments:    ${counts('ending_committed')} (must be 0 mid-story)`)
   console.log(`  social_started:        ${counts('social_started')}`)

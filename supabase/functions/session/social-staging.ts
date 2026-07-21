@@ -8,7 +8,6 @@ import type { Json, SpeakerSlot } from '../_shared/state/index.ts'
 import { runGenericNpc, runInteractionSummary } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { recordSceneLedger } from './ledger.ts'
-import { writeMemoryFragment } from './memory.ts'
 import { recordProposal } from './proposals.ts'
 import { detectSocialExit, resolveSocialExit } from './social-encounter.ts'
 import {
@@ -134,14 +133,10 @@ export async function endEncounter(
       summary: summary as unknown as Json,
     })
     assertOk(error, 'interaction memory write failed')
-    // Retrieval memory (Slice 7): the distilled scene becomes a retrievable fragment.
-    await writeMemoryFragment(
-      service, env, 'scene_summary',
-      `Conversation with ${speaker.name} at ${state.scene.locationName || 'an unknown place'}: ` +
-        `${summary.said.join('; ') || 'small talk'}.` +
-        (summary.promised.length > 0 ? ` Promised: ${summary.promised.join('; ')}.` : '') +
-        ` Disposition: ${summary.disposition_trajectory}.`,
-    )
+    // No retrieval fragment here: the scene ledger below writes one for this same scene, with
+    // per-PC contributions attached. Two agents summarising one scene into the same memory kind
+    // was pure duplication. npc_interactions stays - loadNpcBundle reads it for NPC recall,
+    // which the scene digest does not replace.
   }
 
   await commitDiffs(service, adventureId, () => [
