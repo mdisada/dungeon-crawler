@@ -292,30 +292,32 @@ function kickTail(env: AgentEnv, sessionId: string): boolean {
  * 546 in the multi-chapter playtest (2026-07-20), and a dial pass was silently lost when the
  * worker died before reaching it. The pass is therefore split - the deterministic head runs
  * inline (the player's turn depends on it), and the agent-heavy tail runs in its own worker.
+ *
+ * The typing flag is released as soon as the HEAD is done, never held across the tail. Holding
+ * it turned every turn that arrived mid-tail into a 409 "the DM is thinking" - 6 of 26 turns
+ * were rejected outright and their input vanished (one-shot playtest 2026-07-21). The tail is
+ * background bookkeeping (beat re-plan, ledger, ending scores); the player is not waiting on
+ * it, and anything it publishes raises typing for its own short window.
  */
 export async function evaluateStoryProgress(service: SupabaseClient, env: AgentEnv, sessionId: string): Promise<void> {
   await commitDiffs(service, env.adventureId, () => [typingDiff(true)]).catch(() => {})
-  let deferred = false
   try {
-    deferred = await runStoryProgressHead(service, env, sessionId)
+    await runStoryProgressHead(service, env, sessionId)
   } finally {
-    // A deferred tail owns the typing flag from here; clearing it now would flicker the table.
-    if (!deferred) await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
+    await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
   }
 }
 
 /**
  * The deterministic head: objective completion + its narration. The player's turn depends on
- * this being visible immediately, and it costs at most one narration call.
- *
- * Returns true when the agent-heavy tail was handed to another worker (which then owns the
- * typing flag). Returns false when the tail ran inline - no edge runtime, or the kick failed.
+ * this being visible immediately, and it costs at most one narration call. The agent-heavy tail
+ * is handed to a fresh worker when one is available, and runs inline otherwise.
  */
 async function runStoryProgressHead(
   service: SupabaseClient,
   env: AgentEnv,
   sessionId: string,
-): Promise<boolean> {
+): Promise<void> {
   const state = (await loadState(service, env.adventureId)).state
   const events = await storyEventTags(service, env.adventureId)
   const world = worldFacts(state, events)
@@ -330,9 +332,8 @@ async function runStoryProgressHead(
     objectiveJustCompleted = true
   }
 
-  if (kickTail(env, sessionId)) return true
+  if (kickTail(env, sessionId)) return
   await runStoryProgressTail(service, env, sessionId, { objectiveJustCompleted, questJustCompleted })
-  return false
 }
 
 interface TailContext {
@@ -343,7 +344,12 @@ interface TailContext {
 /**
  * The agent-heavy tail: beat re-plan (beat planner + Encounter Designer), re-weave, the dial
  * pass, and ending scoring/commitment (consistency + climax author + narration). Recomputes its
- * own world state so it is safe to run in a fresh worker, and always clears the typing flag.
+ * own world state so it is safe to run in a fresh worker.
+ *
+ * It deliberately does NOT touch the typing flag. The head releases it, and by the time the
+ * tail finishes a later player turn may legitimately own it - clearing it here would tell the
+ * table an agent call in flight had finished. Anything the tail publishes raises and clears
+ * typing for its own short window.
  */
 export async function runStoryProgressTail(
   service: SupabaseClient,
@@ -409,8 +415,9 @@ export async function runStoryProgressTail(
     // 4. Ending scoring + (late, decisive) commitment (F08 SS8.1).
     const refreshed = (await loadState(service, env.adventureId)).state
     await updateEndings(service, env, sessionId, refreshed, await orderedObjectives(service, env.adventureId))
-  } finally {
-    await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
+  } catch (err) {
+    // Background bookkeeping: a failed tail must never surface to the player mid-turn.
+    console.error('story progress tail failed', err)
   }
 }
 

@@ -322,6 +322,13 @@ async function main() {
   events.filter((e) => e.type === 'ingredient_revealed')
     .forEach((e) => console.log(`    - source=${e.payload?.source ?? 'npc'} ${e.payload?.ingredient_id}`))
   console.log(`  location clues found:  ${events.filter((e) => e.type === 'ingredient_revealed' && e.payload?.source === 'location_search').length} of ${locPlaced.length} placed`)
+  // Discovery can only fire where the party actually stands. If they never travel, clues in
+  // other rooms are unreachable by design, not by bug - record which is which.
+  const sceneLoc = state?.scene?.locationId ?? null
+  const reachable = locPlaced.filter((i) => i.placement?.location_id === sceneLoc).length
+  const travels = events.filter((e) => e.type === 'scene_travel').length
+  console.log(`    party ended at ${state?.scene?.locationName || 'nowhere'} (${sceneLoc ?? 'no location'})`)
+  console.log(`    clues reachable there: ${reachable}; scene_travel events: ${travels}; locations in guide: ${locations.length}`)
   console.log(`  disposition_changed:   ${counts('disposition_changed')}`)
   console.log(`  suspicion_noted:       ${counts('suspicion_noted')}`)
   events.filter((e) => e.type === 'suspicion_noted').forEach((e) => console.log(`    - ${e.payload?.name} (tally ${e.payload?.tally})`))
