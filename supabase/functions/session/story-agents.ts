@@ -549,6 +549,74 @@ const EMPTY_LEDGER: ArchivistOutput = {
  * It cannot invent progress. Milestones are matched against the authored vocabulary by
  * applyMilestones, which drops anything off-list, so the worst a bad reply can do is nothing.
  */
+/**
+ * The milestone field is an ENUM of the authored vocabulary, so the model cannot paraphrase one.
+ * Live 2026-07-21: the Archivist proposed 4 milestones and only 1 survived applyMilestones - it
+ * was noticing the right events and wording them wrong, which is a shape problem, and a shape
+ * problem is exactly what a schema removes. The validator still runs; this just stops it having
+ * to reject good observations over phrasing.
+ *
+ * Enums cannot be empty, so a phase with no authored vocabulary falls back to a plain string
+ * array and relies on applyMilestones as before.
+ */
+function archivistSchema(ctx: ArchivistContext): { name: string; schema: Record<string, unknown> } {
+  const npcNames = ctx.npcNames.length > 0 ? ctx.npcNames : ['']
+  const pcNames = ctx.pcNames.length > 0 ? ctx.pcNames : ['']
+  const dialKeys = ctx.dials.map((d) => d.key)
+  return {
+    name: 'scene_ledger',
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['milestones', 'digest', 'npc_states', 'contributions', 'contradictions', 'dials'],
+      properties: {
+        milestones: {
+          type: 'array',
+          items: ctx.vocabulary.length > 0
+            ? { type: 'string', enum: ctx.vocabulary }
+            : { type: 'string' },
+        },
+        digest: { type: 'string' },
+        npc_states: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['name', 'state'],
+            properties: {
+              name: { type: 'string', enum: npcNames },
+              state: { type: 'string', enum: ['dead', 'absent', 'present'] },
+            },
+          },
+        },
+        contributions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['name', 'did'],
+            properties: { name: { type: 'string', enum: pcNames }, did: { type: 'string' } },
+          },
+        },
+        contradictions: { type: 'array', items: { type: 'string' } },
+        dials: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['key', 'delta', 'why'],
+            properties: {
+              key: dialKeys.length > 0 ? { type: 'string', enum: dialKeys } : { type: 'string' },
+              delta: { type: 'integer', minimum: -2, maximum: 2 },
+              why: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+  }
+}
+
 export async function runArchivist(env: AgentEnv, ctx: ArchivistContext): Promise<ArchivistOutput> {
   if (ctx.vocabulary.length === 0 && ctx.transcript.length === 0) return EMPTY_LEDGER
   if (env.demo) {
@@ -567,7 +635,7 @@ export async function runArchivist(env: AgentEnv, ctx: ArchivistContext): Promis
         ctx.dials.map((d) => `${d.key} (${d.name}: ${d.description})`).join(' | ') || 'none'}`,
       `PCs: ${ctx.pcNames.join(', ') || 'none'}`,
       `What happened:\n${ctx.transcript.join('\n')}`,
-    ].join('\n'), 500)
+    ].join('\n'), 500, archivistSchema(ctx))
     if (typeof raw !== 'object' || raw === null) return EMPTY_LEDGER
     const obj = raw as Record<string, unknown>
     const strings = (v: unknown) =>
