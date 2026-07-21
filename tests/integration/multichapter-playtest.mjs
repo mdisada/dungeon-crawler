@@ -109,35 +109,40 @@ async function pipeline(token, payload) {
   })
 }
 
-// Deliberately poor input: lowercase, typos, one-word replies, questions instead of actions.
-// A couple of lines probe the new suspicion judge - one real accusation, one innocent worry.
+// A REALISTIC mix, not a worst case. Half the turns are what players actually type when they
+// are half-paying-attention (one-word replies, typos, questions instead of actions); the other
+// half are what an engaged player types - specific, physical, aimed at the fiction. An all-poor
+// script proved the system survives neglect but never tested whether a competent party can
+// actually satisfy an objective predicate, which is the open question (0 objectives across five
+// runs). Kept story-agnostic: these read as competent in any murder mystery, since the harness
+// cannot know what the pipeline will author.
 const TURNS = [
-  'ok',
-  'look around',
-  'who r u',
-  'what happened here',
-  'i ask about it',
-  'hm',
-  'yes',
-  'i go inside',
-  'search the room',
-  'whats in here',
-  'i look at the body',
-  'who did it',
-  'i dont know',
-  'tell me more',
-  'is he ok',            // innocent worry - must NOT read as an accusation
-  'i think he is lying', // real distrust
-  'ok fine',
-  'i take it',
-  'go on',
-  'what now',
-  'i search again',
-  'talk to them',
-  'i wait',
-  'help',
-  'i keep going',
-  'i confront him',
+  'ok',                                                          // poor
+  'i look around the room for anything out of place',            // good
+  'who r u',                                                     // poor
+  'i examine the body for wounds and check the pockets',         // good
+  'hm',                                                          // poor
+  'i ask the household who saw him last night',                  // good
+  'yes',                                                         // poor
+  'i search the desk and read any papers on it',                 // good
+  'whats in here',                                               // poor
+  'i look for signs of forced entry at the window and door',     // good
+  'i dont know',                                                 // poor
+  'i ask about the argument everyone keeps avoiding',            // good
+  'is he ok',                                                    // poor - must NOT read as suspicion
+  'i press him on where he was when it happened',                // good
+  'i think he is lying',                                         // poor phrasing, real distrust
+  'i compare the handwriting on the note to his ledger',         // good
+  'ok fine',                                                     // poor
+  'i take the evidence to the person who hired us',              // good
+  'go on',                                                       // poor
+  'i lay out what i found and name who did it',                  // good
+  'i search again',                                              // poor
+  'i confront him with the proof and demand an answer',          // good
+  'help',                                                        // poor
+  'i secure the scene so nothing else gets destroyed',           // good
+  'i keep going',                                                // poor
+  'i finish this - arrest him or make him confess',              // good
 ]
 
 async function main() {
