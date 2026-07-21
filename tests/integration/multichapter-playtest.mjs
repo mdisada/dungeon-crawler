@@ -33,6 +33,48 @@ const BUDGET = Number(argOf('budget', '0.6'))
 const ADVENTURE_TYPE = argOf('type', 'multi_chapter')
 
 /**
+ * Every run used the same mining-town murder, so everything we know is about ONE loop type.
+ * These premises push the pipeline at different templates - the pillar-starvation guidance,
+ * the stall promoter and the ledger are all meant to be loop-agnostic, and only varied
+ * premises can show whether they are. `--plot <key>` picks one; default rotates by clock so
+ * repeat runs do not silently retest the same story.
+ */
+const PLOTS = {
+  murder: {
+    title: 'The Ashfall Inheritance',
+    idea: 'In a mountain mining town, the mine owner is found dead the night before he was to ' +
+      'sign away the deed. Everyone in the household had reason to want him gone. The party ' +
+      'must work out who killed him before the thaw brings the magistrate.',
+  },
+  heist: {
+    title: 'The Tidewater Vault',
+    idea: 'A merchant guild keeps its ledgers in a tidal vault that floods twice a day. The ' +
+      'party has one low tide to get in, find the manifest that proves the guild is selling ' +
+      'conscripts, and get out before the water returns.',
+  },
+  siege: {
+    title: 'The Last Bell of Karrow',
+    idea: 'A frontier monastery has three days before a warband arrives. The monks will not ' +
+      'abandon their library, the villagers want to flee, and the walls have one breach nobody ' +
+      'will admit to. The party must decide what is defended and what is lost.',
+  },
+  dungeon: {
+    title: 'Below the Sunken Chapel',
+    idea: 'Floodwater has opened a stair beneath a ruined chapel. Something down there has been ' +
+      'taking livestock, and the last party sent to look never came back up. The party goes ' +
+      'down to find out what happened to them.',
+  },
+  escort: {
+    title: 'The Long Road to Emberfall',
+    idea: 'A witness who can testify against a city magistrate must reach the assizes eight ' +
+      'days away. Three factions want them silenced, the witness does not want to go, and the ' +
+      'safest road is the one the party cannot afford to take.',
+  },
+}
+const PLOT_KEYS = Object.keys(PLOTS)
+const PLOT = PLOTS[argOf('plot', PLOT_KEYS[Math.floor(Date.now() / 1000) % PLOT_KEYS.length])] ?? PLOTS.murder
+
+/**
  * Transient network failures killed two paid runs mid-generation ("fetch failed"), losing the
  * guide spend each time. Retry the TRANSPORT only - an HTTP error response is the caller's
  * business, but a socket that never connected is worth another go.
@@ -109,40 +151,41 @@ async function pipeline(token, payload) {
   })
 }
 
-// A REALISTIC mix, not a worst case. Half the turns are what players actually type when they
-// are half-paying-attention (one-word replies, typos, questions instead of actions); the other
-// half are what an engaged player types - specific, physical, aimed at the fiction. An all-poor
-// script proved the system survives neglect but never tested whether a competent party can
-// actually satisfy an objective predicate, which is the open question (0 objectives across five
-// runs). Kept story-agnostic: these read as competent in any murder mystery, since the harness
-// cannot know what the pipeline will author.
+// A REALISTIC mix, not a worst case. Half the turns are what players type when they are
+// half-paying-attention (one-word replies, typos, questions instead of actions); the other half
+// are what an engaged player types - specific, physical, aimed at whatever is in front of them.
+//
+// Deliberately GENRE-NEUTRAL: the harness now rotates through murder, heist, siege, dungeon and
+// escort premises, so "examine the body for wounds" would be nonsense in four of five. These
+// read as competent play in any adventure, and escalate the way real play does - look, ask,
+// commit, press, resolve.
 const TURNS = [
   'ok',                                                          // poor
-  'i look around the room for anything out of place',            // good
+  'i look around carefully for anything out of place',           // good
   'who r u',                                                     // poor
-  'i examine the body for wounds and check the pockets',         // good
+  'i ask the people here what they know about this',             // good
   'hm',                                                          // poor
-  'i ask the household who saw him last night',                  // good
+  'i search the area properly for anything useful',              // good
   'yes',                                                         // poor
-  'i search the desk and read any papers on it',                 // good
+  'i look for another way in or around',                         // good
   'whats in here',                                               // poor
-  'i look for signs of forced entry at the window and door',     // good
+  'i take a closer look at the thing that seems wrong',          // good
   'i dont know',                                                 // poor
-  'i ask about the argument everyone keeps avoiding',            // good
+  'i ask about the thing everyone keeps avoiding',               // good
   'is he ok',                                                    // poor - must NOT read as suspicion
-  'i press him on where he was when it happened',                // good
+  'i press him on what he is not telling us',                    // good
   'i think he is lying',                                         // poor phrasing, real distrust
-  'i compare the handwriting on the note to his ledger',         // good
+  'i take what we found and follow where it points',             // good
   'ok fine',                                                     // poor
-  'i take the evidence to the person who hired us',              // good
+  'i tell the others what i have worked out',                    // good
   'go on',                                                       // poor
-  'i lay out what i found and name who did it',                  // good
+  'i commit to the plan and move on it now',                     // good
   'i search again',                                              // poor
-  'i confront him with the proof and demand an answer',          // good
+  'i deal with whoever is standing in our way',                  // good
   'help',                                                        // poor
-  'i secure the scene so nothing else gets destroyed',           // good
+  'i make sure nothing else gets lost or destroyed',             // good
   'i keep going',                                                // poor
-  'i finish this - arrest him or make him confess',              // good
+  'i finish this properly and see it through',                   // good
 ]
 
 async function main() {
@@ -163,14 +206,10 @@ async function main() {
   } else {
     const [adventure] = await serviceRest('POST', 'adventures', {
       creator_id: userId, mode: 'full_ai', min_players: 1, max_players: 1, type: ADVENTURE_TYPE,
-      status: 'draft', demo: false, title: 'The Ashfall Inheritance',
-      plot_idea:
-        'In a mountain mining town, the mine owner is found dead the night before he was to sign ' +
-        'away the deed. Everyone in the household had reason to want him gone. The party must ' +
-        'work out who killed him before the thaw brings the magistrate.',
+      status: 'draft', demo: false, title: PLOT.title, plot_idea: PLOT.idea,
     })
     advId = adventure.id
-    console.log(`adventure: ${advId} (${ADVENTURE_TYPE})`)
+    console.log(`adventure: ${advId} (${ADVENTURE_TYPE}) - "${PLOT.title}"`)
   }
 
   const spentUsd = async () => {
