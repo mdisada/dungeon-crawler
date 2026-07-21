@@ -75,6 +75,33 @@ export async function openSocialEncounter(
       return match ? [match.id] : []
     }))].slice(0, 3)
   }
+  // Drop anyone who cannot actually take the stage before trying. A beat once planned an
+  // interrogation of a magistrate the guide had authored as `absent`; staging refused, the
+  // social encounter died, and the whole session ran with nobody ever on stage (live
+  // 2026-07-21). Better to interrogate the wrong suspect than nobody.
+  if (npcIds.length > 0) {
+    const state = (await loadState(service, env.adventureId)).state
+    const liveStates = state.dm?.facts.npcStates ?? {}
+    const { data: stateRows } = await service
+      .from('npcs')
+      .select('id, initial_state')
+      .eq('adventure_id', env.adventureId)
+      .in('id', npcIds)
+    const authored = new Map(((stateRows ?? []) as { id: string; initial_state?: string }[])
+      .map((n) => [n.id, n.initial_state ?? 'alive']))
+    const stageable = npcIds.filter((id) => {
+      const st = liveStates[id] ?? authored.get(id) ?? 'alive'
+      return st !== 'dead' && st !== 'absent'
+    })
+    if (stageable.length !== npcIds.length) {
+      await logEvent(service, env.adventureId, sessionId, 'scene_effect_rejected', {
+        effect: 'stage_npcs', label: spec.label,
+        dropped: npcIds.filter((id) => !stageable.includes(id)) as unknown as Json,
+        reason: 'dead or not yet present',
+      })
+    }
+    npcIds = stageable
+  }
   if (npcIds.length === 0) {
     await logEvent(service, env.adventureId, sessionId, 'incident', {
       kind: 'social_encounter_no_npcs', label: spec.label, wanted: wanted as unknown as Json,

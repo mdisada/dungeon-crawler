@@ -503,12 +503,14 @@ const ARCHIVIST_SYSTEM =
   'You are the Archivist of a tabletop RPG session. You do NOT write prose - you record what ' +
   'just became true, so the game engine can act on it. Reply with ONLY JSON: ' +
   '{"milestones": ["exact text from the authored list"], "digest": "1-2 sentences: what ' +
-  'changed and who did it", "npc_states": [{"name": "exact NPC name", "state": "dead"|"absent"}], ' +
+  'changed and who did it", "npc_states": [{"name": "exact NPC name", ' +
+  '"state": "dead"|"absent"|"present"}], ' +
   '"contributions": [{"name": "exact PC name", "did": "one clause"}], ' +
   '"contradictions": ["a claim in this scene that contradicts the established facts"]}.\n' +
   'Rules: milestones MUST be copied verbatim from the authored list - never invent one, and ' +
   'return an empty array if nothing on that list actually happened. Only report an npc_state ' +
-  'the scene plainly established. Only report a contradiction you can point at. When in doubt, ' +
+  'the scene plainly established - and use "present" for anyone who has now ARRIVED or returned, ' +
+  'which is what allows the game to bring them on stage. Only report a contradiction you can point at. When in doubt, ' +
   'return empty arrays - a missed record is recoverable, a false one corrupts the story.'
 
 export interface ArchivistContext {
@@ -529,7 +531,7 @@ export interface ArchivistContext {
 export interface ArchivistOutput {
   milestones: string[]
   digest: string
-  npcStates: { name: string; state: 'dead' | 'absent' }[]
+  npcStates: { name: string; state: 'dead' | 'absent' | 'alive' }[]
   contributions: { name: string; did: string }[]
   contradictions: string[]
   dials: DialMove[]
@@ -580,7 +582,15 @@ export async function runArchivist(env: AgentEnv, ctx: ArchivistContext): Promis
         if (typeof s !== 'object' || s === null) return []
         const row = s as Record<string, unknown>
         const name = typeof row.name === 'string' ? row.name : ''
-        const state = row.state === 'dead' || row.state === 'absent' ? row.state : null
+        // "present" is the arrival case: an NPC authored as absent who has now walked on stage.
+        // Without it, `absent` was a one-way door and the NPC could never be staged again - a
+        // magistrate arrived in the fiction and stayed unstageable (live 2026-07-21).
+        const raw = row.state
+        const state = raw === 'dead' || raw === 'absent'
+          ? raw
+          : raw === 'present' || raw === 'alive'
+            ? 'alive' as const
+            : null
         // An unknown name means the model invented someone - drop it rather than guess.
         return name && state && known.has(name.toLowerCase()) ? [{ name, state }] : []
       }),
