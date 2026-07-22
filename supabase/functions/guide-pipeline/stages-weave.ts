@@ -359,7 +359,10 @@ export async function runStage7(env: StageEnv): Promise<void> {
     (locationRows.data ?? []).map((l) => l.name as string),
   )
   for (const message of coverageWarnings) {
-    warningRows.push({ adventure_id: env.adventure.id, stage: 7, target_table: null, target_id: null, message })
+    // kind must be EXPLICIT here: this array also holds residue rows that carry kind, and a
+    // PostgREST bulk insert fills a row's missing keys with NULL - not the column default -
+    // which violated the not-null constraint and failed the stage (live 2026-07-22).
+    warningRows.push({ adventure_id: env.adventure.id, stage: 7, target_table: null, target_id: null, message, kind: 'warning' })
   }
 
   if (warningRows.length > 0) {
