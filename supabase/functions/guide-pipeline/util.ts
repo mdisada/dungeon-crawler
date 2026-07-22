@@ -63,6 +63,14 @@ export interface DigestRefs {
   /** handle -> { table, id } for resolving model output back to rows. */
   refs: Map<string, { table: string; id: string }>
   objectiveIdByHandle: Map<string, string>
+  /**
+   * NPC handles legal as the ENTRY contract's giver: first-chapter or global (null-chapter)
+   * NPCs. Stage 6 failed live on a multi-chapter guide (2026-07-22) because the model could
+   * not see which NPCs were chapter-1 - the digest lines carried no chapter at all - so the
+   * "giver must appear in the first chapter" rule was checkable only server-side, after the
+   * job had already burned an attempt.
+   */
+  entryGiverHandles: string[]
 }
 
 /** Loads every guide entity and numbers them into stable handles (obj#1, npc#1, ...). */
@@ -70,8 +78,8 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
   const [chapters, objectives, npcs, locations, ingredients] = await Promise.all([
     db.from('chapters').select('id, index, title').eq('adventure_id', adventureId).order('index'),
     db.from('objectives').select('id, chapter_id, index, title, hidden_description').eq('adventure_id', adventureId),
-    db.from('npcs').select('id, name, role, description').eq('adventure_id', adventureId).order('created_at'),
-    db.from('locations').select('id, name, description').eq('adventure_id', adventureId).order('created_at'),
+    db.from('npcs').select('id, name, role, description, chapter_id').eq('adventure_id', adventureId).order('created_at'),
+    db.from('locations').select('id, name, description, chapter_id').eq('adventure_id', adventureId).order('created_at'),
     db.from('ingredients').select('id, type, content, reveals').eq('adventure_id', adventureId).order('created_at'),
   ])
   for (const res of [chapters, objectives, npcs, locations, ingredients]) {
@@ -79,6 +87,10 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
   }
 
   const chapterNumber = new Map((chapters.data ?? []).map((c) => [c.id, c.index + 1]))
+  const firstChapterId = (chapters.data ?? [])[0]?.id ?? null
+  /** "(chapter N)" | "(global)" - the tag the GuideDigest contract always promised NPCs had. */
+  const chapterTag = (chapterId: string | null) =>
+    chapterId ? `(chapter ${chapterNumber.get(chapterId) ?? '?'})` : '(global)'
   const sortedObjectives = (objectives.data ?? []).sort(
     (a, b) => (chapterNumber.get(a.chapter_id) ?? 0) - (chapterNumber.get(b.chapter_id) ?? 0) || a.index - b.index,
   )
@@ -86,6 +98,7 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
   const digest: GuideDigest = { objectives: new Map(), npcs: new Map(), locations: new Map(), ingredients: new Map() }
   const refs = new Map<string, { table: string; id: string }>()
   const objectiveIdByHandle = new Map<string, string>()
+  const entryGiverHandles: string[] = []
 
   sortedObjectives.forEach((o, i) => {
     const handle = `obj#${i + 1}`
@@ -95,12 +108,13 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
   })
   ;(npcs.data ?? []).forEach((n, i) => {
     const handle = `npc#${i + 1}`
-    digest.npcs.set(handle, `${n.name}${n.role === 'boss' ? ' (boss)' : ''} - ${clip(n.description, 150)}`)
+    digest.npcs.set(handle, `${n.name}${n.role === 'boss' ? ' (boss)' : ''} ${chapterTag(n.chapter_id)} - ${clip(n.description, 150)}`)
     refs.set(handle, { table: 'npcs', id: n.id })
+    if (n.chapter_id === null || n.chapter_id === firstChapterId) entryGiverHandles.push(handle)
   })
   ;(locations.data ?? []).forEach((l, i) => {
     const handle = `loc#${i + 1}`
-    digest.locations.set(handle, `${l.name} - ${clip(l.description, 120)}`)
+    digest.locations.set(handle, `${l.name} ${chapterTag(l.chapter_id)} - ${clip(l.description, 120)}`)
     refs.set(handle, { table: 'locations', id: l.id })
   })
   ;(ingredients.data ?? []).forEach((ing, i) => {
@@ -110,7 +124,7 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
     refs.set(handle, { table: 'ingredients', id: ing.id })
   })
 
-  return { digest, refs, objectiveIdByHandle }
+  return { digest, refs, objectiveIdByHandle, entryGiverHandles }
 }
 
 export function assertOk(error: { message: string } | null, what: string): void {

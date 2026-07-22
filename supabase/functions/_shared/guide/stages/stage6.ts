@@ -23,7 +23,11 @@ function digestLines(entries: Map<string, string>): string {
   return [...entries.entries()].map(([handle, line]) => `${handle}: ${line}`).join('\n')
 }
 
-export function buildStage6Prompt(digest: GuideDigest): { system: string; user: string; maxTokens: number } {
+export function buildStage6Prompt(
+  digest: GuideDigest,
+  /** NPC handles legal as the entry contract's giver (first-chapter or global NPCs). */
+  entryGiverHandles: string[],
+): { system: string; user: string; maxTokens: number } {
   const system = `You are the Hook Weaver for a tabletop RPG platform. Given a complete adventure guide digest, weave the connective tissue that directs players toward objectives without railroading.
 
 Produce three kinds of hooks:
@@ -38,8 +42,10 @@ Rules:
 
 Also produce quest CONTRACTS: the story is offered, not imposed - a quest only starts once
 players accept an in-fiction offer from a giver NPC with stated pay and stakes.
-- Exactly ONE contract with "is_entry": true - the adventure's opening job, given by an NPC the
-  party meets in the first scene, covering chapter 1's opening objective(s).
+- Exactly ONE contract with "is_entry": true - the adventure's opening job, covering chapter
+  1's opening objective(s). Its giver MUST be one of: ${entryGiverHandles.join(', ') || '(none listed)'} -
+  the offer opens the adventure, so only a first-chapter or global NPC can make it. Later-chapter
+  NPCs are NOT valid entry givers however fitting they seem.
 - Optionally up to one side contract per later chapter where the content supports it.
 - "gold_floor" is the opening bid; "gold_ceiling" is the most the giver can be haggled up to.
   Keep amounts modest and level-appropriate (a village elder does not offer 5000 gold).
@@ -69,12 +75,18 @@ export interface Stage6Output {
   contracts: ContractDraft[]
 }
 
-export function parseStage6(raw: string, digest: GuideDigest): ParseResult<Stage6Output> {
+export function parseStage6(
+  raw: string,
+  digest: GuideDigest,
+  /** NPC handles legal as the entry contract's giver; empty = skip the check (legacy callers). */
+  entryGiverHandles: string[] = [],
+): ParseResult<Stage6Output> {
   const extracted = extractJsonObject(raw)
   if (!extracted.ok) return extracted
 
   const c = new Check()
   const fromHandles = new Set([...digest.npcs.keys(), ...digest.locations.keys(), ...digest.ingredients.keys()])
+  const entryGivers = new Set(entryGiverHandles)
 
   const hooks: HookDraft[] = c.arr(extracted.data.hooks, '$.hooks', 1, 60).map((raw, i) => {
     const path = `$.hooks[${i}]`
@@ -106,6 +118,16 @@ export function parseStage6(raw: string, digest: GuideDigest): ParseResult<Stage
     const giverHandle = c.str(k.giver, `${path}.giver`)
     if (giverHandle && !digest.npcs.has(giverHandle)) {
       c.errors.push(`${path}.giver: unknown npc handle "${giverHandle}"`)
+    }
+    // The entry giver opens the adventure, so only a first-chapter/global NPC qualifies. A
+    // parse error here rides the in-invocation guided retry; the old shape - an edge THROW
+    // after parse - burned a whole job attempt on feedback the model could not act on, because
+    // the digest never said which chapter an NPC was in (live multi-chapter failure 2026-07-22).
+    if (k.is_entry === true && giverHandle && entryGivers.size > 0 && !entryGivers.has(giverHandle)) {
+      c.errors.push(
+        `${path}.giver: "${giverHandle}" is not a first-chapter or global NPC - the entry ` +
+          `contract's giver must be one of: ${[...entryGivers].join(', ')}`,
+      )
     }
     const goldFloor = c.int(k.gold_floor, `${path}.gold_floor`, 0, 100_000)
     const goldCeiling = c.int(k.gold_ceiling, `${path}.gold_ceiling`, 0, 100_000)

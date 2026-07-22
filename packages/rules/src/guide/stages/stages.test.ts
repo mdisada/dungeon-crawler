@@ -455,6 +455,19 @@ describe('stage 6 (hooks + quest contracts)', () => {
     expect(entryResult.ok).toBe(false)
     if (!entryResult.ok) expect(entryResult.errors.some((e) => e.includes('is_entry'))).toBe(true)
   })
+
+  it('rejects an entry giver outside the first-chapter/global set (guided retry, not job failure)', () => {
+    // Fixture's entry giver is npc#2; a valid-giver list without it must fail the PARSE with a
+    // message naming the legal handles - the in-invocation retry can act on that, where the old
+    // post-parse edge throw could not (live multi-chapter failure 2026-07-22).
+    const result = parseStage6(STAGE6_RESPONSE, buildTestDigest(), ['npc#1'])
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some((e) => e.includes('first-chapter or global') && e.includes('npc#1'))).toBe(true)
+
+    const allowed = parseStage6(STAGE6_RESPONSE, buildTestDigest(), ['npc#1', 'npc#2'])
+    expect(allowed.ok).toBe(true)
+  })
 })
 
 describe('stage 7 (consistency warnings)', () => {

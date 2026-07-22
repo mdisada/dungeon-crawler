@@ -10,9 +10,13 @@ import { enqueueJob, type StageEnv } from './stage-env.ts'
 import { assertOk, buildDigest, logPipelineEvent } from './util.ts'
 
 export async function runStage6(env: StageEnv): Promise<void> {
-  const { digest, refs, objectiveIdByHandle } = await buildDigest(env.db, env.adventure.id)
+  const { digest, refs, objectiveIdByHandle, entryGiverHandles } = await buildDigest(env.db, env.adventure.id)
 
-  const { hooks, contracts } = await env.generate('hook_weaver', buildStage6Prompt(digest), (raw) => parseStage6(raw, digest))
+  const { hooks, contracts } = await env.generate(
+    'hook_weaver',
+    buildStage6Prompt(digest, entryGiverHandles),
+    (raw) => parseStage6(raw, digest, entryGiverHandles),
+  )
 
   const { error: deleteError } = await env.db.from('hooks').delete().eq('adventure_id', env.adventure.id)
   assertOk(deleteError, 'hooks delete failed')
