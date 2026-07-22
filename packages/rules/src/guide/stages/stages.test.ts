@@ -523,6 +523,7 @@ describe('stage 7 repairs (auto-resolve consistency warnings)', () => {
     const result = parseStage7Repair(
       '{ "resolvable": true, "patch": { "title": "Face the killer" }, "note": "title no longer names them" }',
       'objectives',
+      3,
     )
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -535,6 +536,7 @@ describe('stage 7 repairs (auto-resolve consistency warnings)', () => {
     const result = parseStage7Repair(
       '{ "resolvable": true, "patch": { "completion_predicates": "{}" }, "note": "" }',
       'objectives',
+      3,
     )
     expect(result.ok).toBe(false)
     if (result.ok) return
@@ -545,19 +547,52 @@ describe('stage 7 repairs (auto-resolve consistency warnings)', () => {
     const result = parseStage7Repair(
       '{ "resolvable": true, "patch": { "title": "Deliver Final Judgment on the Manor Killer" }, "note": "" }',
       'objectives',
+      3,
     )
     expect(result.ok).toBe(false)
   })
 
   it('passes resolvable:false through with an empty patch', () => {
-    const result = parseStage7Repair('{ "resolvable": false, "patch": {}, "note": "needs a new location row" }', 'objectives')
+    const result = parseStage7Repair('{ "resolvable": false, "patch": {}, "note": "needs a new location row" }', 'objectives', 3)
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.data.resolvable).toBe(false)
   })
 
   it('refuses a resolvable claim that patches nothing', () => {
-    const result = parseStage7Repair('{ "resolvable": true, "patch": {}, "note": "" }', 'objectives')
+    const result = parseStage7Repair('{ "resolvable": true, "patch": {}, "note": "" }', 'objectives', 3)
     expect(result.ok).toBe(false)
+  })
+
+  it('accepts chapter moves: numbers in range, "global" for cast but never for objectives', () => {
+    // The Weaver case: a boss placed in chapter 1 whose confrontation belongs at the end.
+    const npcMove = parseStage7Repair('{ "resolvable": true, "patch": { "chapter": "3" }, "note": "boss belongs at the climax" }', 'npcs', 3)
+    expect(npcMove.ok).toBe(true)
+    if (npcMove.ok) expect(npcMove.data.patch).toEqual({ chapter: '3' })
+
+    const globalLocation = parseStage7Repair('{ "resolvable": true, "patch": { "chapter": "global" }, "note": "" }', 'locations', 3)
+    expect(globalLocation.ok).toBe(true)
+    if (globalLocation.ok) expect(globalLocation.data.patch).toEqual({ chapter: 'global' })
+
+    const globalObjective = parseStage7Repair('{ "resolvable": true, "patch": { "chapter": "global" }, "note": "" }', 'objectives', 3)
+    expect(globalObjective.ok).toBe(false)
+
+    const outOfRange = parseStage7Repair('{ "resolvable": true, "patch": { "chapter": "7" }, "note": "" }', 'npcs', 3)
+    expect(outOfRange.ok).toBe(false)
+  })
+
+  it('repair prompt offers the chapter move with the chapter list', () => {
+    const { system, user } = buildStage7RepairPrompt({
+      handle: 'npc#1',
+      table: 'npcs',
+      warnings: ['The Weaver is listed as a boss in chapter 1 but belongs at the end'],
+      fields: { description: 'A patient horror.', chapter: '1' },
+      digest: buildTestDigest(),
+      metaLoopArc: 'Its influence escalates to a final confrontation',
+      chapters: [{ number: 1, title: 'Arrival' }, { number: 2, title: 'The Tightening' }, { number: 3, title: 'The Loom' }],
+    })
+    expect(system).toContain('TIMING or PLACEMENT')
+    expect(user).toContain('Chapters: 1: Arrival | 2: The Tightening | 3: The Loom')
+    expect(user).toContain('chapter: 1')
   })
 
   it('repair prompt carries every warning for the row, the row fields, and the canon', () => {
@@ -568,6 +603,7 @@ describe('stage 7 repairs (auto-resolve consistency warnings)', () => {
       fields: { title: 'Unmask Mother Brine', hidden_description: 'She is the tide-witch.' },
       digest: buildTestDigest(),
       metaLoopArc: 'The tide must turn',
+      chapters: [{ number: 1, title: 'The Drowned Village' }],
     })
     expect(system).toContain('BETTER STORY')
     expect(system).toContain('title, hidden_description')

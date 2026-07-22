@@ -103,15 +103,17 @@ export function parseStage7(raw: string, digest: GuideDigest): ParseResult<Warni
 }
 
 /**
- * The text fields the repair pass may rewrite, per table - the whole repair vocabulary.
- * Anything a warning needs beyond these (new rows, chapter moves, predicate surgery) is
- * structural and stays a warning. `text` on ingredients is logical: the edge maps it onto
- * content.text, where rumor/clue prose actually lives.
+ * The fields the repair pass may rewrite, per table - the whole repair vocabulary. Mostly
+ * text; `chapter` is the one STRUCTURAL move (2026-07-22, user-directed): placement findings
+ * ("the boss belongs at the end, not chapter 1") were the most common residue and their fix
+ * is mechanical - a chapter_id update - not a judgment call. Anything beyond these (new rows,
+ * merges, predicate surgery) stays a warning. `text` on ingredients is logical: the edge maps
+ * it onto content.text, where rumor/clue prose actually lives.
  */
 export const REPAIRABLE_FIELDS: Record<string, string[]> = {
-  objectives: ['title', 'hidden_description'],
-  npcs: ['description'],
-  locations: ['description'],
+  objectives: ['title', 'hidden_description', 'chapter'],
+  npcs: ['description', 'chapter'],
+  locations: ['description', 'chapter'],
   ingredients: ['text', 'reveals'],
 }
 
@@ -131,17 +133,21 @@ export function buildStage7RepairPrompt(ctx: {
   fields: Record<string, string>
   digest: GuideDigest
   metaLoopArc: string
+  /** The adventure's chapters, in order - the legal targets for a chapter move. */
+  chapters: { number: number; title: string }[]
 }): { system: string; user: string; maxTokens: number } {
-  const system = `You repair the flagged inconsistencies of ONE row in a tabletop RPG adventure guide by rewriting only that row's text fields. Resolve ALL the listed warnings in a single coherent rewrite. You are the same consistency discipline that guards live play, applied at authoring time: reconcile the words with established canon, never invent around it.
+  const canMoveChapter = (REPAIRABLE_FIELDS[ctx.table] ?? []).includes('chapter')
+  const system = `You repair the flagged inconsistencies of ONE row in a tabletop RPG adventure guide by rewriting only that row's fields. Resolve ALL the listed warnings in a single coherent rewrite. You are the same consistency discipline that guards live play, applied at authoring time: reconcile the words with established canon, never invent around it.
 
 Resolve in the direction of the BETTER STORY:
 - Keep twists hidden. An objective title must stay open and spoiler-free (AT MOST ${OBJECTIVE_TITLE_MAX_WORDS} words) - move the secret into hidden_description, never the other way.
 - Re-point dangling references at entities and places that EXIST in the canon below. Never invent a new named person, place, or faction.
 - Keep the row's flavor, tone, and specificity - a repair that flattens the writing is a failure.
 - Keep each field roughly its original length, and NEVER leave a sentence unfinished - a cut-off word is worse than the warning it fixed.
-- Never contradict any other line of the canon while fixing this one.
+- Never contradict any other line of the canon while fixing this one.${canMoveChapter ? `
+- When a warning is about TIMING or PLACEMENT (a boss surfacing too early, a climax listed in chapter 1, content belonging later), the right fix is usually the "chapter" field: the chapter NUMBER this row belongs in${ctx.table === 'objectives' ? '' : ', or "global" for a presence that spans the whole adventure'}. Pair a move with any text edits the new placement needs.` : ''}
 
-If rewriting these fields alone cannot resolve the warnings (they need new content, a chapter move, or structural change), say so honestly.
+If rewriting these fields alone cannot resolve the warnings (they need new rows, merges, or predicate changes), say so honestly.
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
 { "resolvable": true|false, "patch": { "<field>": "new text" }, "note": "one line: what changed and why" }
@@ -153,6 +159,8 @@ ${ctx.warnings.map((w) => `- ${w}`).join('\n')}
 
 Current content of ${ctx.handle} (${ctx.table}):
 ${Object.entries(ctx.fields).map(([f, v]) => `${f}: ${v}`).join('\n')}
+
+Chapters: ${ctx.chapters.map((c) => `${c.number}: ${c.title}`).join(' | ') || 'one-shot (single chapter)'}
 
 Meta loop arc: ${ctx.metaLoopArc}
 
@@ -172,7 +180,7 @@ ${lines(ctx.digest.ingredients)}`
   return { system, user, maxTokens: 900 }
 }
 
-export function parseStage7Repair(raw: string, table: string): ParseResult<Stage7Repair> {
+export function parseStage7Repair(raw: string, table: string, chapterCount: number): ParseResult<Stage7Repair> {
   const extracted = extractJsonObject(raw)
   if (!extracted.ok) return extracted
 
@@ -188,6 +196,22 @@ export function parseStage7Repair(raw: string, table: string): ParseResult<Stage
       for (const [field, value] of Object.entries(rawPatch as Record<string, unknown>)) {
         if (!allowed.has(field)) {
           c.errors.push(`$.patch.${field}: not a repairable field of ${table} (allowed: ${[...allowed].join(', ')})`)
+          continue
+        }
+        // A chapter move: a number ("3") or, for cast that spans the story, "global". Models
+        // sometimes emit bare numbers - accept those too before the string checks reject them.
+        if (field === 'chapter') {
+          const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim().toLowerCase() : ''
+          const number = Number(text)
+          if (text === 'global' && table !== 'objectives') {
+            patch.chapter = 'global'
+          } else if (Number.isInteger(number) && number >= 1 && number <= chapterCount) {
+            patch.chapter = String(number)
+          } else {
+            c.errors.push(
+              `$.patch.chapter: expected a chapter number 1-${chapterCount}${table !== 'objectives' ? ' or "global"' : ' (objectives always belong to a chapter)'}, got "${String(value)}"`,
+            )
+          }
           continue
         }
         if (typeof value !== 'string' || !value.trim()) {

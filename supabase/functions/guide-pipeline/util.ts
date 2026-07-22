@@ -71,6 +71,8 @@ export interface DigestRefs {
    * job had already burned an attempt.
    */
   entryGiverHandles: string[]
+  /** Chapters in order - the legal targets when a stage-7 repair moves a row between chapters. */
+  chapters: { id: string; number: number; title: string }[]
 }
 
 /** Loads every guide entity and numbers them into stable handles (obj#1, npc#1, ...). */
@@ -124,7 +126,13 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
     refs.set(handle, { table: 'ingredients', id: ing.id })
   })
 
-  return { digest, refs, objectiveIdByHandle, entryGiverHandles }
+  return {
+    digest,
+    refs,
+    objectiveIdByHandle,
+    entryGiverHandles,
+    chapters: (chapters.data ?? []).map((c) => ({ id: c.id, number: c.index + 1, title: c.title ?? '' })),
+  }
 }
 
 export function assertOk(error: { message: string } | null, what: string): void {
