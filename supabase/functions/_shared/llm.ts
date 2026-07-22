@@ -87,7 +87,28 @@ export interface AgentTextCall {
 /** Thrown when the caller's settings route this request somewhere we can't serve (local mode). */
 export class AgentCallError extends Error {}
 
+export interface AgentTextResult {
+  text: string
+  /** completion_tokens of the response that produced `text`; null when the provider omits usage. */
+  completionTokens: number | null
+  /** 'length' means the reply was cut off at `maxTokens` - the signal that decides HIT CAP vs STOPPED EARLY. */
+  finishReason: string | null
+  /** The max_tokens cap that produced `text` (a truncation-retry doubles it), for the completion_tokens comparison. */
+  maxTokens: number
+}
+
+/** Text-only convenience over callAgentTextWithMeta - most callers do not need the token diagnostics. */
 export async function callAgentText(call: AgentTextCall): Promise<string> {
+  return (await callAgentTextWithMeta(call)).text
+}
+
+/**
+ * As callAgentText, but returns the completion_tokens/finish_reason/cap of the reply alongside it.
+ * agentJson attaches these to `agent_output_unparsed` so a parse failure can be read directly -
+ * at the cap means the budget cut it off, well short means the model stopped on its own and no
+ * cap will help. Two "fixes" shipped against the adjudicator 500 without this number in hand.
+ */
+export async function callAgentTextWithMeta(call: AgentTextCall): Promise<AgentTextResult> {
   const { serviceClient, openRouterApiKey, userId, adventureId, agentRole, system, user, maxTokens } = call
   const startedAt = Date.now()
 
@@ -189,6 +210,10 @@ export async function callAgentText(call: AgentTextCall): Promise<string> {
   await logUsage(json)
 
   let content: string | undefined = sanitize(json.choices?.[0]?.message?.content)
+  // Track the response that actually produced `content` so the diagnostics below describe the
+  // reply the caller receives, not a discarded empty retry.
+  let chosen = json
+  let chosenCap = maxTokens
   // A completion cut off at the token cap is NOT empty, so it used to skip the retry below and
   // hand half-written JSON to the parser, which died as "adjudication: not an object" (live
   // 2026-07-21, 3 turns lost across two runs). Strict json_schema is what exposed it: the model
@@ -199,14 +224,24 @@ export async function callAgentText(call: AgentTextCall): Promise<string> {
     // Empty completion (seen live with mimo-v2.5 on structured-output calls): the model spent
     // the whole budget on reasoning tokens despite reasoning-off. Retry once with double the
     // budget so the actual content fits; only then give up.
-    ;({ res, json } = await post(reasoningOff, maxTokens * 2, schemaOn))
-    if (res.ok) {
-      await logUsage(json)
+    const retry = await post(reasoningOff, maxTokens * 2, schemaOn)
+    if (retry.res.ok) {
+      await logUsage(retry.json)
       // Keep the retry only if it actually said something. A truncated first reply is useless
       // JSON but perfectly usable prose, so never trade it for an empty second one.
-      content = sanitize(json.choices?.[0]?.message?.content) ?? content
+      const retryContent = sanitize(retry.json.choices?.[0]?.message?.content)
+      if (retryContent) {
+        content = retryContent
+        chosen = retry.json
+        chosenCap = maxTokens * 2
+      }
     }
   }
   if (!content) throw new AgentCallError('Model response had no content')
-  return content
+  return {
+    text: content,
+    completionTokens: chosen.usage?.completion_tokens ?? null,
+    finishReason: chosen.choices?.[0]?.finish_reason ?? null,
+    maxTokens: chosenCap,
+  }
 }

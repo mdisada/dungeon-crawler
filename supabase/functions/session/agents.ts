@@ -6,7 +6,7 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
-import { AgentCallError, callAgentText } from '../_shared/llm.ts'
+import { AgentCallError, callAgentText, callAgentTextWithMeta } from '../_shared/llm.ts'
 import {
   extractJson, parseAdjudication, parseConsistency, parseGists, parseNarrationOptions,
   parseNpcOutput, parseSocialClassification,
@@ -37,7 +37,7 @@ export async function agentJson(
   maxTokens: number,
   schema?: { name: string; schema: Record<string, unknown> },
 ): Promise<unknown> {
-  const call = (tokens: number) => callAgentText({
+  const call = (tokens: number) => callAgentTextWithMeta({
     serviceClient: env.service,
     openRouterApiKey: OPENROUTER_API_KEY,
     userId: env.creatorId,
@@ -49,27 +49,33 @@ export async function agentJson(
     schema,
   })
 
-  let text = await call(maxTokens)
-  let parsed = extractJson(text)
+  let result = await call(maxTokens)
+  let parsed = extractJson(result.text)
   // Retry on the PARSE, not on provider metadata. Every unparseable reply observed live was
   // truncated JSON - '{\n  "interpretation":' at 21 chars, '{"' at 2 - yet llm.ts's retry keys
   // off finish_reason === 'length', which this provider does not reliably report when the
   // budget went to reasoning tokens instead of content. The parse failing is the symptom we
   // actually care about and the one signal that is always available.
   if (parsed === null || typeof parsed !== 'object') {
-    text = await call(maxTokens * 2)
-    parsed = extractJson(text)
+    result = await call(maxTokens * 2)
+    parsed = extractJson(result.text)
   }
   // Every parse failure so far has been diagnosed by guesswork, because the text that failed is
   // discarded here and the caller only ever reports "not an object". Raising the token cap on a
   // truncation theory did not stop the adjudicator 500s (live 2026-07-21), so keep the evidence:
-  // whether this is prose, a fragment, or a valid non-object is the whole question.
+  // whether this is prose, a fragment, or a valid non-object is the whole question. completion_tokens
+  // vs the cap that produced this reply settles WHY - at the cap the budget cut it off, well short
+  // means the model stopped on its own and no cap will help. Threaded off the failing call itself
+  // so the harness reads it directly instead of re-joining usage_log by role (2026-07-22).
   if (parsed === null || typeof parsed !== 'object') {
     await logEvent(env.service, env.adventureId, null, 'agent_output_unparsed', {
       role,
-      chars: text.length,
-      head: text.slice(0, 300),
-      tail: text.length > 300 ? text.slice(-120) : '',
+      chars: result.text.length,
+      head: result.text.slice(0, 300),
+      tail: result.text.length > 300 ? result.text.slice(-120) : '',
+      completion_tokens: result.completionTokens,
+      finish_reason: result.finishReason,
+      cap: result.maxTokens,
     }).catch(() => {})
   }
   return parsed
@@ -902,6 +908,73 @@ export async function runSocialExitJudge(
     ].join('\n\n'), 100)
     const exit = (typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>).exit : null)
     return typeof exit === 'string' && exits.some((e) => e.outcome === exit) ? exit : null
+  } catch {
+    return null
+  }
+}
+
+const OBJECTIVE_JUDGE_SYSTEM =
+  'You judge whether a tabletop RPG party has COMPLETED the current story objective - the way a ' +
+  'DM recognizes an accomplishment however the players got there, including routes the authors ' +
+  'never anticipated. You are given the objective (player-facing title + DM-only notes on what ' +
+  'it is REALLY about), the authored milestone atoms that can credit it, and the recent play. ' +
+  'Reply with ONLY JSON: {"completed": boolean, "atom": string|null, "evidence": string}. ' +
+  'completed true ONLY when the recent lines make it unambiguous the objective\'s real intent ' +
+  'has been ACHIEVED on the page - done, not planned, discussed, attempted, or approached. ' +
+  'An ENABLING event is NOT completion: a way opening, a threshold reached, a person arriving ' +
+  'in view, permission granted, an opportunity created - none of these are the deed itself ' +
+  '(a door groaning open is not yet entering; a claimant stepping from a coach is not yet a ' +
+  'meeting). The evidence must show the accomplished STATE, not the moment it became possible. ' +
+  'evidence MUST be a short verbatim quote from the provided lines that proves it; if you ' +
+  'cannot quote proof, completed is false. atom: the ONE provided milestone whose meaning best ' +
+  'matches what actually happened (the vehicle for crediting), null when completed is false. ' +
+  'Judge only the words on the page, never what you suspect happened off it. Partial progress ' +
+  'is false. When in doubt, false - most calls should answer false.'
+
+export interface ObjectiveJudgment {
+  completed: boolean
+  atom: string | null
+  evidence: string
+}
+
+/**
+ * Holistic objective recognition (the "DM's judgment" net under the deterministic predicate
+ * path). Runs ONLY at resolution boundaries the caller gates structurally (beat exit/spent with
+ * the objective still incomplete - never per turn, never on word signals). Failure degrades to
+ * null: recognition is an extra chance to credit the party, never a way to block the tail.
+ */
+export async function runObjectiveJudge(
+  env: AgentEnv,
+  ctx: {
+    objective: { title: string; hiddenDescription: string }
+    /** The objective's own claimable atoms - the only credit vehicles the judge may cite. */
+    atoms: string[]
+    recentLines: string[]
+  },
+): Promise<ObjectiveJudgment | null> {
+  // Live-play feature only: demo adventures assert canned outputs and must spend nothing.
+  if (env.demo || ctx.atoms.length === 0) return null
+  const schema = {
+    name: 'objective_judgment',
+    schema: obj({
+      completed: { type: 'boolean' },
+      atom: { anyOf: [{ type: 'string', enum: ctx.atoms }, { type: 'null' }] },
+      evidence: { type: 'string', maxLength: 240 },
+    }),
+  }
+  try {
+    const raw = await agentJson(env, 'adjudicator', OBJECTIVE_JUDGE_SYSTEM, [
+      `Objective: ${ctx.objective.title}`,
+      `DM notes (what it is really about): ${ctx.objective.hiddenDescription || 'none'}`,
+      `Milestone atoms that can credit it: ${ctx.atoms.join(' | ')}`,
+      `Recent play (judge ONLY these lines):\n${ctx.recentLines.join('\n')}`,
+    ].join('\n'), 250, schema)
+    const o = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const atom = typeof o.atom === 'string' && ctx.atoms.includes(o.atom) ? o.atom : null
+    const evidence = typeof o.evidence === 'string' ? o.evidence.trim().slice(0, 240) : ''
+    // The guardrail IS the citation: a yes without a quoted proof and a valid atom is a no.
+    const completed = o.completed === true && atom !== null && evidence.length > 0
+    return { completed, atom: completed ? atom : null, evidence }
   } catch {
     return null
   }

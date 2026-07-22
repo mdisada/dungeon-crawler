@@ -7,19 +7,31 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import type { GameState, Json, StateDiff } from '../_shared/state/index.ts'
 import {
-  activeLoop, commitmentReady, evaluatePredicate, ladderReady, parseEndingSignals, scoreEndings,
+  activeLoop, commitmentReady, evaluatePredicate, ladderReady, listMilestoneAtoms,
+  parseEndingSignals, scoreEndings,
 } from '../_shared/story/index.ts'
 import type { EndingCandidate, EndingWorld, WorldFacts } from '../_shared/story/index.ts'
-import { runConsistency } from './agents.ts'
+import { runConsistency, runObjectiveJudge } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { loadLoops, planAndOpenBeat } from './beats.ts'
 import { recordSceneLedger } from './ledger.ts'
+import { applyMilestones } from './milestones.ts'
 import { narrationBeat, publishNarration } from './narration.ts'
 import { appendLinesDiff, newLine, typingDiff } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
 import { maybeCompleteQuestForObjective, maybeReweaveDeclined } from './story.ts'
 import { runClimaxAuthor } from './story-agents.ts'
 import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
+
+/**
+ * Recognition judge rollout switch. true = LIVE: a completed-verdict credits its cited atom
+ * through applyMilestones (validated + idempotent). Flipped after two shadow sweeps
+ * (2026-07-22): 11 firings - 9 correct refusals, 1 yes later confirmed by the deterministic
+ * path, 1 premature yes (enabling-event conflation) now explicitly prompted against. Every
+ * credit still logs `objective_recognized` with its verbatim-evidence quote - audit those in
+ * every paid sweep, and flip back to false (shadow) if a credit's quote does not prove the deed.
+ */
+const OBJECTIVE_JUDGE_APPLIES = true
 
 /**
  * Only the `tag` string matters here, so project it in the query rather than hauling 300 whole
@@ -57,12 +69,14 @@ interface ObjectiveRow {
   title: string
   reveal_state: string
   completion_predicates: Json
+  /** DM-only intent - the recognition judge's core context (what the objective is REALLY about). */
+  hidden_description: string | null
 }
 
 async function orderedObjectives(service: SupabaseClient, adventureId: string): Promise<ObjectiveRow[]> {
   const [{ data: chapters }, { data: objectives }] = await Promise.all([
     service.from('chapters').select('id, index').eq('adventure_id', adventureId).order('index'),
-    service.from('objectives').select('id, chapter_id, index, title, reveal_state, completion_predicates').eq('adventure_id', adventureId),
+    service.from('objectives').select('id, chapter_id, index, title, reveal_state, completion_predicates, hidden_description').eq('adventure_id', adventureId),
   ])
   const chapterOrder = new Map(((chapters ?? []) as { id: string; index: number }[]).map((c) => [c.id, c.index]))
   return ((objectives ?? []) as ObjectiveRow[]).sort((a, b) => {
@@ -412,6 +426,46 @@ export async function runStoryProgressTail(
           await logEvent(service, env.adventureId, sessionId, 'incident', {
             kind: 'beat_open_failed', trigger,
           })
+        }
+      }
+
+      // Recognition judge: a beat just resolved and the deterministic path credited nothing -
+      // ask whether the FICTION already completed the current objective (the DM's "yeah, that
+      // did it", for routes the authored atoms never anticipated). Gated on structural facts
+      // only (beat exit/spent, objective active with atoms), never on word signals; at most one
+      // call per beat resolution. Shadow first: log the verdict + evidence, act on nothing,
+      // until a paid sweep shows the evidence holds up (same discipline as the 0.2 diagnostic).
+      if ((exitMet || beatSpent) && !objectiveJustCompleted) {
+        const current = ordered.find((o) => o.id === state.objectives.currentId)
+        const atoms = current && current.reveal_state === 'active'
+          ? listMilestoneAtoms(current.completion_predicates)
+          : null
+        const atomList = atoms ? [...atoms.flags, ...atoms.events, ...atoms.facts] : []
+        if (current && atomList.length > 0) {
+          const recentLines = (state.dialogue?.lines ?? [])
+            .slice(-14)
+            .map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`)
+          const verdict = await runObjectiveJudge(env, {
+            objective: { title: current.title, hiddenDescription: current.hidden_description ?? '' },
+            atoms: atomList,
+            recentLines,
+          })
+          if (verdict) {
+            await logEvent(service, env.adventureId, sessionId, 'objective_recognized', {
+              objective_id: current.id,
+              title: current.title,
+              trigger: exitMet ? 'beat_exit' : 'beat_spent',
+              completed: verdict.completed,
+              atom: verdict.atom,
+              evidence: verdict.evidence,
+              mode: OBJECTIVE_JUDGE_APPLIES ? 'live' : 'shadow',
+            }).catch(() => {})
+            if (OBJECTIVE_JUDGE_APPLIES && verdict.completed && verdict.atom) {
+              // Credit flows through the SAME validated, idempotent machinery as every other
+              // milestone writer - the judge picks the atom, applyMilestones stays the authority.
+              await applyMilestones(service, env, sessionId, [verdict.atom], 'objective_judge')
+            }
+          }
         }
       }
     }

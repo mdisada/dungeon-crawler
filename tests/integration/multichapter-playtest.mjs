@@ -238,7 +238,9 @@ const TURNS = [
 
 async function main() {
   const stamp = Date.now()
-  const email = `mc-playtest-${stamp}@example.com`
+  // pid keeps concurrent matrix children unique - two runs spawned the same millisecond
+  // collided on this email and one died at setup (23505, live 2026-07-22).
+  const email = `mc-playtest-${stamp}-${process.pid}@example.com`
   const userId = await createConfirmedUser(email)
   const token = await signIn(email)
   await pinTestModels(serviceRest, userId)
@@ -461,24 +463,21 @@ async function main() {
   const unparsed = events.filter((e) => e.type === 'agent_output_unparsed')
   if (unparsed.length > 0) {
     console.log(`    agent replies UNPARSEABLE: ${unparsed.length}`)
-    unparsed.forEach((e) => console.log(`      [${e.payload?.role}] ${e.payload?.chars} chars: ${JSON.stringify(e.payload?.head)}${e.payload?.tail ? ` ... ${JSON.stringify(e.payload.tail)}` : ''}`))
-    // completion_tokens settles WHY. At or near the role's cap means the reply was cut off and
-    // the budget is the problem; a handful of tokens means the model stopped on its own, which
-    // no cap will fix. Two "fixes" were shipped against this without the number in hand.
-    // Reported per ROLE rather than per broken row: matching a row to its failure by re-parsing
-    // response_text silently matched nothing, and a diagnostic that can quietly return empty is
-    // worse than none. Every call by an affected role, with the cap alongside - if the ceiling is
-    // where these land, the budget is the problem; if they die well short of it, no cap will help.
-    const caps = { adjudicator: 1000, summarizer: 500, consistency_checker: 300, beat_planner: 900 }
-    const affected = [...new Set(unparsed.map((e) => e.payload?.role).filter(Boolean))]
-    const usageRows = await serviceRest('GET', `usage_log?adventure_id=eq.${advId}&select=agent_role,completion_tokens`)
-    affected.forEach((role) => {
-      const toks = usageRows.filter((u) => u.agent_role === role).map((u) => Number(u.completion_tokens) || 0)
-      if (toks.length === 0) return console.log(`      -> ${role}: no usage rows`)
-      const cap = caps[role]
-      const max = Math.max(...toks)
-      const atCap = cap ? toks.filter((t) => t >= cap * 0.9).length : 0
-      console.log(`      -> ${role}: ${toks.length} calls, completion_tokens max=${max} avg=${Math.round(toks.reduce((a, b) => a + b, 0) / toks.length)}${cap ? ` of ${cap} cap; ${atCap} call(s) at >=90% of cap` : ''}`)
+    // completion_tokens vs the cap that produced THIS reply settles WHY, per broken row. At or
+    // near the cap (or finish_reason 'length') means the reply was cut off and the budget is the
+    // problem; a handful of tokens means the model stopped on its own, which no cap will fix. Read
+    // straight off the event now that llm.ts threads it (2026-07-22) - the old per-role usage_log
+    // join guessed, and silently matched nothing when the join broke. A pre-2026-07-22 event has
+    // no token fields; say so rather than invent a verdict.
+    unparsed.forEach((e) => {
+      const p = e.payload ?? {}
+      console.log(`      [${p.role}] ${p.chars} chars: ${JSON.stringify(p.head)}${p.tail ? ` ... ${JSON.stringify(p.tail)}` : ''}`)
+      if (typeof p.completion_tokens === 'number' && typeof p.cap === 'number') {
+        const hitCap = p.finish_reason === 'length' || p.completion_tokens >= p.cap * 0.9
+        console.log(`        -> completion_tokens=${p.completion_tokens} of ${p.cap} cap -> ${hitCap ? 'HIT CAP' : 'STOPPED EARLY'}`)
+      } else {
+        console.log('        -> completion_tokens unavailable (event predates the threaded diagnostic)')
+      }
     })
   }
   const rejectedMilestones = events.filter((e) => e.type === 'scene_effect_rejected' && e.payload?.effect === 'milestone')
@@ -506,6 +505,17 @@ async function main() {
   events.filter((e) => e.type === 'dial_nudged').forEach((e) => console.log(`    - ${e.payload?.dial} ${e.payload?.from}->${e.payload?.to}: ${e.payload?.why}`))
   console.log(`  ending commitments:    ${counts('ending_committed')} (must be 0 mid-story)`)
   console.log(`  social_started:        ${counts('social_started')}`)
+  // Recognition judge (shadow until flipped): every verdict prints WITH its evidence, because
+  // the evidence text is the whole go/no-go for making it live - a yes whose quote does not
+  // prove completion is a hallucinated quest completion waiting to be enabled.
+  const recognized = events.filter((e) => e.type === 'objective_recognized')
+  const recogYes = recognized.filter((e) => e.payload?.completed === true)
+  console.log(`  objective_recognized:  ${recognized.length} (completed-verdicts ${recogYes.length})`)
+  recognized.forEach((e) => {
+    const p = e.payload ?? {}
+    console.log(`    - [${p.mode}|${p.trigger}] ${p.completed ? 'YES' : 'no '} "${p.title}"${p.atom ? ` -> ${p.atom}` : ''}`)
+    if (p.evidence) console.log(`        evidence: "${String(p.evidence).slice(0, 140)}"`)
+  })
 
   console.log('\n[repetition check - narrator circling]')
   const narration = lines.filter((l) => !l.speaker).map((l) => l.text)
