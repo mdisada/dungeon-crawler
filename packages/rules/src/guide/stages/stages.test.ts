@@ -642,6 +642,47 @@ describe('stage 7 edit plans (auto-resolve consistency findings)', () => {
     expect(both.ok).toBe(false)
   })
 
+  it('carries checker severity, defaulting unrated findings to major', () => {
+    const result = parseStage7(
+    JSON.stringify({ warnings: [
+      { target: 'obj#2', severity: 'minor', message: 'could be tighter' },
+      { target: 'obj#2', message: 'contradicts the meta loop' },
+    ] }),
+      buildTestDigest(),
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data[0].severity).toBe('minor')
+    expect(result.data[1].severity).toBe('major')
+  })
+
+  it('validates predicate patches structurally: grammar, no facts, claimable', () => {
+    const good = parseStage7EditPlan(
+      JSON.stringify({ edits: [{ handle: 'obj#1', patch: { completion_predicates: JSON.stringify({ any: [{ flag: 'writ_secured', eq: true }, { event: 'the gate was opened' }] }) }, note: 'result-event removed' }] }),
+      new Set(['obj#1']), 3,
+    )
+    expect(good.ok).toBe(true)
+    if (good.ok) expect(JSON.parse(good.data[0].patch.completion_predicates)).toMatchObject({ any: expect.anything() })
+
+    const factAtom = parseStage7EditPlan(
+      JSON.stringify({ edits: [{ handle: 'obj#1', patch: { completion_predicates: JSON.stringify({ fact: 'npc.thorne.status', eq: 'dead' }) }, note: '' }] }),
+      new Set(['obj#1']), 3,
+    )
+    expect(factAtom.ok).toBe(false)
+
+    const unclaimable = parseStage7EditPlan(
+      JSON.stringify({ edits: [{ handle: 'obj#1', patch: { completion_predicates: JSON.stringify({ flag: 'gate_opened', eq: false }) }, note: '' }] }),
+      new Set(['obj#1']), 3,
+    )
+    expect(unclaimable.ok).toBe(false)
+
+    const notJson = parseStage7EditPlan(
+      JSON.stringify({ edits: [{ handle: 'obj#1', patch: { completion_predicates: 'when the party wins' }, note: '' }] }),
+      new Set(['obj#1']), 3,
+    )
+    expect(notJson.ok).toBe(false)
+  })
+
   it('derives the table from the handle grammar', () => {
     expect(handleTable('obj#3')).toBe('objectives')
     expect(handleTable('npc#1')).toBe('npcs')

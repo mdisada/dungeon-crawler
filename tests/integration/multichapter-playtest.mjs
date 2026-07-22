@@ -326,7 +326,7 @@ async function main() {
   const npcs = await serviceRest('GET', `npcs?adventure_id=eq.${advId}&select=id,name,role`)
   const locations = await serviceRest('GET', `locations?adventure_id=eq.${advId}&select=id,name`)
   const ingredients = await serviceRest('GET', `ingredients?adventure_id=eq.${advId}&select=id,type,reveals,placement,discovered`)
-  const warnings = await serviceRest('GET', `guide_warnings?adventure_id=eq.${advId}&select=stage,message`)
+  const warnings = await serviceRest('GET', `guide_warnings?adventure_id=eq.${advId}&select=stage,message,kind`)
 
   console.log(`\n[authored guide]`)
   console.log(`  chapters:   ${chapters.length}`)
@@ -358,7 +358,7 @@ async function main() {
   const npcPlaced = ingredients.filter((i) => i.placement?.npc_id)
   console.log(`  ingredient placement: ${locPlaced.length} at locations, ${npcPlaced.length} on NPCs`)
   console.log(`  guide warnings: ${warnings.length}`)
-  warnings.forEach((w) => console.log(`    [stage ${w.stage}] ${w.message}`))
+  warnings.forEach((w) => console.log(`    [stage ${w.stage}|${w.kind ?? 'warning'}] ${w.message}`))
   // Stage-7 auto-repairs (2026-07-22): rewrites are allowed only because they are LOUD - the
   // before/after pair here is the audit trail, exactly like the recognition judge's evidence.
   // A repair whose "after" does not read better than its "before" is the rollback signal.

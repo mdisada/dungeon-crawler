@@ -126,7 +126,7 @@ async function loadRepairFields(
   chapters: { id: string; number: number; title: string }[],
 ): Promise<{ fields: Record<string, string>; humanEdited: boolean; content: Record<string, unknown> | null } | null> {
   const columns: Record<string, string> = {
-    objectives: 'title, hidden_description, chapter_id, human_edited',
+    objectives: 'title, hidden_description, chapter_id, completion_predicates, human_edited',
     npcs: 'description, chapter_id, human_edited',
     locations: 'description, chapter_id, human_edited',
     ingredients: 'content, reveals, human_edited',
@@ -140,6 +140,11 @@ async function loadRepairFields(
     if (field === 'chapter') {
       // Current placement, in the same vocabulary the patch uses ("2" | "global").
       fields.chapter = row.chapter_id ? String(chapters.find((c) => c.id === row.chapter_id)?.number ?? '?') : 'global'
+      continue
+    }
+    if (field === 'completion_predicates') {
+      // Shown (and patched) as a JSON string; stored as jsonb.
+      fields.completion_predicates = JSON.stringify(row.completion_predicates ?? null)
       continue
     }
     const value = field === 'text' ? content?.text : row[field]
@@ -169,6 +174,9 @@ async function applyEdit(
     for (const [field, value] of Object.entries(edit.patch)) {
       if (ref.table === 'ingredients' && field === 'text') {
         patch.content = { ...(loaded.content ?? {}), text: value }
+      } else if (field === 'completion_predicates') {
+        // Parser already validated grammar/no-facts/claimability; stored as jsonb.
+        patch.completion_predicates = JSON.parse(value)
       } else if (field === 'chapter') {
         // Drop only a guarded move; the edit's text fields still apply.
         if (ref.table === 'npcs' && entryGiverIds.has(ref.id)) continue
@@ -379,8 +387,9 @@ export async function runStage7(env: StageEnv): Promise<void> {
       target_table: ref?.table ?? null,
       target_id: ref?.id ?? null,
       message: w.message,
-      // Residue survived the repair rounds - by definition it needs a human (the review popup).
-      kind: 'warning',
+      // Majors go to the review popup; minors are worth recording, not worth a click
+      // (severity ranked by the checker, 2026-07-22 "user clicks less").
+      kind: w.severity === 'minor' ? 'info' : 'warning',
     }
   })
 

@@ -9,8 +9,9 @@
 // never touched, and anything unresolved still warns. An empty warning list is a valid result.
 
 import { Check, countWords, extractJsonObject, looksCutOff } from '../json.ts'
+import { validatePredicate } from '../predicates.ts'
 import { entityNameMatches } from './stage4.ts'
-import { OBJECTIVE_TITLE_MAX_WORDS } from './stage3.ts'
+import { containsFactAtom, hasClaimableAtom, OBJECTIVE_TITLE_MAX_WORDS } from './stage3.ts'
 import type { GuideDigest } from './stage6.ts'
 import type { EntityRef, ParseResult, WarningDraft } from '../types.ts'
 
@@ -56,8 +57,12 @@ Look for:
 
 Report each problem against the most specific handle you can. If the guide is coherent, return an empty list - do not invent problems.
 
+Rate each finding's severity honestly:
+- "major": a contradiction, an impossibility, unreachable content, or something that would break play - a creator MUST look at it.
+- "minor": clarity, polish, or could-be-tighter observations - worth recording, not worth interrupting anyone.
+
 Respond with ONLY a JSON object, no prose, in exactly this shape:
-{ "warnings": [ { "target": "obj#3" | "npc#1" | null, "message": "one-sentence problem statement" } ] }`
+{ "warnings": [ { "target": "obj#3" | "npc#1" | null, "severity": "major"|"minor", "message": "one-sentence problem statement" } ] }`
 
   const lines = (m: Map<string, string>) => [...m.entries()].map(([h, l]) => `${h}: ${l}`).join('\n')
   const user = `Meta loop arc: ${metaLoopArc}
@@ -99,7 +104,10 @@ export function parseStage7(raw: string, digest: GuideDigest): ParseResult<Warni
       // message is still useful even when the model fumbles the pointer.
       if (targetHandle && !known.has(targetHandle)) targetHandle = null
     }
-    return { targetHandle, message: c.str(w.message, `${path}.message`) }
+    // Unrated findings count as major - the popup over-asking beats a contradiction hiding
+    // in the collapsed list.
+    const severity = w.severity === 'minor' ? 'minor' as const : 'major' as const
+    return { targetHandle, message: c.str(w.message, `${path}.message`), severity }
   })
 
   return c.result(warnings)
@@ -114,7 +122,7 @@ export function parseStage7(raw: string, digest: GuideDigest): ParseResult<Warni
  * it onto content.text, where rumor/clue prose actually lives.
  */
 export const REPAIRABLE_FIELDS: Record<string, string[]> = {
-  objectives: ['title', 'hidden_description', 'chapter'],
+  objectives: ['title', 'hidden_description', 'chapter', 'completion_predicates'],
   npcs: ['description', 'chapter'],
   locations: ['description', 'chapter'],
   ingredients: ['text', 'reveals'],
@@ -172,6 +180,7 @@ Rules, in the direction of the BETTER STORY:
 - Keep fields roughly their original length and NEVER leave a sentence unfinished.
 - When a finding is about TIMING or PLACEMENT, use the "chapter" field: the chapter NUMBER the row belongs in (npc/loc rows may instead use "global" for an adventure-wide presence; objectives always take a number). Pair a move with whatever text edits the new placement needs.
 - Editable fields per row type: obj# -> title, hidden_description, chapter; npc# -> description, chapter; loc# -> description, chapter; ing# -> text, reveals.
+- When a finding is about an objective's COMPLETION PREDICATE (it references its own result, an unestablished flag, the wrong shape), patch "completion_predicates" with the corrected predicate AS A JSON STRING. Grammar: atoms {"flag": "<snake_case_milestone>", "eq": true} or {"event": "short past-tense marker"}, combined with {"any": [...]}/{"all": [...]}; NEVER "fact" atoms; at least one flag/event must be claimable; prefer an "any" honoring multiple resolutions. This decides WHEN players complete the objective - keep it achievable by ordinary play.
 - When a finding says a spine entity NEVER APPEARS (registry coverage), fix it by CREATING that row: { "create": { "kind": "npc"|"location", "name": "<the exact name the finding cites>", "description": "1-3 sentences grounded in the canon below", "chapter": "<number>"|"global" }, "note": "..." }. Place it in the chapter where the story needs it; never rename it.
 - A finding these operations cannot fix (merges, predicate changes) is simply left alone - it stays a warning for the creator.
 
@@ -289,6 +298,32 @@ export function parseStage7EditPlan(
       }
       if (typeof value !== 'string' || !value.trim()) {
         c.errors.push(`${path}.patch.${field}: expected non-empty replacement text`)
+        continue
+      }
+      // Predicate patches are machine data: full structural validation (same gates stage 3
+      // authors under), and the recognition judge remains the runtime net if semantics drift.
+      if (field === 'completion_predicates') {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(value)
+        } catch {
+          c.errors.push(`${path}.patch.completion_predicates: not valid JSON`)
+          continue
+        }
+        const problems = validatePredicate(parsed, `${path}.patch.completion_predicates`)
+        if (problems.length > 0) {
+          c.errors.push(...problems)
+          continue
+        }
+        if (containsFactAtom(parsed)) {
+          c.errors.push(`${path}.patch.completion_predicates: "fact" atoms are not completable by live play - use flags or events`)
+          continue
+        }
+        if (!hasClaimableAtom(parsed)) {
+          c.errors.push(`${path}.patch.completion_predicates: has no claimable milestone - needs at least one {flag,eq:true} or {event}`)
+          continue
+        }
+        patch[field] = JSON.stringify(parsed)
         continue
       }
       if (table === 'objectives' && field === 'title' && countWords(value) > OBJECTIVE_TITLE_MAX_WORDS) {

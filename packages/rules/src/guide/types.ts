@@ -146,6 +146,9 @@ export interface ContractDraft {
 export interface WarningDraft {
   targetHandle: string | null
   message: string
+  /** major = contradiction/unreachable/broken; minor = clarity and polish. Minors skip the
+   *  review popup (2026-07-22, "user clicks less") and land in the collapsed info list. */
+  severity: 'major' | 'minor'
 }
 
 /** A 2-4 item set of adventure-specific trajectory axes declared by stage 8 (F04 SS4.2). */

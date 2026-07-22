@@ -119,7 +119,7 @@ ${sceneList}`
   return { system, user, maxTokens: 3000 }
 }
 
-function containsFactAtom(predicate: unknown): boolean {
+export function containsFactAtom(predicate: unknown): boolean {
   if (typeof predicate !== 'object' || predicate === null || Array.isArray(predicate)) return false
   const p = predicate as Record<string, unknown>
   if (typeof p.fact === 'string') return true
@@ -135,7 +135,7 @@ function containsFactAtom(predicate: unknown): boolean {
  * Fact atoms are omitted deliberately - they are hard-failed one branch up, so a predicate that
  * reaches the zero-claimable check never contains one.
  */
-function hasClaimableAtom(predicate: unknown): boolean {
+export function hasClaimableAtom(predicate: unknown): boolean {
   if (typeof predicate !== 'object' || predicate === null || Array.isArray(predicate)) return false
   const p = predicate as Record<string, unknown>
   if (Array.isArray(p.any)) return p.any.some(hasClaimableAtom)
