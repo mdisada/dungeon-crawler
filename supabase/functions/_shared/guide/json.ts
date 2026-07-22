@@ -77,3 +77,16 @@ export class Check {
 export function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length
 }
+
+/**
+ * True when prose appears cut off mid-thought - it ends on a bare letter/digit, comma, colon,
+ * or dash instead of a finished sentence. A FORM check, not a meaning check (same class as
+ * countWords): models fitting a token budget ship "Success here means the pa", and both the
+ * stage-3 author and the stage-7 repairs did exactly that live (2026-07-22). Used as a hard
+ * parse error so the existing regeneration loops finish the sentence.
+ */
+export function looksCutOff(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  return !/[.!?…"'’”)\]]$/.test(trimmed)
+}

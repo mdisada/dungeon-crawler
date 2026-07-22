@@ -1,9 +1,8 @@
 // Stages 6-7: Hook Weaver cross-links and the Consistency pass over the whole guide.
 import { buildStage6Prompt, parseStage6 } from '../_shared/guide/stages/stage6.ts'
-import type { GuideDigest } from '../_shared/guide/stages/stage6.ts'
 import {
-  buildStage7Prompt, buildStage7RepairPrompt, parseStage7, parseStage7Repair, REPAIRABLE_FIELDS,
-  validateRegistryCoverage,
+  buildStage7EditPlanPrompt, buildStage7Prompt, parseStage7, parseStage7EditPlan,
+  REPAIRABLE_FIELDS, validateRegistryCoverage,
 } from '../_shared/guide/stages/stage7.ts'
 import type { EntityRef, WarningDraft } from '../_shared/guide/types.ts'
 import { enqueueJob, type StageEnv } from './stage-env.ts'
@@ -110,13 +109,6 @@ export async function runStage6(env: StageEnv): Promise<void> {
 }
 
 /**
- * Row cap per repair round. 10, not 6: a 3-chapter guide produced 15 findings and the old cap
- * left rows unattempted (2026-07-22); repairs run in parallel, so the cap costs tokens, not
- * wall clock.
- */
-const REPAIR_CAP = 10
-
-/**
  * Repair rounds per stage-7 run (user-directed 2026-07-22): loop check -> repair -> re-check
  * until the checker returns CLEAN or this cap hits. Bounded because each round costs a full
  * checker pass plus repairs (~15s) inside a 150s worker, and because the checker is
@@ -157,56 +149,32 @@ async function loadRepairFields(
 }
 
 /**
- * Attempt one ROW's repair, resolving every warning that targets it in a single constrained
- * rewrite - one repair per row is what makes the parallel fan-out safe (two same-row repairs
- * raced and the second wrote a stale spoiler title back over the first's fix, live 2026-07-22).
- * Applied only when the model both claims and produces a valid patch. Every applied repair logs
- * a guide_repair event with before/after - loud by design (F04 SS2 amendment). Any failure
- * inside is this row's problem alone: its warnings survive to the re-check, the stage never
- * dies for it.
+ * Apply ONE validated edit from the round's plan: logical fields become columns (ingredient
+ * 'text' -> content jsonb; 'chapter' -> chapter_id, the structural MOVE), guarded by the
+ * stage-6 invariant (the entry contract's giver never leaves chapter 1) and objective-index
+ * appending. Logs the guide_repair event with before/after - loud by design (F04 SS2
+ * amendment). Returns whether anything was written.
  */
-async function attemptRepair(
+async function applyEdit(
   env: StageEnv,
-  warnings: WarningDraft[],
+  edit: { handle: string; patch: Record<string, string>; note: string },
   ref: { table: string; id: string },
-  digest: GuideDigest,
-  arc: string,
+  loaded: { fields: Record<string, string>; content: Record<string, unknown> | null },
   chapters: { id: string; number: number; title: string }[],
-  /** NPC ids that give the entry contract - moving one out of chapter 1 breaks the opening offer. */
   entryGiverIds: Set<string>,
+  findingsForHandle: string[],
 ): Promise<boolean> {
-  const handle = warnings[0].targetHandle!
   try {
-    const loaded = await loadRepairFields(env, ref.table, ref.id)
-    if (!loaded || loaded.humanEdited) return false
-
-    const repair = await env.generate(
-      'consistency_checker',
-      buildStage7RepairPrompt({
-        handle,
-        table: ref.table,
-        warnings: warnings.map((w) => w.message),
-        fields: loaded.fields,
-        digest,
-        metaLoopArc: arc,
-        chapters: chapters.map(({ number, title }) => ({ number, title })),
-      }),
-      (raw) => parseStage7Repair(raw, ref.table, chapters.length),
-    )
-    if (!repair.resolvable) return false
-
-    // Logical fields become columns here: ingredient 'text' lives in the content jsonb, and
-    // 'chapter' is a MOVE - chapter number (or 'global') to chapter_id. Moves are the one
-    // structural repair (user-directed 2026-07-22): placement findings are mechanical to fix,
-    // and the re-check below still audits whatever a move touches.
     const patch: Record<string, unknown> = {}
-    for (const [field, value] of Object.entries(repair.patch)) {
+    for (const [field, value] of Object.entries(edit.patch)) {
       if (ref.table === 'ingredients' && field === 'text') {
         patch.content = { ...(loaded.content ?? {}), text: value }
       } else if (field === 'chapter') {
-        // The entry contract's giver must stay reachable in chapter 1 (stage-6 invariant) -
-        // drop only the move, keep the repair's text edits.
+        // Drop only a guarded move; the edit's text fields still apply.
         if (ref.table === 'npcs' && entryGiverIds.has(ref.id)) continue
+        // A "move" to the current chapter is a no-op - and for objectives it would still
+        // append-to-end, silently reordering the ladder (chapter "3" -> "3", live 2026-07-22).
+        if (value === (loaded.fields.chapter ?? '')) continue
         const target = value === 'global' ? null : chapters.find((ch) => ch.number === Number(value))?.id
         if (value !== 'global' && !target) continue
         patch.chapter_id = target
@@ -229,18 +197,18 @@ async function attemptRepair(
     if (error) return false
 
     await logPipelineEvent(env.db, env.adventure.id, 'guide_repair', {
-      handle,
+      handle: edit.handle,
       table: ref.table,
-      warning: warnings.map((w) => w.message).join(' | '),
-      note: repair.note,
+      warning: findingsForHandle.join(' | '),
+      note: edit.note,
       before: Object.fromEntries(
-        Object.keys(repair.patch).map((f) => [f, (loaded.fields[f] ?? '').slice(0, 300)]),
+        Object.keys(edit.patch).map((f) => [f, (loaded.fields[f] ?? '').slice(0, 300)]),
       ),
-      after: Object.fromEntries(Object.entries(repair.patch).map(([f, v]) => [f, v.slice(0, 300)])),
+      after: Object.fromEntries(Object.entries(edit.patch).map(([f, v]) => [f, v.slice(0, 300)])),
     })
     return true
   } catch (err) {
-    console.error(`stage-7 repair failed for ${handle}`, err)
+    console.error(`stage-7 edit failed for ${edit.handle}`, err)
     return false
   }
 }
@@ -258,12 +226,14 @@ export async function runStage7(env: StageEnv): Promise<void> {
     .map((k) => k.giver_npc_id)
     .filter((id): id is string => id !== null))
 
-  // Convergence loop (user-directed 2026-07-22): check -> repair every row-targeted finding ->
-  // re-check the CHANGED guide -> repair again, until clean or MAX_REPAIR_ROUNDS. Findings
-  // group by TARGET ROW (one repair reconciles all of a row's warnings; parallel repairs share
-  // nothing). Each round re-derives digest AND refs: a chapter move renumbers handles, so the
-  // previous round's refs are stale the moment a move applies. Row-less findings (coverage,
-  // guide-level observations) and human-edited rows stay warnings.
+  // Convergence loop (user-directed 2026-07-22): check -> ONE edit-plan call that fixes every
+  // row-targeted finding together -> re-check the CHANGED guide -> again, until clean or
+  // MAX_REPAIR_ROUNDS. A single planned call is what fixes contradiction CLUSTERS (five
+  // findings, one root, every affected row aligned in one pass) - and it replaced the per-row
+  // parallel fan-out that tripped the edge runtime's concurrent-fetch ceiling (7 parallel
+  // repairs, 0 completed, live 2026-07-22). Each round re-derives digest AND refs: a chapter
+  // move renumbers handles, so the previous round's refs are stale the moment a move applies.
+  // Row-less findings (coverage, guide-level observations) and human-edited rows stay warnings.
   let current = await buildDigest(env.db, env.adventure.id)
   let findings = await env.generate(
     'consistency_checker',
@@ -272,29 +242,58 @@ export async function runStage7(env: StageEnv): Promise<void> {
   )
   const firstFound = findings.length
   let rounds = 0
-  let totalAttempted = 0
+  let totalPlanned = 0
   let totalApplied = 0
   while (rounds < MAX_REPAIR_ROUNDS && findings.length > 0) {
-    const byRow = new Map<string, { ref: { table: string; id: string }; warnings: WarningDraft[] }>()
-    for (const w of findings) {
+    // The round's editable surface: flagged rows that exist, are editable, and are not
+    // human-edited. Loaded sequentially - burst DB fetches share the same outbound-fetch
+    // ceiling the parallel repairs died on.
+    const targeted = findings.filter((w): w is WarningDraft & { targetHandle: string } => {
       const ref = w.targetHandle ? current.refs.get(w.targetHandle) : null
-      if (!ref || (REPAIRABLE_FIELDS[ref.table] ?? []).length === 0) continue
-      const key = `${ref.table}:${ref.id}`
-      const entry = byRow.get(key) ?? { ref, warnings: [] }
-      entry.warnings.push(w)
-      byRow.set(key, entry)
+      return Boolean(ref && (REPAIRABLE_FIELDS[ref.table] ?? []).length > 0)
+    })
+    if (targeted.length === 0) break
+    const rowByHandle = new Map<string, { table: string; id: string; fields: Record<string, string>; content: Record<string, unknown> | null }>()
+    for (const handle of new Set(targeted.map((w) => w.targetHandle))) {
+      const ref = current.refs.get(handle)!
+      const loaded = await loadRepairFields(env, ref.table, ref.id, current.chapters)
+      if (loaded && !loaded.humanEdited) {
+        rowByHandle.set(handle, { table: ref.table, id: ref.id, fields: loaded.fields, content: loaded.content })
+      }
     }
-    const attempted = [...byRow.values()].slice(0, REPAIR_CAP)
-    if (attempted.length === 0) break
+    const planWarnings = targeted.filter((w) => rowByHandle.has(w.targetHandle))
+    if (planWarnings.length === 0) break
+
     rounds++
-    totalAttempted += attempted.length
-    const applied = (
-      await Promise.all(
-        attempted.map((row) =>
-          attemptRepair(env, row.warnings, row.ref, current.digest, arc, current.chapters, entryGiverIds),
-        ),
+    let edits
+    try {
+      edits = await env.generate(
+        'consistency_checker',
+        buildStage7EditPlanPrompt({
+          warnings: planWarnings.map((w) => ({ handle: w.targetHandle, message: w.message })),
+          rows: [...rowByHandle.entries()].map(([handle, r]) => ({ handle, table: r.table, fields: r.fields })),
+          digest: current.digest,
+          metaLoopArc: arc,
+          chapters: current.chapters.map(({ number, title }) => ({ number, title })),
+        }),
+        (raw) => parseStage7EditPlan(raw, new Set(rowByHandle.keys()), current.chapters.length),
       )
-    ).filter(Boolean).length
+    } catch (err) {
+      // The plan call failing is not worth the stage - the findings simply ship as warnings.
+      console.error('stage-7 edit plan failed', err)
+      break
+    }
+    if (edits.length === 0) break
+    totalPlanned += edits.length
+    let applied = 0
+    for (const edit of edits) {
+      const row = rowByHandle.get(edit.handle)
+      if (!row) continue
+      const findingsForHandle = planWarnings.filter((w) => w.targetHandle === edit.handle).map((w) => w.message)
+      if (await applyEdit(env, edit, { table: row.table, id: row.id }, row, current.chapters, entryGiverIds, findingsForHandle)) {
+        applied++
+      }
+    }
     totalApplied += applied
     if (applied === 0) break
 
@@ -318,7 +317,7 @@ export async function runStage7(env: StageEnv): Promise<void> {
   await logPipelineEvent(env.db, env.adventure.id, 'guide_repair_summary', {
     found: firstFound,
     rounds,
-    attempted: totalAttempted,
+    attempted: totalPlanned,
     applied: totalApplied,
     residual: residue.length,
   })

@@ -5,7 +5,7 @@
 // short open phrases (<= 6 words, enforced here AND by prompt), with hidden descriptions and
 // structured completion predicates (SS4).
 
-import { Check, countWords, extractJsonObject } from '../json.ts'
+import { Check, countWords, extractJsonObject, looksCutOff } from '../json.ts'
 import { validatePredicate } from '../predicates.ts'
 import type { ChapterSketch, MetaLoop, ObjectiveDraft, ParseResult, SceneSketch } from '../types.ts'
 
@@ -77,7 +77,7 @@ export function buildStage3Prompt(ctx: Stage3Context): { system: string; user: s
 
 Rules:
 - Objective titles are AT MOST ${OBJECTIVE_TITLE_MAX_WORDS} words, phrased short and OPEN ("Defeat Volgarth", "Find the missing caravan") - they must not spoil twists or prescribe a method.
-- hidden_description is DM-only: what this objective is really about, which scenes ground it, and what the party does not yet know. It exists to catch plot holes.
+- hidden_description is DM-only: what this objective is really about, which scenes ground it, and what the party does not yet know. It exists to catch plot holes. Write COMPLETE prose ending on a finished sentence - a description cut off mid-word ships a broken guide.
 - completion_predicates is a JSON predicate over world state, NEVER a reference to a specific encounter. The live engine can ONLY satisfy atoms from this exact vocabulary - anything else never completes. Grammar:
   atom: {"flag": "<snake_case_milestone>", "eq": true} - a concrete accomplishment live play can recognize ("lantern_relit", "keeper_freed"). PREFER flags.
   atom: {"event": "<short past-tense marker>"} - e.g. "party entered the sunken crypt", "the ritual was interrupted".
@@ -174,9 +174,15 @@ export function parseStage3(raw: string): ParseResult<ObjectiveDraft[]> {
           c.errors.push(`${path}.completion_predicates: has no claimable milestone - live play only completes {flag,eq:true} or {event} atoms, so this objective could never be finished`)
         }
       }
+      const hiddenDescription = c.str(o.hidden_description, `${path}.hidden_description`)
+      if (hiddenDescription && looksCutOff(hiddenDescription)) {
+        // "Success here means the pa" shipped live (2026-07-22) and surfaced only as a stage-7
+        // residue warning a human had to read. Form check, bound here at the author.
+        c.errors.push(`${path}.hidden_description: ends mid-thought ("...${hiddenDescription.slice(-30)}") - finish the sentence`)
+      }
       return {
         title,
-        hiddenDescription: c.str(o.hidden_description, `${path}.hidden_description`),
+        hiddenDescription,
         completionPredicates: (o.completion_predicates ?? null) as ObjectiveDraft['completionPredicates'],
       }
     })

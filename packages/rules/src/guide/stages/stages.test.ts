@@ -31,7 +31,7 @@ import {
 } from './stage4.ts'
 import { parseStage5 } from './stage5.ts'
 import { parseStage6 } from './stage6.ts'
-import { buildStage7RepairPrompt, parseStage7, parseStage7Repair, validateRegistryCoverage } from './stage7.ts'
+import { buildStage7EditPlanPrompt, handleTable, parseStage7, parseStage7EditPlan, validateRegistryCoverage } from './stage7.ts'
 import { parseStage8, validateEndingDistinctness, validateEndingReachability } from './stage8.ts'
 
 const parseStage8Fixture = (raw: string) => parseStage8(raw, STAGE8_OBJECTIVE_COUNT, STAGE8_NPC_COUNT)
@@ -198,11 +198,25 @@ describe('stage 3 (objectives + predicates)', () => {
     const result = parseStage3(JSON.stringify({
       objectives: [{
         title: 'Enter the sunken crypt',
-        hidden_description: 'the descent is the whole objective',
+        hidden_description: 'The descent is the whole objective.',
         completion_predicates: { any: [{ event: 'party entered the sunken crypt' }, { flag: 'crypt_reached', eq: true }] },
       }],
     }))
     expect(result.ok).toBe(true)
+  })
+
+  it('rejects a hidden_description that ends mid-thought (form check, rides regeneration)', () => {
+    // "Success here means the pa" shipped live and only surfaced as residue a human had to read.
+    const result = parseStage3(JSON.stringify({
+      objectives: [{
+        title: 'Resist the shared dream',
+        hidden_description: 'Success here means the pa',
+        completion_predicates: { flag: 'dream_resisted', eq: true },
+      }],
+    }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some((e) => e.includes('ends mid-thought'))).toBe(true)
   })
 
   it('rejects a chapter that authors the same objective twice', () => {
@@ -518,99 +532,111 @@ describe('stage 7 (consistency warnings)', () => {
   })
 })
 
-describe('stage 7 repairs (auto-resolve consistency warnings)', () => {
-  it('accepts a whitelisted patch and carries the note', () => {
-    const result = parseStage7Repair(
-      '{ "resolvable": true, "patch": { "title": "Face the killer" }, "note": "title no longer names them" }',
-      'objectives',
+describe('stage 7 edit plans (auto-resolve consistency findings)', () => {
+  const HANDLES = new Set(['obj#1', 'obj#2', 'npc#1', 'loc#1', 'ing#1'])
+
+  it('accepts a multi-row plan and carries notes', () => {
+    const result = parseStage7EditPlan(
+      JSON.stringify({
+        edits: [
+          { handle: 'obj#2', patch: { title: 'Face the killer' }, note: 'de-spoiled' },
+          { handle: 'npc#1', patch: { description: 'A patient horror, waiting beneath the loom.' }, note: 'aligned to meta loop' },
+        ],
+      }),
+      HANDLES,
       3,
     )
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.data.resolvable).toBe(true)
-    expect(result.data.patch).toEqual({ title: 'Face the killer' })
-    expect(result.data.note).toBe('title no longer names them')
+    expect(result.data).toHaveLength(2)
+    expect(result.data[0].patch).toEqual({ title: 'Face the killer' })
+    expect(result.data[1].note).toBe('aligned to meta loop')
   })
 
-  it('rejects fields outside the table whitelist', () => {
-    const result = parseStage7Repair(
-      '{ "resolvable": true, "patch": { "completion_predicates": "{}" }, "note": "" }',
-      'objectives',
-      3,
-    )
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.errors.some((e) => e.includes('not a repairable field'))).toBe(true)
-  })
-
-  it('holds repaired titles to the stage-3 word cap', () => {
-    const result = parseStage7Repair(
-      '{ "resolvable": true, "patch": { "title": "Deliver Final Judgment on the Manor Killer" }, "note": "" }',
-      'objectives',
-      3,
-    )
-    expect(result.ok).toBe(false)
-  })
-
-  it('passes resolvable:false through with an empty patch', () => {
-    const result = parseStage7Repair('{ "resolvable": false, "patch": {}, "note": "needs a new location row" }', 'objectives', 3)
+  it('accepts an empty plan (nothing fixable is a valid answer)', () => {
+    const result = parseStage7EditPlan('{ "edits": [] }', HANDLES, 3)
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.data.resolvable).toBe(false)
+    if (result.ok) expect(result.data).toEqual([])
   })
 
-  it('refuses a resolvable claim that patches nothing', () => {
-    const result = parseStage7Repair('{ "resolvable": true, "patch": {}, "note": "" }', 'objectives', 3)
-    expect(result.ok).toBe(false)
+  it('rejects unknown handles, duplicate handles, and off-whitelist fields', () => {
+    const unknown = parseStage7EditPlan(
+      '{ "edits": [ { "handle": "obj#9", "patch": { "title": "X" }, "note": "" } ] }', HANDLES, 3)
+    expect(unknown.ok).toBe(false)
+
+    const dupe = parseStage7EditPlan(
+      JSON.stringify({ edits: [
+        { handle: 'obj#2', patch: { title: 'One' }, note: '' },
+        { handle: 'obj#2', patch: { title: 'Two' }, note: '' },
+      ] }), HANDLES, 3)
+    expect(dupe.ok).toBe(false)
+    if (!dupe.ok) expect(dupe.errors.some((e) => e.includes('appears twice'))).toBe(true)
+
+    const offWhitelist = parseStage7EditPlan(
+      '{ "edits": [ { "handle": "obj#2", "patch": { "completion_predicates": "{}" }, "note": "" } ] }', HANDLES, 3)
+    expect(offWhitelist.ok).toBe(false)
+  })
+
+  it('holds titles to the word cap and prose to the completeness check', () => {
+    const longTitle = parseStage7EditPlan(
+      '{ "edits": [ { "handle": "obj#2", "patch": { "title": "Deliver Final Judgment on the Manor Killer" }, "note": "" } ] }',
+      HANDLES, 3)
+    expect(longTitle.ok).toBe(false)
+
+    const cutOff = parseStage7EditPlan(
+      '{ "edits": [ { "handle": "obj#2", "patch": { "hidden_description": "The nectar is a poten" }, "note": "" } ] }',
+      HANDLES, 3)
+    expect(cutOff.ok).toBe(false)
+    if (!cutOff.ok) expect(cutOff.errors.some((e) => e.includes('ends mid-thought'))).toBe(true)
   })
 
   it('accepts chapter moves: numbers in range, "global" for cast but never for objectives', () => {
-    // The Weaver case: a boss placed in chapter 1 whose confrontation belongs at the end.
-    const npcMove = parseStage7Repair('{ "resolvable": true, "patch": { "chapter": "3" }, "note": "boss belongs at the climax" }', 'npcs', 3)
+    const npcMove = parseStage7EditPlan(
+      '{ "edits": [ { "handle": "npc#1", "patch": { "chapter": "3" }, "note": "boss belongs at the climax" } ] }',
+      HANDLES, 3)
     expect(npcMove.ok).toBe(true)
-    if (npcMove.ok) expect(npcMove.data.patch).toEqual({ chapter: '3' })
+    if (npcMove.ok) expect(npcMove.data[0].patch).toEqual({ chapter: '3' })
 
-    const globalLocation = parseStage7Repair('{ "resolvable": true, "patch": { "chapter": "global" }, "note": "" }', 'locations', 3)
+    const globalLocation = parseStage7EditPlan(
+      '{ "edits": [ { "handle": "loc#1", "patch": { "chapter": "global" }, "note": "" } ] }', HANDLES, 3)
     expect(globalLocation.ok).toBe(true)
-    if (globalLocation.ok) expect(globalLocation.data.patch).toEqual({ chapter: 'global' })
 
-    const globalObjective = parseStage7Repair('{ "resolvable": true, "patch": { "chapter": "global" }, "note": "" }', 'objectives', 3)
+    const globalObjective = parseStage7EditPlan(
+      '{ "edits": [ { "handle": "obj#2", "patch": { "chapter": "global" }, "note": "" } ] }', HANDLES, 3)
     expect(globalObjective.ok).toBe(false)
 
-    const outOfRange = parseStage7Repair('{ "resolvable": true, "patch": { "chapter": "7" }, "note": "" }', 'npcs', 3)
+    const outOfRange = parseStage7EditPlan(
+      '{ "edits": [ { "handle": "npc#1", "patch": { "chapter": "7" }, "note": "" } ] }', HANDLES, 3)
     expect(outOfRange.ok).toBe(false)
   })
 
-  it('repair prompt offers the chapter move with the chapter list', () => {
-    const { system, user } = buildStage7RepairPrompt({
-      handle: 'npc#1',
-      table: 'npcs',
-      warnings: ['The Weaver is listed as a boss in chapter 1 but belongs at the end'],
-      fields: { description: 'A patient horror.', chapter: '1' },
-      digest: buildTestDigest(),
-      metaLoopArc: 'Its influence escalates to a final confrontation',
-      chapters: [{ number: 1, title: 'Arrival' }, { number: 2, title: 'The Tightening' }, { number: 3, title: 'The Loom' }],
-    })
-    expect(system).toContain('TIMING or PLACEMENT')
-    expect(user).toContain('Chapters: 1: Arrival | 2: The Tightening | 3: The Loom')
-    expect(user).toContain('chapter: 1')
+  it('derives the table from the handle grammar', () => {
+    expect(handleTable('obj#3')).toBe('objectives')
+    expect(handleTable('npc#1')).toBe('npcs')
+    expect(handleTable('loc#12')).toBe('locations')
+    expect(handleTable('ing#7')).toBe('ingredients')
+    expect(handleTable('chapter#1')).toBeNull()
   })
 
-  it('repair prompt carries every warning for the row, the row fields, and the canon', () => {
-    const { system, user } = buildStage7RepairPrompt({
-      handle: 'obj#2',
-      table: 'objectives',
-      warnings: ['Title spoils the twist', 'Description references a chapel that does not exist'],
-      fields: { title: 'Unmask Mother Brine', hidden_description: 'She is the tide-witch.' },
+  it('edit-plan prompt carries findings, row contents, chapters, and the cluster guidance', () => {
+    const { system, user } = buildStage7EditPlanPrompt({
+      warnings: [
+        { handle: 'obj#1', message: 'Objective says the party holds the writ' },
+        { handle: 'obj#2', message: 'Objective says Thorne seizes the writ' },
+      ],
+      rows: [
+        { handle: 'obj#1', table: 'objectives', fields: { title: 'Secure the writ', hidden_description: 'They hold it.', chapter: '1' } },
+        { handle: 'obj#2', table: 'objectives', fields: { title: 'Escape Oakhaven', hidden_description: 'Thorne takes it.', chapter: '3' } },
+      ],
       digest: buildTestDigest(),
-      metaLoopArc: 'The tide must turn',
-      chapters: [{ number: 1, title: 'The Drowned Village' }],
+      metaLoopArc: 'Thorne orchestrates a final confrontation to seize the writ',
+      chapters: [{ number: 1, title: 'Arrival' }, { number: 2, title: 'The Vice' }, { number: 3, title: 'The Gate' }],
     })
-    expect(system).toContain('BETTER STORY')
-    expect(system).toContain('title, hidden_description')
-    expect(user).toContain('Title spoils the twist')
-    expect(user).toContain('chapel that does not exist')
-    expect(user).toContain('Unmask Mother Brine')
-    expect(user).toContain('The tide must turn')
+    expect(system).toContain('ROOT contradiction')
+    expect(system).toContain('TIMING or PLACEMENT')
+    expect(user).toContain('[obj#1] Objective says the party holds the writ')
+    expect(user).toContain('Secure the writ')
+    expect(user).toContain('Chapters: 1: Arrival | 2: The Vice | 3: The Gate')
   })
 })
 

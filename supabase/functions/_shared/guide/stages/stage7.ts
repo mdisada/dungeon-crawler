@@ -8,7 +8,7 @@
 // are LOUD (every repair logs a guide_repair event with before/after), human_edited rows are
 // never touched, and anything unresolved still warns. An empty warning list is a valid result.
 
-import { Check, countWords, extractJsonObject } from '../json.ts'
+import { Check, countWords, extractJsonObject, looksCutOff } from '../json.ts'
 import { entityNameMatches } from './stage4.ts'
 import { OBJECTIVE_TITLE_MAX_WORDS } from './stage3.ts'
 import type { GuideDigest } from './stage6.ts'
@@ -120,54 +120,70 @@ export const REPAIRABLE_FIELDS: Record<string, string[]> = {
   ingredients: ['text', 'reveals'],
 }
 
-export interface Stage7Repair {
-  resolvable: boolean
+export interface Stage7Edit {
+  handle: string
   patch: Record<string, string>
   note: string
 }
 
-export function buildStage7RepairPrompt(ctx: {
-  handle: string
-  table: string
-  /** EVERY warning targeting this row - one repair reconciles them all, so parallel repairs
-   *  never race on the same row (two same-row repairs clobbered each other, live 2026-07-22). */
-  warnings: string[]
-  /** The offending row's current repairable fields, verbatim. */
-  fields: Record<string, string>
+/** Handle grammar is the digest's own (obj#1, npc#2, ...) - the table is derivable, so the
+ *  edit plan needs no separate table field the model could get wrong. */
+export function handleTable(handle: string): string | null {
+  if (/^obj#\d+$/.test(handle)) return 'objectives'
+  if (/^npc#\d+$/.test(handle)) return 'npcs'
+  if (/^loc#\d+$/.test(handle)) return 'locations'
+  if (/^ing#\d+$/.test(handle)) return 'ingredients'
+  return null
+}
+
+/** Edits per plan - enough to align a whole contradiction cluster, bounded for the worker. */
+export const EDIT_PLAN_CAP = 12
+
+/**
+ * ONE call per repair round, planning typed edits across EVERY flagged row (user-directed
+ * 2026-07-22, "function calling"): per-row repairs could not fix contradiction CLUSTERS - five
+ * findings that were all facets of one meta-loop conflict needed every affected row aligned to
+ * one interpretation - and fanning per-row calls out in parallel tripped the edge runtime's
+ * concurrent-fetch ceiling (7 parallel repairs, 0 completed, live 2026-07-22). The plan is
+ * function calling semantically: typed operations, schema-validated here, executed server-side
+ * through the guarded apply path.
+ */
+export function buildStage7EditPlanPrompt(ctx: {
+  /** Row-targeted findings, each with the handle it is about. */
+  warnings: { handle: string; message: string }[]
+  /** Current contents of every flagged row, keyed by handle. */
+  rows: { handle: string; table: string; fields: Record<string, string> }[]
   digest: GuideDigest
   metaLoopArc: string
-  /** The adventure's chapters, in order - the legal targets for a chapter move. */
   chapters: { number: number; title: string }[]
 }): { system: string; user: string; maxTokens: number } {
-  const canMoveChapter = (REPAIRABLE_FIELDS[ctx.table] ?? []).includes('chapter')
-  const system = `You repair the flagged inconsistencies of ONE row in a tabletop RPG adventure guide by rewriting only that row's fields. Resolve ALL the listed warnings in a single coherent rewrite. You are the same consistency discipline that guards live play, applied at authoring time: reconcile the words with established canon, never invent around it.
+  const system = `You are the guide editor for a tabletop RPG platform. Consistency findings are listed against an adventure guide; fix them by EDITING the flagged rows' fields. Plan ALL edits together - you may edit multiple rows, and findings often share one ROOT contradiction: choose ONE coherent interpretation (prefer the meta loop's framing) and edit EVERY affected row to match it. A partial alignment leaves the contradiction alive.
 
-Resolve in the direction of the BETTER STORY:
-- Keep twists hidden. An objective title must stay open and spoiler-free (AT MOST ${OBJECTIVE_TITLE_MAX_WORDS} words) - move the secret into hidden_description, never the other way.
+Rules, in the direction of the BETTER STORY:
+- Keep twists hidden. An objective title stays open and spoiler-free (AT MOST ${OBJECTIVE_TITLE_MAX_WORDS} words) - secrets move into hidden_description, never the other way.
 - Re-point dangling references at entities and places that EXIST in the canon below. Never invent a new named person, place, or faction.
-- Keep the row's flavor, tone, and specificity - a repair that flattens the writing is a failure.
-- Keep each field roughly its original length, and NEVER leave a sentence unfinished - a cut-off word is worse than the warning it fixed.
-- Never contradict any other line of the canon while fixing this one.${canMoveChapter ? `
-- When a warning is about TIMING or PLACEMENT (a boss surfacing too early, a climax listed in chapter 1, content belonging later), the right fix is usually the "chapter" field: the chapter NUMBER this row belongs in${ctx.table === 'objectives' ? '' : ', or "global" for a presence that spans the whole adventure'}. Pair a move with any text edits the new placement needs.` : ''}
-
-If rewriting these fields alone cannot resolve the warnings (they need new rows, merges, or predicate changes), say so honestly.
+- Keep each row's flavor, tone, and specificity - a flattening edit is a failure.
+- Keep fields roughly their original length and NEVER leave a sentence unfinished.
+- When a finding is about TIMING or PLACEMENT, use the "chapter" field: the chapter NUMBER the row belongs in (npc/loc rows may instead use "global" for an adventure-wide presence; objectives always take a number). Pair a move with whatever text edits the new placement needs.
+- Editable fields per row type: obj# -> title, hidden_description, chapter; npc# -> description, chapter; loc# -> description, chapter; ing# -> text, reveals.
+- A finding that these fields cannot fix (new rows, merges, predicate changes) is simply left alone - it stays a warning for the creator.
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
-{ "resolvable": true|false, "patch": { "<field>": "new text" }, "note": "one line: what changed and why" }
-patch may only use these fields: ${(REPAIRABLE_FIELDS[ctx.table] ?? []).join(', ')}. When resolvable is false, patch is {}.`
+{ "edits": [ { "handle": "obj#2", "patch": { "<field>": "new text" }, "note": "one line: what changed and why" } ] }
+At most ${EDIT_PLAN_CAP} edits, one entry per row. An empty edits list is a valid answer when nothing here is fixable.`
 
   const lines = (m: Map<string, string>) => [...m.entries()].map(([h, l]) => `${h}: ${l}`).join('\n')
-  const user = `Warnings to resolve (all about ${ctx.handle}):
-${ctx.warnings.map((w) => `- ${w}`).join('\n')}
+  const user = `Findings to resolve:
+${ctx.warnings.map((w) => `- [${w.handle}] ${w.message}`).join('\n')}
 
-Current content of ${ctx.handle} (${ctx.table}):
-${Object.entries(ctx.fields).map(([f, v]) => `${f}: ${v}`).join('\n')}
+Current content of the flagged rows:
+${ctx.rows.map((r) => `${r.handle} (${r.table}):\n${Object.entries(r.fields).map(([f, v]) => `  ${f}: ${v}`).join('\n')}`).join('\n')}
 
 Chapters: ${ctx.chapters.map((c) => `${c.number}: ${c.title}`).join(' | ') || 'one-shot (single chapter)'}
 
 Meta loop arc: ${ctx.metaLoopArc}
 
-Established canon (repairs must fit ALL of this):
+Established canon (edits must fit ALL of this):
 Objectives:
 ${lines(ctx.digest.objectives)}
 
@@ -180,59 +196,79 @@ ${lines(ctx.digest.locations)}
 Ingredients:
 ${lines(ctx.digest.ingredients)}`
 
-  return { system, user, maxTokens: 900 }
+  return { system, user, maxTokens: 2500 }
 }
 
-export function parseStage7Repair(raw: string, table: string, chapterCount: number): ParseResult<Stage7Repair> {
+export function parseStage7EditPlan(
+  raw: string,
+  knownHandles: Set<string>,
+  chapterCount: number,
+): ParseResult<Stage7Edit[]> {
   const extracted = extractJsonObject(raw)
   if (!extracted.ok) return extracted
 
   const c = new Check()
-  const resolvable = extracted.data.resolvable === true
-  const allowed = new Set(REPAIRABLE_FIELDS[table] ?? [])
-  const patch: Record<string, string> = {}
-  const rawPatch = extracted.data.patch
-  if (resolvable) {
+  const seen = new Set<string>()
+  const edits: Stage7Edit[] = c.arr(extracted.data.edits ?? [], '$.edits', 0, EDIT_PLAN_CAP).flatMap((rawEdit, i) => {
+    const path = `$.edits[${i}]`
+    const e = c.obj(rawEdit, path)
+    const handle = c.str(e.handle, `${path}.handle`)
+    const table = handleTable(handle)
+    if (!table || !knownHandles.has(handle)) {
+      c.errors.push(`${path}.handle: unknown handle "${handle}"`)
+      return []
+    }
+    if (seen.has(handle)) {
+      c.errors.push(`${path}.handle: "${handle}" appears twice - one entry per row, merge the patches`)
+      return []
+    }
+    seen.add(handle)
+    const allowed = new Set(REPAIRABLE_FIELDS[table] ?? [])
+    const patch: Record<string, string> = {}
+    const rawPatch = e.patch
     if (typeof rawPatch !== 'object' || rawPatch === null || Array.isArray(rawPatch)) {
-      c.errors.push('$.patch: expected an object of field -> new text')
-    } else {
-      for (const [field, value] of Object.entries(rawPatch as Record<string, unknown>)) {
-        if (!allowed.has(field)) {
-          c.errors.push(`$.patch.${field}: not a repairable field of ${table} (allowed: ${[...allowed].join(', ')})`)
-          continue
-        }
-        // A chapter move: a number ("3") or, for cast that spans the story, "global". Models
-        // sometimes emit bare numbers - accept those too before the string checks reject them.
-        if (field === 'chapter') {
-          const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim().toLowerCase() : ''
-          const number = Number(text)
-          if (text === 'global' && table !== 'objectives') {
-            patch.chapter = 'global'
-          } else if (Number.isInteger(number) && number >= 1 && number <= chapterCount) {
-            patch.chapter = String(number)
-          } else {
-            c.errors.push(
-              `$.patch.chapter: expected a chapter number 1-${chapterCount}${table !== 'objectives' ? ' or "global"' : ' (objectives always belong to a chapter)'}, got "${String(value)}"`,
-            )
-          }
-          continue
-        }
-        if (typeof value !== 'string' || !value.trim()) {
-          c.errors.push(`$.patch.${field}: expected non-empty replacement text`)
-          continue
-        }
-        if (table === 'objectives' && field === 'title' && countWords(value) > OBJECTIVE_TITLE_MAX_WORDS) {
-          c.errors.push(`$.patch.title: "${value}" is over ${OBJECTIVE_TITLE_MAX_WORDS} words - titles stay short and open`)
-          continue
-        }
-        patch[field] = value.trim()
+      c.errors.push(`${path}.patch: expected an object of field -> new text`)
+      return []
+    }
+    for (const [field, value] of Object.entries(rawPatch as Record<string, unknown>)) {
+      if (!allowed.has(field)) {
+        c.errors.push(`${path}.patch.${field}: not an editable field of ${table} (allowed: ${[...allowed].join(', ')})`)
+        continue
       }
+      if (field === 'chapter') {
+        const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim().toLowerCase() : ''
+        const number = Number(text)
+        if (text === 'global' && table !== 'objectives') {
+          patch.chapter = 'global'
+        } else if (Number.isInteger(number) && number >= 1 && number <= chapterCount) {
+          patch.chapter = String(number)
+        } else {
+          c.errors.push(
+            `${path}.patch.chapter: expected a chapter number 1-${chapterCount}${table !== 'objectives' ? ' or "global"' : ' (objectives always belong to a chapter)'}, got "${String(value)}"`,
+          )
+        }
+        continue
+      }
+      if (typeof value !== 'string' || !value.trim()) {
+        c.errors.push(`${path}.patch.${field}: expected non-empty replacement text`)
+        continue
+      }
+      if (table === 'objectives' && field === 'title' && countWords(value) > OBJECTIVE_TITLE_MAX_WORDS) {
+        c.errors.push(`${path}.patch.title: "${value}" is over ${OBJECTIVE_TITLE_MAX_WORDS} words - titles stay short and open`)
+        continue
+      }
+      if (field !== 'title' && looksCutOff(value)) {
+        c.errors.push(`${path}.patch.${field}: ends mid-thought ("...${value.trim().slice(-30)}") - finish the sentence`)
+        continue
+      }
+      patch[field] = value.trim()
     }
     if (c.errors.length === 0 && Object.keys(patch).length === 0) {
-      c.errors.push('$.patch: resolvable is true but no valid field was patched - repair something or say resolvable: false')
+      c.errors.push(`${path}.patch: no valid field was patched - edit something or drop this entry`)
     }
-  }
+    const note = typeof e.note === 'string' ? e.note.slice(0, 200) : ''
+    return [{ handle, patch, note }]
+  })
 
-  const note = typeof extracted.data.note === 'string' ? extracted.data.note.slice(0, 200) : ''
-  return c.result({ resolvable: resolvable && Object.keys(patch).length > 0, patch, note })
+  return c.result(edits)
 }

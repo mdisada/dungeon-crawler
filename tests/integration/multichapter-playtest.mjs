@@ -567,7 +567,9 @@ async function main() {
   // ~$0.006 of every run) with --adventure. The user is kept too: the adventure still points at
   // it as creator until a later run reassigns creator_id, and deleting it first risks taking
   // the adventure with it.
-  if (argOf('keep', undefined) !== undefined) {
+  // includes(), not argOf(): --keep is a bare flag, and argOf only reads `--flag value` forms -
+  // bare --keep silently deleted the adventure it promised to keep (live 2026-07-22).
+  if (process.argv.includes('--keep')) {
     console.log(`\nkept for reuse: --adventure ${advId}`)
     return
   }
