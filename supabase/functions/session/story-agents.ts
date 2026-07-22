@@ -72,12 +72,14 @@ const PLANNER_SYSTEM =
   // about something else entirely and the objective sits untouched however well play goes.
   'THE BEAT MUST ADVANCE THE CURRENT OBJECTIVE. When objective milestones are listed below, the ' +
   'party must be able to reach at least ONE of them by playing this beat, and that milestone ' +
-  'must appear VERBATIM in exit_conditions and in the encounter on_success map. A beat the ' +
-  'objective could not notice is a wasted beat, however good the scene. ' +
-  'Exit predicates use ONLY atoms {"flag": "<snake_case_decision_or_milestone>", "eq": true} | ' +
-  '{"event": "exact past-tense marker"} with {"any": []}/{"all": []} - NEVER "fact" atoms (live ' +
-  'play cannot write them). Prefer an "any" of 2-4 flags so multiple player approaches exit the ' +
-  'beat. Braided pairs (two goals for different PCs whose outcomes modify each other) only when ' +
+  'must appear VERBATIM in the encounter on_success map, so a full success credits the objective. ' +
+  'A beat the objective could not notice is a wasted beat, however good the scene. ' +
+  'exit_conditions is how THIS beat closes locally - use ONLY atoms {"flag": ' +
+  '"<snake_case_decision_or_milestone>", "eq": true} | {"event": "exact past-tense marker"} with ' +
+  '{"any": []}/{"all": []}, NEVER "fact" atoms (live play cannot write them). Make it an "any" of ' +
+  '2-4 of the beat\'s OWN success/setback flags (NOT the objective milestone) so multiple player ' +
+  'approaches exit the beat and it never stalls waiting on the objective\'s big step. ' +
+  'Braided pairs (two goals for different PCs whose outcomes modify each other) only when ' +
   'guidance asks for cooperation. The narration_seed must end at a concrete decision point facing the players. ' +
   'ENCOUNTER: every beat carries exactly one typed encounter - the ONLY way this beat can ' +
   'resolve. Its outcome maps translate result tiers into milestones, and every entry MUST be ' +
@@ -86,8 +88,8 @@ const PLANNER_SYSTEM =
   'FAIL FORWARD: author exit_conditions as an "any" of BOTH a success atom AND a ' +
   'consequence/setback atom, and map on_failure to that setback atom - a failed encounter ' +
   'must still move the story (at a cost), never re-offer the same wall. Objective milestones ' +
-  'must be copied CHARACTER-FOR-CHARACTER (keep spaces - never snake_case them), and when an ' +
-  'objective milestone fits a tier, prefer it over your own exit atoms.'
+  'must be copied CHARACTER-FOR-CHARACTER (keep spaces - never snake_case them) and go in ' +
+  'on_success; your own local success/setback atoms carry on_partial/on_failure and exit_conditions.'
 
 export interface PlannerContext {
   loop: { type: LoopType; completedBeatNames: string[] }

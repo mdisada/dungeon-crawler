@@ -217,13 +217,15 @@ export async function planAndOpenBeat(
   // needed "party_met_lord_cassian" and the planner authored "The Unfinished Decree" exiting on
   // "decree_deciphered" - atoms of its own invention. Six beats resolved, the story read well,
   // and the objective was never touched, because nothing required the beat to be ABOUT it.
-  // One targeted repair, then fail open: a beat pointing the wrong way still beats no beat.
+  // The alignment now guards on_success, not exit_conditions (1.1): a full success MUST credit the
+  // objective, but the beat is free to EXIT on its own local atoms so it stays exitable and beat
+  // throughput does not crater the way it did when the objective's big-step atom was forced into
+  // exit_conditions. One targeted repair, then fail open: a beat pointing the wrong way still
+  // beats no beat.
   const objectiveVocab = plannerCtx.plan.milestones
   if (parsed.ok && objectiveVocab.length > 0) {
-    const exits = listMilestoneAtoms(parsed.plan.exitConditions)
-    const touchesObjective = [...exits.flags, ...exits.events, ...exits.facts]
-      .some((a) => objectiveVocab.includes(a))
-    if (!touchesObjective) {
+    const creditsObjective = (parsed.plan.encounter?.onSuccess ?? []).some((a) => objectiveVocab.includes(a))
+    if (!creditsObjective) {
       // Guarded: this is an EXTRA agent call inside beat opening, and an agent call that throws
       // here would escape planAndOpenBeat and leave the loop with no beat at all - which is the
       // dead end this whole change set exists to remove. An alignment we could not get is a
@@ -231,16 +233,14 @@ export async function planAndOpenBeat(
       // beat_open_failed on trigger beat_exit, 2 objectives -> 0).
       try {
         const aligned = await runBeatPlanner(env, plannerCtx, [
-          `beat.exit_conditions: not one atom comes from the current objective (${objectiveVocab.join(' | ')}). ` +
-          'This beat would resolve without moving the objective one step. Author it so the party ' +
-          'can reach at least ONE of those milestones, and put that milestone verbatim in ' +
-          'exit_conditions and in the encounter on_success map.',
+          `beat.encounter.on_success: not one atom comes from the current objective (${objectiveVocab.join(' | ')}). ` +
+          'A full success here would not move the objective one step. Author the beat so the party can ' +
+          'reach at least ONE of those milestones, and put that milestone verbatim in the encounter ' +
+          'on_success map. Leave exit_conditions as the beat\'s own local success/setback atoms so it ' +
+          'still exits on any resolution.',
         ])
-        if (aligned.ok) {
-          const retryExits = listMilestoneAtoms(aligned.plan.exitConditions)
-          if ([...retryExits.flags, ...retryExits.events, ...retryExits.facts].some((a) => objectiveVocab.includes(a))) {
-            parsed = aligned
-          }
+        if (aligned.ok && (aligned.plan.encounter?.onSuccess ?? []).some((a) => objectiveVocab.includes(a))) {
+          parsed = aligned
         }
       } catch (err) {
         console.error('beat alignment repair failed, keeping the original plan', err)
