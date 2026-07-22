@@ -262,7 +262,20 @@ export async function runStage7(env: StageEnv): Promise<void> {
       }
     }
     const planWarnings = targeted.filter((w) => rowByHandle.has(w.targetHandle))
-    if (planWarnings.length === 0) break
+    // Row-less findings (registry coverage, guide-level) reach the planner too - their fix,
+    // when one exists, is CREATING the missing entity (user-directed 2026-07-22).
+    const rowless = findings.filter((w) => !w.targetHandle).map((w) => w.message)
+    if (planWarnings.length === 0 && rowless.length === 0) break
+
+    // Existing cast names guard creates against duplicates; reloaded per round because a
+    // create changes the answer.
+    const [{ data: npcNames }, { data: locationNames }] = await Promise.all([
+      env.db.from('npcs').select('name').eq('adventure_id', env.adventure.id),
+      env.db.from('locations').select('name').eq('adventure_id', env.adventure.id),
+    ])
+    const existingNames = new Set(
+      [...(npcNames ?? []), ...(locationNames ?? [])].map((r) => String(r.name).trim().toLowerCase()),
+    )
 
     rounds++
     let edits
@@ -271,12 +284,13 @@ export async function runStage7(env: StageEnv): Promise<void> {
         'consistency_checker',
         buildStage7EditPlanPrompt({
           warnings: planWarnings.map((w) => ({ handle: w.targetHandle, message: w.message })),
+          rowlessWarnings: rowless,
           rows: [...rowByHandle.entries()].map(([handle, r]) => ({ handle, table: r.table, fields: r.fields })),
           digest: current.digest,
           metaLoopArc: arc,
           chapters: current.chapters.map(({ number, title }) => ({ number, title })),
         }),
-        (raw) => parseStage7EditPlan(raw, new Set(rowByHandle.keys()), current.chapters.length),
+        (raw) => parseStage7EditPlan(raw, new Set(rowByHandle.keys()), current.chapters.length, existingNames),
       )
     } catch (err) {
       // The plan call failing is not worth the stage - the findings simply ship as warnings.
@@ -287,10 +301,36 @@ export async function runStage7(env: StageEnv): Promise<void> {
     totalPlanned += edits.length
     let applied = 0
     for (const edit of edits) {
-      const row = rowByHandle.get(edit.handle)
+      if (edit.create) {
+        const table = edit.create.kind === 'npc' ? 'npcs' : 'locations'
+        const chapterId = edit.create.chapter === 'global'
+          ? null
+          : current.chapters.find((ch) => ch.number === Number(edit.create!.chapter))?.id ?? null
+        const { error } = await env.db.from(table).insert({
+          adventure_id: env.adventure.id,
+          chapter_id: chapterId,
+          name: edit.create.name,
+          description: edit.create.description,
+        })
+        if (!error) {
+          applied++
+          await logPipelineEvent(env.db, env.adventure.id, 'guide_repair', {
+            handle: '(new)',
+            table,
+            warning: rowless.slice(0, 2).join(' | '),
+            note: edit.note,
+            before: {},
+            after: { name: edit.create.name, description: edit.create.description.slice(0, 300), chapter: edit.create.chapter },
+          })
+        } else {
+          console.error('stage-7 create failed', error)
+        }
+        continue
+      }
+      const row = edit.handle ? rowByHandle.get(edit.handle) : undefined
       if (!row) continue
       const findingsForHandle = planWarnings.filter((w) => w.targetHandle === edit.handle).map((w) => w.message)
-      if (await applyEdit(env, edit, { table: row.table, id: row.id }, row, current.chapters, entryGiverIds, findingsForHandle)) {
+      if (await applyEdit(env, edit as { handle: string; patch: Record<string, string>; note: string }, { table: row.table, id: row.id }, row, current.chapters, entryGiverIds, findingsForHandle)) {
         applied++
       }
     }

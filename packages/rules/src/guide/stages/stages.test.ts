@@ -610,6 +610,38 @@ describe('stage 7 edit plans (auto-resolve consistency findings)', () => {
     expect(outOfRange.ok).toBe(false)
   })
 
+  it('accepts create entries for missing spine entities, rejecting duplicates and cut-off prose', () => {
+    const create = parseStage7EditPlan(
+      JSON.stringify({ edits: [{
+        create: { kind: 'location', name: 'Boundary Stone', description: 'A weathered marker at the valley edge, half-swallowed by moss.', chapter: '2' },
+        note: 'spine entity never landed',
+      }] }),
+      new Set(['obj#1']), 3, new Set(['flooded mill']),
+    )
+    expect(create.ok).toBe(true)
+    if (!create.ok) return
+    expect(create.data[0].create).toMatchObject({ kind: 'location', name: 'Boundary Stone', chapter: '2' })
+
+    const dupe = parseStage7EditPlan(
+      JSON.stringify({ edits: [{ create: { kind: 'npc', name: 'Flooded Mill', description: 'A mill.', chapter: '1' }, note: '' }] }),
+      new Set(), 3, new Set(['flooded mill']),
+    )
+    expect(dupe.ok).toBe(false)
+    if (!dupe.ok) expect(dupe.errors.some((e) => e.includes('already exists'))).toBe(true)
+
+    const cutOff = parseStage7EditPlan(
+      JSON.stringify({ edits: [{ create: { kind: 'npc', name: 'The Loremaster', description: 'Keeper of the poten', chapter: 'global' }, note: '' }] }),
+      new Set(), 3, new Set(),
+    )
+    expect(cutOff.ok).toBe(false)
+
+    const both = parseStage7EditPlan(
+      JSON.stringify({ edits: [{ handle: 'obj#1', patch: { title: 'X' }, create: { kind: 'npc', name: 'Y', description: 'Z.', chapter: '1' }, note: '' }] }),
+      new Set(['obj#1']), 3, new Set(),
+    )
+    expect(both.ok).toBe(false)
+  })
+
   it('derives the table from the handle grammar', () => {
     expect(handleTable('obj#3')).toBe('objectives')
     expect(handleTable('npc#1')).toBe('npcs')
@@ -624,6 +656,7 @@ describe('stage 7 edit plans (auto-resolve consistency findings)', () => {
         { handle: 'obj#1', message: 'Objective says the party holds the writ' },
         { handle: 'obj#2', message: 'Objective says Thorne seizes the writ' },
       ],
+      rowlessWarnings: ['Registry location "Boundary Stone" is named in the story spine but never appears'],
       rows: [
         { handle: 'obj#1', table: 'objectives', fields: { title: 'Secure the writ', hidden_description: 'They hold it.', chapter: '1' } },
         { handle: 'obj#2', table: 'objectives', fields: { title: 'Escape Oakhaven', hidden_description: 'Thorne takes it.', chapter: '3' } },

@@ -121,8 +121,12 @@ export const REPAIRABLE_FIELDS: Record<string, string[]> = {
 }
 
 export interface Stage7Edit {
-  handle: string
+  /** Present on EDIT entries: the digest handle of the row being changed. */
+  handle?: string
   patch: Record<string, string>
+  /** Present on CREATE entries: a missing spine entity authored into existence (registry
+   *  coverage findings - the most common residue - are fixed by creation, not editing). */
+  create?: { kind: 'npc' | 'location'; name: string; description: string; chapter: string }
   note: string
 }
 
@@ -151,6 +155,8 @@ export const EDIT_PLAN_CAP = 12
 export function buildStage7EditPlanPrompt(ctx: {
   /** Row-targeted findings, each with the handle it is about. */
   warnings: { handle: string; message: string }[]
+  /** Findings with no row (registry coverage, guide-level) - fixable only by creation. */
+  rowlessWarnings: string[]
   /** Current contents of every flagged row, keyed by handle. */
   rows: { handle: string; table: string; fields: Record<string, string> }[]
   digest: GuideDigest
@@ -166,11 +172,12 @@ Rules, in the direction of the BETTER STORY:
 - Keep fields roughly their original length and NEVER leave a sentence unfinished.
 - When a finding is about TIMING or PLACEMENT, use the "chapter" field: the chapter NUMBER the row belongs in (npc/loc rows may instead use "global" for an adventure-wide presence; objectives always take a number). Pair a move with whatever text edits the new placement needs.
 - Editable fields per row type: obj# -> title, hidden_description, chapter; npc# -> description, chapter; loc# -> description, chapter; ing# -> text, reveals.
-- A finding that these fields cannot fix (new rows, merges, predicate changes) is simply left alone - it stays a warning for the creator.
+- When a finding says a spine entity NEVER APPEARS (registry coverage), fix it by CREATING that row: { "create": { "kind": "npc"|"location", "name": "<the exact name the finding cites>", "description": "1-3 sentences grounded in the canon below", "chapter": "<number>"|"global" }, "note": "..." }. Place it in the chapter where the story needs it; never rename it.
+- A finding these operations cannot fix (merges, predicate changes) is simply left alone - it stays a warning for the creator.
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
-{ "edits": [ { "handle": "obj#2", "patch": { "<field>": "new text" }, "note": "one line: what changed and why" } ] }
-At most ${EDIT_PLAN_CAP} edits, one entry per row. An empty edits list is a valid answer when nothing here is fixable.`
+{ "edits": [ { "handle": "obj#2", "patch": { "<field>": "new text" }, "note": "one line: what changed and why" }, { "create": { "kind": "location", "name": "Boundary Stone", "description": "...", "chapter": "2" }, "note": "..." } ] }
+At most ${EDIT_PLAN_CAP} entries; an edit entry has "handle"+"patch", a create entry has "create", never both. An empty edits list is a valid answer when nothing here is fixable.`
 
   const lines = (m: Map<string, string>) => [...m.entries()].map(([h, l]) => `${h}: ${l}`).join('\n')
   const user = `Findings to resolve:
@@ -203,15 +210,46 @@ export function parseStage7EditPlan(
   raw: string,
   knownHandles: Set<string>,
   chapterCount: number,
+  /** Existing npc/location names (lowercased) - a create must never duplicate the cast. */
+  existingNames: Set<string> = new Set(),
 ): ParseResult<Stage7Edit[]> {
   const extracted = extractJsonObject(raw)
   if (!extracted.ok) return extracted
 
   const c = new Check()
   const seen = new Set<string>()
-  const edits: Stage7Edit[] = c.arr(extracted.data.edits ?? [], '$.edits', 0, EDIT_PLAN_CAP).flatMap((rawEdit, i) => {
+  const edits: Stage7Edit[] = c.arr(extracted.data.edits ?? [], '$.edits', 0, EDIT_PLAN_CAP).flatMap((rawEdit, i): Stage7Edit[] => {
     const path = `$.edits[${i}]`
     const e = c.obj(rawEdit, path)
+    if (e.create != null) {
+      if (e.handle != null) {
+        c.errors.push(`${path}: an entry is an edit (handle+patch) OR a create, never both`)
+        return []
+      }
+      const cr = c.obj(e.create, `${path}.create`)
+      const kind = c.oneOf(cr.kind, `${path}.create.kind`, ['npc', 'location'] as const)
+      const name = c.str(cr.name, `${path}.create.name`)
+      if (name && existingNames.has(name.trim().toLowerCase())) {
+        c.errors.push(`${path}.create.name: "${name}" already exists - edit that row instead of creating a duplicate`)
+        return []
+      }
+      const description = c.str(cr.description, `${path}.create.description`)
+      if (description && looksCutOff(description)) {
+        c.errors.push(`${path}.create.description: ends mid-thought - finish the sentence`)
+        return []
+      }
+      const chapterText = typeof cr.chapter === 'number' ? String(cr.chapter) : typeof cr.chapter === 'string' ? cr.chapter.trim().toLowerCase() : ''
+      const chapterNumber = Number(chapterText)
+      let chapter = ''
+      if (chapterText === 'global') chapter = 'global'
+      else if (Number.isInteger(chapterNumber) && chapterNumber >= 1 && chapterNumber <= chapterCount) chapter = String(chapterNumber)
+      else {
+        c.errors.push(`${path}.create.chapter: expected a chapter number 1-${chapterCount} or "global", got "${String(cr.chapter)}"`)
+        return []
+      }
+      const note = typeof e.note === 'string' ? e.note.slice(0, 200) : ''
+      return [{ patch: {}, create: { kind, name: name.trim(), description: description.trim(), chapter }, note }]
+    }
     const handle = c.str(e.handle, `${path}.handle`)
     const table = handleTable(handle)
     if (!table || !knownHandles.has(handle)) {
