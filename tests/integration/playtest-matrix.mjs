@@ -61,8 +61,7 @@ const PROBLEMS = [
   /double.failure/i,
   /mechanical fallback lines:\s+[1-9]/,
   /turns that errored:\s+[1-9]/,
-  /COULD NOT be trimmed/,
-  /STILL over/,
+  /could not be rebalanced/i,
   /budget guard/,
 ]
 

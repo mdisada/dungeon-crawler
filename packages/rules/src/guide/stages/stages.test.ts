@@ -384,6 +384,22 @@ describe('stage 5 (encounters + budget)', () => {
     expect(result.data.encounters.find((e) => e.type === 'social')!.budget).toBeNull()
   })
 
+  it('downgrades a single too-strong creature down the CR ladder instead of shipping a TPK', () => {
+    // Body-dropping cannot fix one oversized monster; the old shape shipped "STILL over 3x -
+    // swap it by hand" and the near-certain party kill with it. Now the CR walks down until
+    // the encounter fits under the lethal ceiling - deterministic, no call, always terminates.
+    const oversized = JSON.parse(STAGE5_RESPONSE)
+    const battle = oversized.encounters.find((e: { type: string }) => e.type === 'battle')
+    battle.enemies = [{ name: 'Ancient Wyrm', cr: '8', count: 1 }]
+    const result = parseStage5(JSON.stringify(oversized), STAGE5_CONTEXT)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const rebalanced = result.data.encounters.find((e) => e.type === 'battle')!
+    expect(rebalanced.budget!.adjustedXp).toBeLessThanOrEqual(rebalanced.budget!.xpBudget * 3)
+    expect(result.data.warnings.some((w) => w.includes('downgraded Ancient Wyrm CR 8 ->'))).toBe(true)
+    expect(result.data.warnings.some((w) => w.includes('STILL over'))).toBe(false)
+  })
+
   it('requires a boss_update for every boss NPC in context', () => {
     const withoutBoss = JSON.parse(STAGE5_RESPONSE)
     withoutBoss.boss_updates = []

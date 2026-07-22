@@ -199,6 +199,8 @@ export async function runStage4(env: StageEnv, chapterId: string): Promise<void>
         adventure_id: env.adventure.id,
         stage: 4,
         message: `${warningPrefix}${w}`,
+        // The demotion already resolved the problem - a record, not a call to action.
+        kind: 'info',
       })),
     )
     assertOk(warnError, 'stage-4 warnings insert failed')
@@ -295,6 +297,9 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
         target_table: 'encounters',
         target_id: id,
         message: `Battle encounter is ${e.budget!.verdict} budget: ${e.budget!.adjustedXp} adjusted XP vs a ${e.budget!.xpBudget} XP ${ctx.difficultyPreset} target for ${ctx.partySize} level-${ctx.partyLevel} characters.`,
+        // Post-rebalance everything sits under the lethal ceiling, so 'over' is deliberate
+        // difficulty spread (info); 'under' is an effectively empty battle - needs a human.
+        kind: e.budget!.verdict === 'over' ? 'info' : 'warning',
       })),
     )
     assertOk(error, 'budget warnings insert failed')
@@ -310,6 +315,8 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
         target_table: 'encounters',
         target_id: null,
         message,
+        // Deterministic rebalances and dropped surplus tactics - records, not calls to action.
+        kind: 'info',
       })),
     )
     assertOk(error, 'stage-5 trim warnings insert failed')

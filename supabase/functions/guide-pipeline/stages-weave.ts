@@ -112,9 +112,11 @@ export async function runStage6(env: StageEnv): Promise<void> {
 /**
  * One repair round per stage-7 run - the same shape as live play's consistency loop (check ->
  * constrained regeneration -> re-check -> fail open). More rounds would chase the checker's
- * nondeterminism, and the residue ships as ordinary warnings either way.
+ * nondeterminism, and the residue ships as ordinary warnings either way. 10, not 6: a
+ * 3-chapter guide produced 15 findings and the old cap left rows unattempted (2026-07-22);
+ * repairs run in parallel, so the cap costs tokens, not wall clock.
  */
-const REPAIR_CAP = 6
+const REPAIR_CAP = 10
 
 /** The repairable text fields of one row, loaded verbatim for the repair prompt. */
 async function loadRepairFields(
@@ -275,6 +277,8 @@ export async function runStage7(env: StageEnv): Promise<void> {
       target_table: ref?.table ?? null,
       target_id: ref?.id ?? null,
       message: w.message,
+      // Residue survived a repair round - by definition it needs a human (the review popup).
+      kind: 'warning',
     }
   })
 

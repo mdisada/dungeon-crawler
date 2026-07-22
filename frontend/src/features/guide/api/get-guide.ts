@@ -182,6 +182,7 @@ export async function getGuide(adventureId: string): Promise<GuideData> {
         targetId: w.target_id,
         message: w.message,
         resolved: w.resolved,
+        kind: w.kind === 'info' ? 'info' : 'warning',
       }),
     ),
     jobs: need(jobs, 'jobs load').map(

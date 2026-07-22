@@ -14,6 +14,18 @@ import { LocationsTab } from './locations-tab'
 import { NpcsTab } from './npcs-tab'
 import { PipelineProgress } from './pipeline-progress'
 import { PlotTab } from './plot-tab'
+import { WarningReviewDialog } from './warning-review-dialog'
+import type { GuideWarning } from '../types'
+
+/** Which editor surface shows the content a finding is about (Edit in the review popup). */
+const TARGET_TABS: Record<string, string> = {
+  objectives: 'plot',
+  chapters: 'plot',
+  encounters: 'plot',
+  npcs: 'npcs',
+  locations: 'locations',
+  endings: 'endings',
+}
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Draft',
@@ -35,6 +47,11 @@ export function GuidePage() {
   const [isRestarting, setIsRestarting] = useState(false)
   const [isStarting, setIsStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [tab, setTab] = useState('plot')
+  // null = "not decided yet": auto-opens once per visit when unreviewed findings exist, then
+  // the user's open/close choice wins. Adjusted during render, not in an effect - it derives
+  // from loaded data, not from an external system.
+  const [reviewOpen, setReviewOpen] = useState<boolean | null>(null)
 
   if (state.status === 'loading') return <p className="p-8 text-muted-foreground">Loading guide…</p>
   if (state.status === 'error') return <p className="p-8 text-destructive">{state.message}</p>
@@ -105,8 +122,17 @@ export function GuidePage() {
     }
   }
 
-  // Stage-8 reachability warnings render inside the Endings tab, not in the header.
-  const guideWarnings = data.warnings.filter((w) => !w.resolved && !w.targetId && w.stage !== 8)
+  // Stage-8 reachability warnings render inside the Endings tab, not in the header. Everything
+  // else splits by kind: 'warning' feeds the sequential review popup (Approve/Edit, one at a
+  // time); 'info' is the record of what generation already fixed, collapsed out of the way.
+  const reviewQueue = data.warnings.filter((w) => !w.resolved && w.kind === 'warning' && w.stage !== 8)
+  const autoResolved = data.warnings.filter((w) => !w.resolved && w.kind === 'info' && w.stage !== 8)
+  if (reviewOpen === null && !isGenerating && reviewQueue.length > 0) setReviewOpen(true)
+
+  const editWarning = (w: GuideWarning) => {
+    if (w.targetTable === 'ingredients') setIsDrawerOpen(true)
+    else setTab(TARGET_TABS[w.targetTable ?? ''] ?? 'plot')
+  }
 
   return (
     <div className="flex w-full max-w-5xl flex-col gap-4 px-4">
@@ -148,20 +174,40 @@ export function GuidePage() {
       {error && <p className="text-sm text-destructive">{error}</p>}
       {showPipeline && <PipelineProgress jobs={data.jobs} chapters={data.chapters} onChanged={() => void refresh()} />}
 
-      {guideWarnings.length > 0 && (
-        <section className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-          <h2 className="font-medium">Consistency warnings</h2>
-          <ul className="mt-1 list-inside list-disc text-muted-foreground">
-            {guideWarnings.map((w) => (
+      {reviewQueue.length > 0 && (
+        <section className="flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+          <p>
+            <span className="font-medium">{reviewQueue.length} finding{reviewQueue.length === 1 ? '' : 's'}</span>{' '}
+            <span className="text-muted-foreground">from generation need your judgment.</span>
+          </p>
+          <Button variant="outline" size="sm" onClick={() => setReviewOpen(true)}>
+            Review
+          </Button>
+        </section>
+      )}
+      {autoResolved.length > 0 && (
+        <details className="rounded-md border p-3 text-sm text-muted-foreground">
+          <summary className="cursor-pointer select-none">
+            Auto-resolved during generation ({autoResolved.length})
+          </summary>
+          <ul className="mt-1 list-inside list-disc">
+            {autoResolved.map((w) => (
               <li key={w.id}>{w.message}</li>
             ))}
           </ul>
-        </section>
+        </details>
       )}
+      <WarningReviewDialog
+        open={reviewOpen === true}
+        onOpenChange={setReviewOpen}
+        queue={reviewQueue}
+        onResolved={() => void refresh()}
+        onEdit={editWarning}
+      />
 
       <div className="flex gap-6">
         <div className="min-w-0 flex-1">
-          <Tabs defaultValue="plot">
+          <Tabs value={tab} onValueChange={setTab}>
             <TabsList>
               <TabsTab value="plot">Plot &amp; Objectives</TabsTab>
               <TabsTab value="npcs">NPCs ({data.npcs.length})</TabsTab>

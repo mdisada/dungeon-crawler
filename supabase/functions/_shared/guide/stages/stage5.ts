@@ -123,12 +123,14 @@ export function parseStage5(raw: string, ctx: Stage5Context): ParseResult<Stage5
       type === 'battle' && enemies
         ? validateEncounterBudget(enemies, ctx.partyLevel, ctx.partySize, ctx.difficultyPreset)
         : null
-    // Wildly over-budget encounters get TRIMMED, not rejected. Rejecting them was a hard parse
-    // error, and on a dungeon_crawl - where the combat pillar means the model keeps authoring
-    // big fights - the repair loop exhausted every attempt and the WHOLE ADVENTURE failed to
-    // generate (live 2026-07-21). A guaranteed TPK is bad; a guide that cannot be created is
-    // worse. Dropping duplicate bodies is deterministic, keeps the authored cast, and always
-    // terminates.
+    // Wildly over-budget encounters get REBALANCED, not rejected. Rejecting them was a hard
+    // parse error, and on a dungeon_crawl - where the combat pillar means the model keeps
+    // authoring big fights - the repair loop exhausted every attempt and the WHOLE ADVENTURE
+    // failed to generate (live 2026-07-21). A guaranteed TPK is bad; a guide that cannot be
+    // created is worse. Two deterministic moves, both always terminating: drop duplicate
+    // bodies, then walk remaining CRs down the ladder. The second move exists because bodies
+    // cannot touch a single high-CR creature - "STILL over 3x - swap it by hand" shipped as a
+    // warning nobody acted on, and the near-certain party kill shipped with it (2026-07-22).
     if (enemies && budget && budget.adjustedXp > budget.xpBudget * LETHAL_BUDGET_MULTIPLE) {
       const before = budget.adjustedXp
       while (
@@ -139,17 +141,33 @@ export function parseStage5(raw: string, ctx: Stage5Context): ParseResult<Stage5
         fattest.count -= 1
         budget = validateEncounterBudget(enemies, ctx.partyLevel, ctx.partySize, ctx.difficultyPreset)
       }
-      // Dropping bodies cannot touch a single high-CR creature, so say what actually happened
-      // rather than reporting a no-op as a fix ("trimmed from 700 to 700", live 2026-07-21).
+      const dropped = before !== budget.adjustedXp
+      const downgrades: string[] = []
+      while (budget.adjustedXp > budget.xpBudget * LETHAL_BUDGET_MULTIPLE) {
+        // Strongest ladder-known creature steps down one rung; unknown CR strings are skipped
+        // (nothing deterministic can be said about them). Finite rungs, so this terminates.
+        const candidates = enemies
+          .filter((e) => CR_LADDER.indexOf(e.cr) > 0)
+          .sort((a, b) => (crToXp(b.cr) ?? 0) - (crToXp(a.cr) ?? 0))
+        const strongest = candidates[0]
+        if (!strongest) break
+        const from = strongest.cr
+        strongest.cr = CR_LADDER[CR_LADDER.indexOf(strongest.cr) - 1]
+        downgrades.push(`${strongest.name} CR ${from} -> ${strongest.cr}`)
+        budget = validateEncounterBudget(enemies, ctx.partyLevel, ctx.partySize, ctx.difficultyPreset)
+      }
       const stillOver = budget.adjustedXp > budget.xpBudget * LETHAL_BUDGET_MULTIPLE
       const scale = `(target ${budget.xpBudget} for ${ctx.partySize} level-${ctx.partyLevel})`
+      const actions = [
+        ...(dropped ? ['dropped duplicate bodies'] : []),
+        ...(downgrades.length > 0 ? [`downgraded ${downgrades.join(', ')}`] : []),
+      ].join('; ')
       warnings.push(
-        before === budget.adjustedXp
+        stillOver
           ? `${path}: ${budget.adjustedXp} adjusted XP ${scale} is over ${LETHAL_BUDGET_MULTIPLE}x ` +
-            'and COULD NOT be trimmed - every enemy is already a single creature. Swap it for a ' +
-            'weaker one by hand; as authored it is a near-certain party kill.'
-          : `${path}: trimmed from ${before} to ${budget.adjustedXp} adjusted XP ${scale} by ` +
-            `dropping duplicate bodies${stillOver ? ', but it is STILL over ' + LETHAL_BUDGET_MULTIPLE + 'x - the remaining single creatures are too strong to fight' : ''}.`,
+            'and could not be rebalanced - enemy CRs are not on the standard ladder. Swap it for ' +
+            'a weaker encounter by hand; as authored it is a near-certain party kill.'
+          : `${path}: rebalanced from ${before} to ${budget.adjustedXp} adjusted XP ${scale} - ${actions} - now within the survivable ceiling.`,
       )
     }
 

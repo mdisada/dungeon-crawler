@@ -117,6 +117,8 @@ export interface GuideWarning {
   targetId: string | null
   message: string
   resolved: boolean
+  /** 'info' = a record of something the pipeline already fixed; 'warning' = needs a human. */
+  kind: 'info' | 'warning'
 }
 
 export interface GuideJob {
