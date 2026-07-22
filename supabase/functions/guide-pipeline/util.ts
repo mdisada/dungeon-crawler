@@ -116,3 +116,18 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
 export function assertOk(error: { message: string } | null, what: string): void {
   if (error) throw new Error(`${what}: ${error.message}`)
 }
+
+/**
+ * Best-effort event trail for pipeline actions (same event_log the session writes). Repairs
+ * must be LOUD - the F04 SS2 amendment allows rewrites only with a full audit trail - but a
+ * logging hiccup must never fail a stage that already did its work.
+ */
+export async function logPipelineEvent(
+  db: SupabaseClient,
+  adventureId: string,
+  type: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const { error } = await db.from('event_log').insert({ adventure_id: adventureId, session_id: null, type, payload })
+  if (error) console.error(`event ${type} insert failed`, error)
+}

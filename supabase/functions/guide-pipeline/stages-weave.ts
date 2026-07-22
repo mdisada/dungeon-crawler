@@ -1,9 +1,13 @@
 // Stages 6-7: Hook Weaver cross-links and the Consistency pass over the whole guide.
 import { buildStage6Prompt, parseStage6 } from '../_shared/guide/stages/stage6.ts'
-import { buildStage7Prompt, parseStage7, validateRegistryCoverage } from '../_shared/guide/stages/stage7.ts'
-import type { EntityRef } from '../_shared/guide/types.ts'
+import type { GuideDigest } from '../_shared/guide/stages/stage6.ts'
+import {
+  buildStage7Prompt, buildStage7RepairPrompt, parseStage7, parseStage7Repair, REPAIRABLE_FIELDS,
+  validateRegistryCoverage,
+} from '../_shared/guide/stages/stage7.ts'
+import type { EntityRef, WarningDraft } from '../_shared/guide/types.ts'
 import { enqueueJob, type StageEnv } from './stage-env.ts'
-import { assertOk, buildDigest } from './util.ts'
+import { assertOk, buildDigest, logPipelineEvent } from './util.ts'
 
 export async function runStage6(env: StageEnv): Promise<void> {
   const { digest, refs, objectiveIdByHandle } = await buildDigest(env.db, env.adventure.id)
@@ -101,15 +105,156 @@ export async function runStage6(env: StageEnv): Promise<void> {
   await enqueueJob(env.db, env.adventure.id, 7)
 }
 
+/**
+ * One repair round per stage-7 run - the same shape as live play's consistency loop (check ->
+ * constrained regeneration -> re-check -> fail open). More rounds would chase the checker's
+ * nondeterminism, and the residue ships as ordinary warnings either way.
+ */
+const REPAIR_CAP = 6
+
+/** The repairable text fields of one row, loaded verbatim for the repair prompt. */
+async function loadRepairFields(
+  env: StageEnv,
+  table: string,
+  id: string,
+): Promise<{ fields: Record<string, string>; humanEdited: boolean; content: Record<string, unknown> | null } | null> {
+  const columns: Record<string, string> = {
+    objectives: 'title, hidden_description, human_edited',
+    npcs: 'description, human_edited',
+    locations: 'description, human_edited',
+    ingredients: 'content, reveals, human_edited',
+  }
+  const { data, error } = await env.db.from(table).select(columns[table]).eq('id', id).maybeSingle()
+  if (error || !data) return null
+  const row = data as Record<string, unknown>
+  const content = (row.content ?? null) as Record<string, unknown> | null
+  const fields: Record<string, string> = {}
+  for (const field of REPAIRABLE_FIELDS[table] ?? []) {
+    const value = field === 'text' ? content?.text : row[field]
+    fields[field] = typeof value === 'string' ? value : ''
+  }
+  return { fields, humanEdited: row.human_edited === true, content }
+}
+
+/**
+ * Attempt one ROW's repair, resolving every warning that targets it in a single constrained
+ * rewrite - one repair per row is what makes the parallel fan-out safe (two same-row repairs
+ * raced and the second wrote a stale spoiler title back over the first's fix, live 2026-07-22).
+ * Applied only when the model both claims and produces a valid patch. Every applied repair logs
+ * a guide_repair event with before/after - loud by design (F04 SS2 amendment). Any failure
+ * inside is this row's problem alone: its warnings survive to the re-check, the stage never
+ * dies for it.
+ */
+async function attemptRepair(
+  env: StageEnv,
+  warnings: WarningDraft[],
+  ref: { table: string; id: string },
+  digest: GuideDigest,
+  arc: string,
+): Promise<boolean> {
+  const handle = warnings[0].targetHandle!
+  try {
+    const loaded = await loadRepairFields(env, ref.table, ref.id)
+    if (!loaded || loaded.humanEdited) return false
+
+    const repair = await env.generate(
+      'consistency_checker',
+      buildStage7RepairPrompt({
+        handle,
+        table: ref.table,
+        warnings: warnings.map((w) => w.message),
+        fields: loaded.fields,
+        digest,
+        metaLoopArc: arc,
+      }),
+      (raw) => parseStage7Repair(raw, ref.table),
+    )
+    if (!repair.resolvable) return false
+
+    // Logical 'text' lives inside the ingredients content jsonb; everything else is a column.
+    const patch: Record<string, unknown> = {}
+    for (const [field, value] of Object.entries(repair.patch)) {
+      if (ref.table === 'ingredients' && field === 'text') {
+        patch.content = { ...(loaded.content ?? {}), text: value }
+      } else {
+        patch[field] = value
+      }
+    }
+    const { error } = await env.db.from(ref.table).update(patch).eq('id', ref.id)
+    if (error) return false
+
+    await logPipelineEvent(env.db, env.adventure.id, 'guide_repair', {
+      handle,
+      table: ref.table,
+      warning: warnings.map((w) => w.message).join(' | '),
+      note: repair.note,
+      before: Object.fromEntries(
+        Object.keys(repair.patch).map((f) => [f, (loaded.fields[f] ?? '').slice(0, 300)]),
+      ),
+      after: Object.fromEntries(Object.entries(repair.patch).map(([f, v]) => [f, v.slice(0, 300)])),
+    })
+    return true
+  } catch (err) {
+    console.error(`stage-7 repair failed for ${handle}`, err)
+    return false
+  }
+}
+
 export async function runStage7(env: StageEnv): Promise<void> {
   const { digest, refs } = await buildDigest(env.db, env.adventure.id)
   const arc = env.adventure.meta_loop?.arc ?? ''
 
-  const warnings = await env.generate(
+  const found = await env.generate(
     'consistency_checker',
     buildStage7Prompt(digest, arc),
     (raw) => parseStage7(raw, digest),
   )
+
+  // Auto-repair (2026-07-22): findings are grouped by TARGET ROW - one repair reconciles all
+  // of a row's warnings - then rows repair in parallel (they share nothing). Row-less findings
+  // (coverage, guide-level observations) and human-edited rows stay warnings; capped so a
+  // pathological checker cannot spend the stage's wall clock on rewrites.
+  const byRow = new Map<string, { ref: { table: string; id: string }; warnings: WarningDraft[] }>()
+  for (const w of found) {
+    const ref = w.targetHandle ? refs.get(w.targetHandle) : null
+    if (!ref || (REPAIRABLE_FIELDS[ref.table] ?? []).length === 0) continue
+    const key = `${ref.table}:${ref.id}`
+    const entry = byRow.get(key) ?? { ref, warnings: [] }
+    entry.warnings.push(w)
+    byRow.set(key, entry)
+  }
+  const eligible = [...byRow.values()]
+  const attempted = eligible.slice(0, REPAIR_CAP)
+  const applied = (
+    await Promise.all(attempted.map((row) => attemptRepair(env, row.warnings, row.ref, digest, arc)))
+  ).filter(Boolean).length
+
+  // Repairs change the guide, so the shipped warnings must describe the guide as it now IS:
+  // re-run the same check over a fresh digest and keep only what still fails. No repairs
+  // applied means the first pass already describes reality - skip the second call.
+  let residue = found
+  if (applied > 0) {
+    try {
+      const rebuilt = await buildDigest(env.db, env.adventure.id)
+      residue = await env.generate(
+        'consistency_checker',
+        buildStage7Prompt(rebuilt.digest, arc),
+        (raw) => parseStage7(raw, rebuilt.digest),
+      )
+    } catch (err) {
+      // The re-check is a luxury: with it gone, the pre-repair findings ship (over-warning
+      // about content that may now be fixed beats a stage failure after rows were written).
+      console.error('stage-7 re-check failed, shipping pre-repair findings', err)
+    }
+  }
+
+  await logPipelineEvent(env.db, env.adventure.id, 'guide_repair_summary', {
+    found: found.length,
+    eligible: eligible.length,
+    attempted: attempted.length,
+    applied,
+    residual: residue.length,
+  })
 
   const { error: deleteError } = await env.db
     .from('guide_warnings')
@@ -118,7 +263,7 @@ export async function runStage7(env: StageEnv): Promise<void> {
     .eq('stage', 7)
   assertOk(deleteError, 'stage-7 warning cleanup failed')
 
-  const warningRows = warnings.map((w) => {
+  const warningRows = residue.map((w) => {
     const ref = w.targetHandle ? refs.get(w.targetHandle) : null
     return {
       adventure_id: env.adventure.id,

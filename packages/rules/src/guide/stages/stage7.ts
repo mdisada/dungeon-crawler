@@ -1,9 +1,13 @@
 // Stage 7 - Consistency pass, whole guide: plot-hole scan across the hidden descriptions.
-// Output is WARNINGS ONLY, surfaced as editor badges - the pass never rewrites content
-// (F04 SS2: "never silent rewrites"). An empty warning list is a valid, good result.
+// Since 2026-07-22 the pass also REPAIRS what it can: each row-targeted warning gets one
+// constrained rewrite of that row's text fields, then the check re-runs and only the residue
+// ships as warnings. This amends F04 SS2's "never silent rewrites" on its own terms - rewrites
+// are LOUD (every repair logs a guide_repair event with before/after), human_edited rows are
+// never touched, and anything unresolved still warns. An empty warning list is a valid result.
 
-import { Check, extractJsonObject } from '../json.ts'
+import { Check, countWords, extractJsonObject } from '../json.ts'
 import { entityNameMatches } from './stage4.ts'
+import { OBJECTIVE_TITLE_MAX_WORDS } from './stage3.ts'
 import type { GuideDigest } from './stage6.ts'
 import type { EntityRef, ParseResult, WarningDraft } from '../types.ts'
 
@@ -96,4 +100,112 @@ export function parseStage7(raw: string, digest: GuideDigest): ParseResult<Warni
   })
 
   return c.result(warnings)
+}
+
+/**
+ * The text fields the repair pass may rewrite, per table - the whole repair vocabulary.
+ * Anything a warning needs beyond these (new rows, chapter moves, predicate surgery) is
+ * structural and stays a warning. `text` on ingredients is logical: the edge maps it onto
+ * content.text, where rumor/clue prose actually lives.
+ */
+export const REPAIRABLE_FIELDS: Record<string, string[]> = {
+  objectives: ['title', 'hidden_description'],
+  npcs: ['description'],
+  locations: ['description'],
+  ingredients: ['text', 'reveals'],
+}
+
+export interface Stage7Repair {
+  resolvable: boolean
+  patch: Record<string, string>
+  note: string
+}
+
+export function buildStage7RepairPrompt(ctx: {
+  handle: string
+  table: string
+  /** EVERY warning targeting this row - one repair reconciles them all, so parallel repairs
+   *  never race on the same row (two same-row repairs clobbered each other, live 2026-07-22). */
+  warnings: string[]
+  /** The offending row's current repairable fields, verbatim. */
+  fields: Record<string, string>
+  digest: GuideDigest
+  metaLoopArc: string
+}): { system: string; user: string; maxTokens: number } {
+  const system = `You repair the flagged inconsistencies of ONE row in a tabletop RPG adventure guide by rewriting only that row's text fields. Resolve ALL the listed warnings in a single coherent rewrite. You are the same consistency discipline that guards live play, applied at authoring time: reconcile the words with established canon, never invent around it.
+
+Resolve in the direction of the BETTER STORY:
+- Keep twists hidden. An objective title must stay open and spoiler-free (AT MOST ${OBJECTIVE_TITLE_MAX_WORDS} words) - move the secret into hidden_description, never the other way.
+- Re-point dangling references at entities and places that EXIST in the canon below. Never invent a new named person, place, or faction.
+- Keep the row's flavor, tone, and specificity - a repair that flattens the writing is a failure.
+- Keep each field roughly its original length, and NEVER leave a sentence unfinished - a cut-off word is worse than the warning it fixed.
+- Never contradict any other line of the canon while fixing this one.
+
+If rewriting these fields alone cannot resolve the warnings (they need new content, a chapter move, or structural change), say so honestly.
+
+Respond with ONLY a JSON object, no prose, in exactly this shape:
+{ "resolvable": true|false, "patch": { "<field>": "new text" }, "note": "one line: what changed and why" }
+patch may only use these fields: ${(REPAIRABLE_FIELDS[ctx.table] ?? []).join(', ')}. When resolvable is false, patch is {}.`
+
+  const lines = (m: Map<string, string>) => [...m.entries()].map(([h, l]) => `${h}: ${l}`).join('\n')
+  const user = `Warnings to resolve (all about ${ctx.handle}):
+${ctx.warnings.map((w) => `- ${w}`).join('\n')}
+
+Current content of ${ctx.handle} (${ctx.table}):
+${Object.entries(ctx.fields).map(([f, v]) => `${f}: ${v}`).join('\n')}
+
+Meta loop arc: ${ctx.metaLoopArc}
+
+Established canon (repairs must fit ALL of this):
+Objectives:
+${lines(ctx.digest.objectives)}
+
+NPCs:
+${lines(ctx.digest.npcs)}
+
+Locations:
+${lines(ctx.digest.locations)}
+
+Ingredients:
+${lines(ctx.digest.ingredients)}`
+
+  return { system, user, maxTokens: 900 }
+}
+
+export function parseStage7Repair(raw: string, table: string): ParseResult<Stage7Repair> {
+  const extracted = extractJsonObject(raw)
+  if (!extracted.ok) return extracted
+
+  const c = new Check()
+  const resolvable = extracted.data.resolvable === true
+  const allowed = new Set(REPAIRABLE_FIELDS[table] ?? [])
+  const patch: Record<string, string> = {}
+  const rawPatch = extracted.data.patch
+  if (resolvable) {
+    if (typeof rawPatch !== 'object' || rawPatch === null || Array.isArray(rawPatch)) {
+      c.errors.push('$.patch: expected an object of field -> new text')
+    } else {
+      for (const [field, value] of Object.entries(rawPatch as Record<string, unknown>)) {
+        if (!allowed.has(field)) {
+          c.errors.push(`$.patch.${field}: not a repairable field of ${table} (allowed: ${[...allowed].join(', ')})`)
+          continue
+        }
+        if (typeof value !== 'string' || !value.trim()) {
+          c.errors.push(`$.patch.${field}: expected non-empty replacement text`)
+          continue
+        }
+        if (table === 'objectives' && field === 'title' && countWords(value) > OBJECTIVE_TITLE_MAX_WORDS) {
+          c.errors.push(`$.patch.title: "${value}" is over ${OBJECTIVE_TITLE_MAX_WORDS} words - titles stay short and open`)
+          continue
+        }
+        patch[field] = value.trim()
+      }
+    }
+    if (c.errors.length === 0 && Object.keys(patch).length === 0) {
+      c.errors.push('$.patch: resolvable is true but no valid field was patched - repair something or say resolvable: false')
+    }
+  }
+
+  const note = typeof extracted.data.note === 'string' ? extracted.data.note.slice(0, 200) : ''
+  return c.result({ resolvable: resolvable && Object.keys(patch).length > 0, patch, note })
 }

@@ -359,6 +359,23 @@ async function main() {
   console.log(`  ingredient placement: ${locPlaced.length} at locations, ${npcPlaced.length} on NPCs`)
   console.log(`  guide warnings: ${warnings.length}`)
   warnings.forEach((w) => console.log(`    [stage ${w.stage}] ${w.message}`))
+  // Stage-7 auto-repairs (2026-07-22): rewrites are allowed only because they are LOUD - the
+  // before/after pair here is the audit trail, exactly like the recognition judge's evidence.
+  // A repair whose "after" does not read better than its "before" is the rollback signal.
+  const repairSummaries = await serviceRest('GET', `event_log?adventure_id=eq.${advId}&type=eq.guide_repair_summary&select=payload&order=id.desc&limit=1`)
+  const repairs = await serviceRest('GET', `event_log?adventure_id=eq.${advId}&type=eq.guide_repair&select=payload&order=id`)
+  if (repairSummaries.length > 0 || repairs.length > 0) {
+    const s = repairSummaries[0]?.payload ?? {}
+    console.log(`  stage-7 repairs: found ${s.found ?? '?'}, attempted ${s.attempted ?? '?'}, applied ${s.applied ?? '?'}, residual ${s.residual ?? '?'}`)
+    repairs.forEach((r) => {
+      const p = r.payload ?? {}
+      console.log(`    - [${p.handle} ${p.table}] ${String(p.warning).slice(0, 110)}`)
+      Object.keys(p.after ?? {}).forEach((field) => {
+        console.log(`        ${field}: "${String(p.before?.[field] ?? '').slice(0, 90)}"`)
+        console.log(`          -> "${String(p.after[field]).slice(0, 90)}" (${p.note ?? ''})`)
+      })
+    })
+  }
 
   // ---- Play ----
   const [char] = await serviceRest('POST', 'characters', {

@@ -31,7 +31,7 @@ import {
 } from './stage4.ts'
 import { parseStage5 } from './stage5.ts'
 import { parseStage6 } from './stage6.ts'
-import { parseStage7, validateRegistryCoverage } from './stage7.ts'
+import { buildStage7RepairPrompt, parseStage7, parseStage7Repair, validateRegistryCoverage } from './stage7.ts'
 import { parseStage8, validateEndingDistinctness, validateEndingReachability } from './stage8.ts'
 
 const parseStage8Fixture = (raw: string) => parseStage8(raw, STAGE8_OBJECTIVE_COUNT, STAGE8_NPC_COUNT)
@@ -486,6 +486,66 @@ describe('stage 7 (consistency warnings)', () => {
     const globals = [{ kind: 'location' as const, name: 'The Sunken Chapel', note: 'finale' }]
     const warnings = validateRegistryCoverage(globals, [{ kind: 'location', name: 'The Sunken Chapel', note: '' }], [], [])
     expect(warnings).toEqual([])
+  })
+})
+
+describe('stage 7 repairs (auto-resolve consistency warnings)', () => {
+  it('accepts a whitelisted patch and carries the note', () => {
+    const result = parseStage7Repair(
+      '{ "resolvable": true, "patch": { "title": "Face the killer" }, "note": "title no longer names them" }',
+      'objectives',
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.resolvable).toBe(true)
+    expect(result.data.patch).toEqual({ title: 'Face the killer' })
+    expect(result.data.note).toBe('title no longer names them')
+  })
+
+  it('rejects fields outside the table whitelist', () => {
+    const result = parseStage7Repair(
+      '{ "resolvable": true, "patch": { "completion_predicates": "{}" }, "note": "" }',
+      'objectives',
+    )
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some((e) => e.includes('not a repairable field'))).toBe(true)
+  })
+
+  it('holds repaired titles to the stage-3 word cap', () => {
+    const result = parseStage7Repair(
+      '{ "resolvable": true, "patch": { "title": "Deliver Final Judgment on the Manor Killer" }, "note": "" }',
+      'objectives',
+    )
+    expect(result.ok).toBe(false)
+  })
+
+  it('passes resolvable:false through with an empty patch', () => {
+    const result = parseStage7Repair('{ "resolvable": false, "patch": {}, "note": "needs a new location row" }', 'objectives')
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.resolvable).toBe(false)
+  })
+
+  it('refuses a resolvable claim that patches nothing', () => {
+    const result = parseStage7Repair('{ "resolvable": true, "patch": {}, "note": "" }', 'objectives')
+    expect(result.ok).toBe(false)
+  })
+
+  it('repair prompt carries every warning for the row, the row fields, and the canon', () => {
+    const { system, user } = buildStage7RepairPrompt({
+      handle: 'obj#2',
+      table: 'objectives',
+      warnings: ['Title spoils the twist', 'Description references a chapel that does not exist'],
+      fields: { title: 'Unmask Mother Brine', hidden_description: 'She is the tide-witch.' },
+      digest: buildTestDigest(),
+      metaLoopArc: 'The tide must turn',
+    })
+    expect(system).toContain('BETTER STORY')
+    expect(system).toContain('title, hidden_description')
+    expect(user).toContain('Title spoils the twist')
+    expect(user).toContain('chapel that does not exist')
+    expect(user).toContain('Unmask Mother Brine')
+    expect(user).toContain('The tide must turn')
   })
 })
 

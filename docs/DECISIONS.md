@@ -829,3 +829,26 @@ validation, types) and `features/play/` (idle sweep); seed;
   only past `hintTurns` (default 3, DM-configurable via set_auto) and unlocks one rung per ~2
   no-progress turns. Rung 4 (fail-forward) is full-AI only; assist stops at rung 3 and routes
   through the narration review gate. Logged `hint_given {rung, source}`.
+
+## 2026-07-22 - Stage 7 auto-repairs its own consistency findings (F04 SS2 amendment)
+
+- F04 SS2 said the consistency pass "never rewrites content". Amended: creators were shown
+  1-3 stage-7 warnings per generated guide (measured across ~54 paid generations) and the
+  fix was always manual. Stage 7 now runs the same loop live play's consistency system uses -
+  check, ONE constrained regeneration, re-check, fail open - against the guide itself.
+- The amendment keeps SS2's actual principle, which was "never SILENT rewrites": every applied
+  repair logs a `guide_repair` event with the warning, the before/after text, and the model's
+  note; a `guide_repair_summary` records found/attempted/applied/residual; `human_edited` rows
+  are never touched (same rule as stage reruns); anything unresolved still ships as a warning.
+- Scope is deliberately textual: repairs may rewrite only whitelisted fields
+  (`REPAIRABLE_FIELDS` in `packages/rules/src/guide/stages/stage7.ts` - objective
+  title/hidden_description, npc/location description, ingredient text/reveals). Structural
+  findings (missing rows, chapter moves) are not repairable and remain warnings. Repaired
+  objective titles are held to the stage-3 word cap by the parser.
+- Repair direction is story-first by prompt: keep twists hidden (retitle openly, push secrets
+  into hidden_description), re-point dangling references at EXISTING canon (never invent new
+  named entities), preserve flavor. The residue warning set comes from RE-RUNNING the checker
+  on the patched digest, so shipped warnings describe the guide as it now is - including
+  anything a repair newly broke.
+- Stage-5 encounter-budget warnings are explicitly out of scope (combat balance, not
+  consistency; the F09 combat work owns that).
