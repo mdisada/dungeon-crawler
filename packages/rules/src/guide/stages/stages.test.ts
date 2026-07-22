@@ -179,6 +179,32 @@ describe('stage 3 (objectives + predicates)', () => {
     expect(system).toContain('Secure the forged deed')
   })
 
+  it('rejects an objective whose predicate has no atom live play can claim (2.1)', () => {
+    // Structurally valid (validatePredicate passes) but uncompletable: an eq:false flag is never
+    // written by a milestone, so this objective could never finish - it must not ship.
+    const result = parseStage3(JSON.stringify({
+      objectives: [{
+        title: 'Keep the gate shut',
+        hidden_description: 'the party must never open it',
+        completion_predicates: { flag: 'gate_opened', eq: false },
+      }],
+    }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some((e) => e.includes('no claimable milestone'))).toBe(true)
+  })
+
+  it('accepts an event-only predicate as claimable (2.1)', () => {
+    const result = parseStage3(JSON.stringify({
+      objectives: [{
+        title: 'Enter the sunken crypt',
+        hidden_description: 'the descent is the whole objective',
+        completion_predicates: { any: [{ event: 'party entered the sunken crypt' }, { flag: 'crypt_reached', eq: true }] },
+      }],
+    }))
+    expect(result.ok).toBe(true)
+  })
+
   it('rejects a chapter that authors the same objective twice', () => {
     const objective = (title: string) => ({
       title,

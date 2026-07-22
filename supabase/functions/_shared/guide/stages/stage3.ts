@@ -128,6 +128,22 @@ function containsFactAtom(predicate: unknown): boolean {
   return false
 }
 
+/**
+ * True when the predicate holds at least one atom live play can actually claim - a {flag, eq:true}
+ * or an {event}. This mirrors listMilestoneAtoms' flag/event vocabulary (story/evaluate) WITHOUT
+ * importing it: story/evaluate already imports guide/predicates, so the reverse edge would cycle.
+ * Fact atoms are omitted deliberately - they are hard-failed one branch up, so a predicate that
+ * reaches the zero-claimable check never contains one.
+ */
+function hasClaimableAtom(predicate: unknown): boolean {
+  if (typeof predicate !== 'object' || predicate === null || Array.isArray(predicate)) return false
+  const p = predicate as Record<string, unknown>
+  if (Array.isArray(p.any)) return p.any.some(hasClaimableAtom)
+  if (Array.isArray(p.all)) return p.all.some(hasClaimableAtom)
+  if (typeof p.flag === 'string' && p.flag && p.eq === true) return true
+  return typeof p.event === 'string' && p.event.length > 0
+}
+
 export function parseStage3(raw: string): ParseResult<ObjectiveDraft[]> {
   const extracted = extractJsonObject(raw)
   if (!extracted.ok) return extracted
@@ -144,10 +160,19 @@ export function parseStage3(raw: string): ParseResult<ObjectiveDraft[]> {
       }
       const predicateErrors = validatePredicate(o.completion_predicates, `${path}.completion_predicates`)
       c.errors.push(...predicateErrors)
-      if (predicateErrors.length === 0 && containsFactAtom(o.completion_predicates)) {
-        // Live play can never write fact atoms (F14 milestone vocabulary is flags + events),
-        // so a fact-based objective would be uncompletable - hard-fail into regeneration.
-        c.errors.push(`${path}.completion_predicates: "fact" atoms are not completable by live play - use flags or events`)
+      if (predicateErrors.length === 0) {
+        if (containsFactAtom(o.completion_predicates)) {
+          // Live play can never write fact atoms (F14 milestone vocabulary is flags + events),
+          // so a fact-based objective would be uncompletable - hard-fail into regeneration.
+          c.errors.push(`${path}.completion_predicates: "fact" atoms are not completable by live play - use flags or events`)
+        } else if (!hasClaimableAtom(o.completion_predicates)) {
+          // A structurally-valid predicate with no {flag,eq:true} and no {event} - e.g. only
+          // eq:false flags - has NO atom live play can ever claim, so the objective could never
+          // complete and the adventure would ship broken. Bind it into the same regeneration loop
+          // that already runs the fact-atom check above, at the stage that AUTHORS objectives - a
+          // later stage's Retry cannot rewrite them (2.1). Structural, no word-signal matching.
+          c.errors.push(`${path}.completion_predicates: has no claimable milestone - live play only completes {flag,eq:true} or {event} atoms, so this objective could never be finished`)
+        }
       }
       return {
         title,
