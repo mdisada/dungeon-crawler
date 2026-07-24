@@ -54,7 +54,8 @@ function walk(): GameState[] {
   return states
 }
 
-function renderBattle(state: GameState, userId = 'u1', role: 'dm' | 'player' = 'player') {
+/** The renderers read the shared sentence reveal from the play context, so wrap every render. */
+function renderInPlay(state: GameState, ui: React.ReactNode, userId = 'u1', role: 'dm' | 'player' = 'player') {
   return render(
     <PlayProvider
       adventure={adventure}
@@ -66,9 +67,13 @@ function renderBattle(state: GameState, userId = 'u1', role: 'dm' | 'player' = '
       connection="live"
       fx={[]}
     >
-      <BattleMap combat={state.combat!} />
+      {ui}
     </PlayProvider>,
   )
+}
+
+function renderBattle(state: GameState, userId = 'u1', role: 'dm' | 'player' = 'player') {
+  return renderInPlay(state, <BattleMap combat={state.combat!} />, userId, role)
 }
 
 describe('renderers from scripted diff sequences', () => {
@@ -76,14 +81,14 @@ describe('renderers from scripted diff sequences', () => {
 
   it('narration state renders the background and the narrated line', () => {
     const narration = states[0]
-    render(<NarrationView scene={narration.scene} dialogue={narration.dialogue} />)
+    renderInPlay(narration, <NarrationView scene={narration.scene} dialogue={narration.dialogue} />)
     expect(screen.getByAltText('Hollowbrook')).toBeInTheDocument()
     expect(screen.getByText(/Dusk settles/)).toBeInTheDocument()
   })
 
   it('roleplay state renders speaker name plates and the active line', () => {
     const roleplay = states.find((s) => s.scene.mode === 'roleplay')!
-    render(<RoleplayView scene={roleplay.scene} dialogue={roleplay.dialogue} players={roleplay.players} />)
+    renderInPlay(roleplay, <RoleplayView scene={roleplay.scene} dialogue={roleplay.dialogue} players={roleplay.players} />)
     // Name appears on the plate and in the portrait's sr-only caption.
     expect(screen.getAllByText('Elder Maren').length).toBeGreaterThan(0)
     expect(screen.getByText(/Thank the stars/)).toBeInTheDocument()

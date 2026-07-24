@@ -39,7 +39,7 @@ Additionally: every routed intent is checked against the active loop's expected 
 
 ### 3.3 Adjudicator contract
 
-```
+```text
 Input:  { intent_text, actor_summary, scene_state, active_loop_beat,
           current_objective (revealed title + DM-only hidden desc),
           relevant_lore (query_lore top-k) }
@@ -123,7 +123,7 @@ orchestration surface it changed.
 
 ## 4. Proposal pipeline
 
-```
+```text
 proposals: id, adventure_id, session_id, type, payload jsonb, options jsonb[],
            approval_mode ('human'|'auto'), status ('pending'|'accepted'|'edited'|
            'rejected'|'expired'|'auto_applied'),

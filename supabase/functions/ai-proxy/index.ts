@@ -1,16 +1,25 @@
 // F01 SS3: the single AI gateway every client call goes through. Verifies the caller's Supabase
 // JWT, resolves the model for the request from the caller's settings, proxies to OpenRouter, and
-// logs usage. Never accepts a model or API key from the client -- both come from server-side
-// state (user_settings row + OPENROUTER_API_KEY secret).
+// logs usage. Never accepts an API key from the client, and never accepts a model for text or
+// embedding requests -- those come from server-side state (user_settings row +
+// OPENROUTER_API_KEY secret).
+//
+// Narrow exception (F12 Assets Lab, 2026-07-24): image and tts requests may carry `model`, but
+// it must appear on the server-side allowlist in _shared/media-models.ts. Model comparison is
+// the lab's entire purpose, and the allowlist keeps the "client can't name an arbitrary model"
+// guarantee intact.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import { corsHeaders } from '../_shared/cors.ts'
+import { allowlistMessage, isAllowedMediaModel } from '../_shared/media-models.ts'
 import { isAgentRole, resolveModel } from '../_shared/model-routing.ts'
 
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY')!
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+
+declare const EdgeRuntime: { waitUntil?: (p: Promise<unknown>) => void } | undefined
 
 const OPENROUTER_CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_AUDIO_URL = 'https://openrouter.ai/api/v1/audio/speech'
@@ -25,6 +34,8 @@ interface ProxyRequestBody {
   adventure_id?: string | null
   payload: Record<string, unknown>
   stream?: boolean
+  /** image/tts only, must be allowlisted -- see _shared/media-models.ts. */
+  model?: string
 }
 
 interface UsageLogInput {
@@ -198,29 +209,46 @@ async function handleTts(opts: {
 
   const [clientStream, loggingStream] = upstream.body.tee()
 
-  ;(async () => {
+  const costTask = (async () => {
     // Best-effort cost lookup: the audio endpoint returns raw bytes, not a usage object, so cost
     // is fetched separately via the generation-stats endpoint once bytes finish arriving.
     const reader = loggingStream.getReader()
     while (!(await reader.read()).done) {
       /* drain -- only care about completion timing here */
     }
+    // The stats row isn't queryable the instant the audio finishes: OpenRouter returns 404
+    // "not found" for the generation id for several seconds first (measured ~6-9s for TTS).
+    // Poll with backoff so cost_usd actually lands instead of logging null. This runs after the
+    // client already has its audio (tee'd above), so the extra wait costs the caller nothing.
     let usage: UsageLogInput['usage'] = null
     if (generationId) {
-      try {
-        const statsRes = await fetch(`https://openrouter.ai/api/v1/generation?id=${generationId}`, {
-          headers: openRouterHeaders(),
-        })
-        if (statsRes.ok) {
+      const delaysMs = [1500, 2500, 4000, 6000, 8000]
+      for (const delay of delaysMs) {
+        await new Promise((resolve) => setTimeout(resolve, delay))
+        try {
+          const statsRes = await fetch(`https://openrouter.ai/api/v1/generation?id=${generationId}`, {
+            headers: openRouterHeaders(),
+          })
+          if (!statsRes.ok) continue // 404 until the row exists -- keep waiting
           const stats = await statsRes.json()
-          usage = { cost: stats.data?.total_cost ?? stats.data?.usage?.cost }
+          const cost = stats.data?.total_cost ?? stats.data?.usage?.cost
+          if (cost !== undefined && cost !== null) {
+            usage = { cost }
+            break
+          }
+        } catch (err) {
+          console.error('generation stats lookup failed', err)
         }
-      } catch (err) {
-        console.error('generation stats lookup failed', err)
       }
     }
     await logUsage({ userId, adventureId, agentRole, model, kind: 'tts', usage, latencyMs: Date.now() - startedAt })
   })()
+
+  // The cost poll now runs for up to ~22s after the response is sent; without waitUntil the edge
+  // runtime may tear the isolate down first and the usage_log row would never be written.
+  if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) {
+    EdgeRuntime.waitUntil(costTask)
+  }
 
   return new Response(clientStream, { headers: { ...corsHeaders, 'Content-Type': contentType } })
 }
@@ -286,7 +314,7 @@ Deno.serve(async (req) => {
     const userId = userData.user.id
 
     const body: ProxyRequestBody = await req.json()
-    const { kind, agent_role: agentRole, adventure_id: adventureId, payload, stream } = body
+    const { kind, agent_role: agentRole, adventure_id: adventureId, payload, stream, model: requestedModel } = body
 
     if (!['text', 'tts', 'image', 'embedding'].includes(kind)) return jsonError(400, 'Invalid kind')
     if (typeof agentRole !== 'string' || agentRole.length === 0) return jsonError(400, 'Missing agent_role')
@@ -298,9 +326,20 @@ Deno.serve(async (req) => {
       .single()
     if (settingsError || !settings) return jsonError(500, 'Could not load user settings')
 
-    if (settings.provider === 'local') {
-      // Job Queue (F12) isn't built yet -- v1 just rejects so the client knows to fall back.
+    if (settings.provider === 'local' && kind !== 'image' && kind !== 'tts') {
+      // No local path exists for text/embedding, so the global provider setting still decides
+      // and the client is told to fall back. Image and tts are exempt: since F12 those callers
+      // (features/image, features/tts) pick the route themselves and only reach ai-proxy when
+      // they have explicitly chosen OpenRouter -- local runs go over Realtime to the worker and
+      // never touch this function.
       return jsonError(409, 'LOCAL_MODE')
+    }
+
+    if (requestedModel !== undefined && kind !== 'image' && kind !== 'tts') {
+      return jsonError(400, 'model override is only accepted for image and tts requests')
+    }
+    if (requestedModel !== undefined && !isAllowedMediaModel(requestedModel)) {
+      return jsonError(403, allowlistMessage(requestedModel))
     }
 
     let model: string
@@ -308,9 +347,9 @@ Deno.serve(async (req) => {
       if (!isAgentRole(agentRole)) return jsonError(400, `Unknown agent_role: ${agentRole}`)
       model = resolveModel(agentRole, (settings.model_map as Record<string, string>) ?? {})
     } else if (kind === 'tts') {
-      model = settings.tts_model
+      model = requestedModel ?? settings.tts_model
     } else if (kind === 'image') {
-      model = settings.image_model
+      model = requestedModel ?? settings.image_model
     } else {
       model = settings.embedding_model
     }

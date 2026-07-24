@@ -1,12 +1,13 @@
-// Beat Planner boundary parser (F08 SS4 + encounter-states Slice 3): one beat only, goals
-// phrased as situations, exit conditions in the same predicate atoms as F04, braided pairs
-// gated on the composition profile (emitted only when the party can actually resolve both
-// halves), and a typed encounter spec whose outcome maps must copy authored milestone atoms
-// exactly - the machine's only progression writers.
+// Beat Planner boundary parser (F08 SS4 + encounter-states Slice 3, two-call since the
+// overhaul Phase 1): call 1 plans the beat and DECLARES its local atoms explicitly (the only
+// door runtime atom creation has left); call 2 maps encounter outcome tiers onto a closed
+// menu of registry atoms (parseOutcomeMaps). Exit conditions may only reference declared or
+// objective atoms - free invention no longer parses.
 
 import { validatePredicate } from '../guide/predicates.ts'
 import type { Json } from '../state/types.ts'
-import { listMilestoneAtoms } from './evaluate.ts'
+import { canonicalizeAtomSlug, MAX_LOCAL_ATOMS_PER_BEAT, resolveAtomText } from './atoms.ts'
+import type { AtomProposal } from './atoms.ts'
 
 export interface IngredientRequest {
   type: 'clue' | 'secret' | 'event' | 'item' | 'rumor'
@@ -37,6 +38,13 @@ export interface BeatEncounterSpec {
   onFailure: string[]
 }
 
+/** A cast member the planner needs but the roster lacks (Phase 2 - the "Elara" fix). */
+export interface NpcProposal {
+  name: string
+  personality: string
+  role: 'npc'
+}
+
 export interface BeatPlan {
   name: string
   goals: string[]
@@ -46,7 +54,13 @@ export interface BeatPlan {
   narrationSeed: string
   /** Null only via the deterministic fallback - the beat degrades to ad-hoc entries. */
   encounter: BeatEncounterSpec | null
+  /** Local atoms this beat declares (Phase 1) - registered by code before anything stores them. */
+  localAtoms: AtomProposal[]
+  /** NPCs to create before staging (Phase 2); only honoured for social encounters. */
+  createNpcs: NpcProposal[]
 }
+
+export const MAX_CREATED_NPCS_PER_BEAT = 2
 
 export interface BeatPlanContext {
   partySize: number
@@ -80,11 +94,49 @@ export function parseBeatPlan(raw: unknown, ctx: BeatPlanContext): BeatParseResu
   const goals = goalsRaw.filter((g): g is string => typeof g === 'string' && g.trim().length > 0).slice(0, 4)
   if (goals.length === 0) errors.push('beat.goals: expected 1-4 player-facing situations')
 
+  // Declared local atoms (Phase 1): the planner names every new atom it wants, code registers
+  // them. Same cap as registration - a parse that accepts more than registration will keep
+  // lets exit validation bless an atom registration then rejects (review, 2026-07-22).
+  const ATOM_KINDS = ['flag', 'event'] as const
+  const localAtoms: AtomProposal[] = (Array.isArray(beat.new_local_atoms) ? beat.new_local_atoms : [])
+    .slice(0, MAX_LOCAL_ATOMS_PER_BEAT)
+    .flatMap((a) => {
+      if (typeof a !== 'object' || a === null) return []
+      const atom = a as Record<string, unknown>
+      const kind = ATOM_KINDS.find((k) => k === atom.kind)
+      if (!kind || typeof atom.name !== 'string' || !atom.name.trim()) return []
+      return [{ name: atom.name.trim(), kind }]
+    })
+
   let exitConditions: Json = null
   if (beat.exit_conditions != null) {
-    const problems = validatePredicate(beat.exit_conditions)
+    // Coerce before validating. A bare {"flag":"x"} is unambiguous in a beat exit - eq:false
+    // is unsatisfiable by writing atoms, so "true" is the only reading that means anything -
+    // yet hard-failing it cost the WHOLE beat, which then degraded to a null-encounter
+    // fallback the party cannot play (live 2026-07-23: 2 beat_planner_failures in one run,
+    // both "a flag atom needs eq"). The guardrails repair what they can and only fail on what
+    // they genuinely cannot read.
+    const coerced = coercePredicateEq(beat.exit_conditions)
+    const problems = validatePredicate(coerced)
     if (problems.length > 0) errors.push(...problems.map((p) => `beat.exit_conditions: ${p}`))
-    else exitConditions = beat.exit_conditions as Json
+    else exitConditions = coerced as Json
+  }
+  // Exit atoms must be declared or authored - undeclared invention is the drift that produced
+  // "found_expedition_journal" vs the objective's "lost_expedition_journal_found" (live
+  // 2026-07-22). Canonical comparison, so case/punctuation variants of a declared name pass.
+  if (exitConditions != null) {
+    const known = new Set([
+      ...(ctx.milestones ?? []).map((m) => canonicalizeAtomSlug(m)),
+      ...localAtoms.map((a) => canonicalizeAtomSlug(a.name)),
+    ])
+    const undeclared = listPredicateAtomNames(exitConditions)
+      .filter((name) => !known.has(canonicalizeAtomSlug(name)))
+    if (undeclared.length > 0) {
+      errors.push(
+        `beat.exit_conditions: atoms neither declared in new_local_atoms nor from the objective ` +
+          `milestones: ${undeclared.join(', ')} - declare every local atom you exit on`,
+      )
+    }
   }
 
   const ingredientRequests: IngredientRequest[] = (Array.isArray(beat.ingredient_requests) ? beat.ingredient_requests : [])
@@ -127,26 +179,37 @@ export function parseBeatPlan(raw: unknown, ctx: BeatPlanContext): BeatParseResu
     : ''
   if (!narrationSeed) errors.push('beat.narration_seed: expected a non-empty string')
 
-  const encounter = parseEncounterSpec(beat.encounter, exitConditions, ctx.milestones ?? [], errors, dropped)
+  const encounter = parseEncounterShell(beat.encounter, errors)
+
+  // Requested cast (Phase 2). Only meaningful for social beats; the caller enforces that and
+  // the flag. Dropped softly - a missing personality is not worth failing a whole beat over.
+  const createNpcs: NpcProposal[] = (Array.isArray(beat.create_npcs) ? beat.create_npcs : [])
+    .slice(0, MAX_CREATED_NPCS_PER_BEAT)
+    .flatMap((n) => {
+      if (typeof n !== 'object' || n === null) return []
+      const npc = n as Record<string, unknown>
+      const name = typeof npc.name === 'string' ? npc.name.trim() : ''
+      if (!name) return []
+      const personality = typeof npc.personality === 'string' ? npc.personality.trim() : ''
+      return [{ name, personality, role: 'npc' as const }]
+    })
 
   if (errors.length > 0) return { ok: false, errors }
-  return { ok: true, plan: { name, goals, exitConditions, ingredientRequests, braided, narrationSeed, encounter }, dropped }
+  return {
+    ok: true,
+    plan: { name, goals, exitConditions, ingredientRequests, braided, narrationSeed, encounter, localAtoms, createNpcs },
+    dropped,
+  }
 }
 
 /**
- * The outcome-map vocabulary is the objective's authored atoms plus the atoms of this very
- * plan's exit conditions - the planner maps encounter outcomes onto the exits it just wrote.
- * Entries must be copied EXACTLY; anything else is dropped and noted (see below).
+ * Call 1 parses the encounter SHELL only (kind/label/stakes/rationale). Outcome maps moved to
+ * call 2 (parseOutcomeMaps) so they can be schema-enum'd against a menu that includes the
+ * atoms this very plan declared - the circularity that used to force free-text generation.
  */
-function parseEncounterSpec(
-  raw: unknown,
-  exitConditions: Json,
-  objectiveMilestones: string[],
-  errors: string[],
-  dropped: string[],
-): BeatEncounterSpec | null {
+function parseEncounterShell(raw: unknown, errors: string[]): BeatEncounterSpec | null {
   if (raw == null) {
-    errors.push('beat.encounter: expected an encounter spec (kind, label, stakes, outcome maps)')
+    errors.push('beat.encounter: expected an encounter spec (kind, label, stakes, rationale)')
     return null
   }
   if (typeof raw !== 'object') {
@@ -158,39 +221,6 @@ function parseEncounterSpec(
   if (!kind) errors.push(`beat.encounter.kind: expected one of ${ENCOUNTER_KINDS.join('|')}`)
   const label = typeof enc.label === 'string' && enc.label.trim() ? enc.label.trim() : ''
   if (!label) errors.push('beat.encounter.label: expected a non-empty string')
-
-  const exitAtoms = listMilestoneAtoms(exitConditions)
-  const vocabulary = new Set([...objectiveMilestones, ...exitAtoms.flags, ...exitAtoms.events, ...exitAtoms.facts])
-  // Off-vocabulary entries are DROPPED, not fatal. This parser used to be the only guardrail
-  // in the codebase that hard-failed on an unauthored claim - applyMilestones, the reveal gate,
-  // the suspicion judge and the scene ledger all drop the bad item and carry on ("the LLM
-  // proposes, the guardrails decide"). Failing here killed the whole beat over one invented
-  // sentence in on_failure, which left the loop with no active beat, which starved the scene
-  // ledger of vocabulary and stalled progression outright (live 2026-07-21).
-  const outcomes = (key: string): { kept: string[]; dropped: string[] } => {
-    const list = Array.isArray(enc[key]) ? (enc[key] as unknown[]) : []
-    const entries = list.filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
-    const kept = entries.filter((e) => vocabulary.has(e))
-    return { kept, dropped: entries.filter((e) => !vocabulary.has(e)) }
-  }
-  const success = outcomes('on_success')
-  const partial = outcomes('on_partial')
-  const failure = outcomes('on_failure')
-  const onSuccess = success.kept
-  const onPartial = partial.kept
-  // on_failure may legitimately be empty: a fail-forward that maps to no milestone is correct,
-  // and demanding one is what tempts the model to invent prose in the first place.
-  const onFailure = failure.kept
-  for (const [key, result] of [['on_success', success], ['on_partial', partial], ['on_failure', failure]] as const) {
-    for (const entry of result.dropped) {
-      dropped.push(`${key} milestone "${entry}" (not authored)`)
-    }
-  }
-  // Only this is fatal: a success that maps onto nothing cannot move the spine.
-  if (vocabulary.size > 0 && onSuccess.length === 0) {
-    errors.push('beat.encounter.on_success: expected at least one milestone from the vocabulary')
-  }
-
   if (errors.length > 0) return null
   return {
     kind: kind!,
@@ -198,8 +228,72 @@ function parseEncounterSpec(
     stakes: typeof enc.stakes === 'string' ? enc.stakes.trim() : '',
     rationale: typeof enc.rationale === 'string' ? enc.rationale.trim() : '',
     params: (enc.params ?? {}) as Json,
-    onSuccess,
-    onPartial,
-    onFailure,
+    onSuccess: [],
+    onPartial: [],
+    onFailure: [],
   }
+}
+
+/**
+ * Fills in the omitted `eq: true` on bare flag/fact atoms, recursively. Purely additive: an
+ * atom that already states its `eq` (either value) is untouched, so this can never flip a
+ * deliberate eq:false into its opposite.
+ */
+export function coercePredicateEq(predicate: unknown): unknown {
+  if (typeof predicate !== 'object' || predicate === null || Array.isArray(predicate)) return predicate
+  const p = predicate as Record<string, unknown>
+  if (Array.isArray(p.any)) return { any: p.any.map(coercePredicateEq) }
+  if (Array.isArray(p.all)) return { all: p.all.map(coercePredicateEq) }
+  const needsEq = (typeof p.flag === 'string' || typeof p.fact === 'string') &&
+    p.eq === undefined && p.in === undefined
+  return needsEq ? { ...p, eq: true } : predicate
+}
+
+/** Every atom NAME a predicate references, regardless of claimability (eq value). */
+export function listPredicateAtomNames(predicate: unknown): string[] {
+  const names = new Set<string>()
+  const walk = (node: unknown): void => {
+    if (typeof node !== 'object' || node === null || Array.isArray(node)) return
+    const p = node as Record<string, unknown>
+    if (Array.isArray(p.any)) return p.any.forEach(walk)
+    if (Array.isArray(p.all)) return p.all.forEach(walk)
+    for (const key of ['flag', 'event', 'fact'] as const) {
+      if (typeof p[key] === 'string' && p[key]) names.add(p[key] as string)
+    }
+  }
+  walk(predicate)
+  return [...names]
+}
+
+export interface OutcomeMaps {
+  onSuccess: string[]
+  onPartial: string[]
+  onFailure: string[]
+  dropped: string[]
+}
+
+/**
+ * Call 2's boundary: outcome-map entries resolve against the closed menu (registry labels).
+ * The schema enum already constrains generation; this is the belt to that suspender - and the
+ * canonical resolver means a case variant of a menu atom lands instead of dropping. Off-menu
+ * entries are DROPPED, never fatal (a beat with a thin map still beats no beat); the caller
+ * applies the deterministic spine fallback when on_success comes back empty.
+ */
+export function parseOutcomeMaps(raw: unknown, menu: readonly string[]): OutcomeMaps {
+  const result: OutcomeMaps = { onSuccess: [], onPartial: [], onFailure: [], dropped: [] }
+  if (typeof raw !== 'object' || raw === null) return result
+  const obj = raw as Record<string, unknown>
+  const read = (key: 'on_success' | 'on_partial' | 'on_failure', into: string[]) => {
+    const list = Array.isArray(obj[key]) ? (obj[key] as unknown[]) : []
+    for (const entry of list) {
+      if (typeof entry !== 'string' || !entry.trim()) continue
+      const resolution = resolveAtomText(entry, menu)
+      if (resolution.ok && !into.includes(resolution.text)) into.push(resolution.text)
+      else if (!resolution.ok) result.dropped.push(`${key} milestone "${entry}" (not on the menu)`)
+    }
+  }
+  read('on_success', result.onSuccess)
+  read('on_partial', result.onPartial)
+  read('on_failure', result.onFailure)
+  return result
 }

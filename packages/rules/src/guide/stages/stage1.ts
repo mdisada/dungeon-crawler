@@ -9,10 +9,12 @@ export function parseEntityList(c: Check, value: unknown, path: string, min: num
   const entities: EntityRef[] = []
   c.arr(value, path, min, max).forEach((raw, i) => {
     const e = c.obj(raw, `${path}[${i}]`)
-    // The registry only drives npc/location fleshing in later stages. Models routinely add a
-    // faction/item/event entry too; drop those instead of failing the whole generation.
-    const kind = e.kind === 'npc' || e.kind === 'location' ? e.kind : null
-    if (!kind) return
+    // Models routinely name a faction, force or phenomenon. Those used to be DROPPED, which
+    // left the model one bucket for them: `npc`. That is how a squad and a corrupting force
+    // ended up with life states, dispositions and staging slots (see EntityKind). They are now
+    // kept as `lore` - named and described, never materialized as an agent. Anything still
+    // unrecognized falls back to lore rather than being lost.
+    const kind: EntityRef['kind'] = e.kind === 'npc' || e.kind === 'location' ? e.kind : 'lore'
     entities.push({
       kind,
       name: c.str(e.name, `${path}[${i}].name`),
@@ -46,7 +48,11 @@ Rules:
 - Chapter arc summaries are HIDDEN DM scaffolding: concrete, spoiler-rich, stating what is really going on and how the chapter moves the meta loop.
 - Chapters must escalate; the final chapter builds to the climax WITHOUT fixing its outcome - the adventure has multiple possible endings, decided by how the players play.
 - ending_premises: 2-4 one-line sketches of genuinely different resolutions (e.g. antagonist destroyed / redeemed / victorious at a price). They must diverge on player-driven choices, not luck.
-- entities: the ENTITY REGISTRY - every named NPC and named location your premise, arc, and chapter summaries mention, each with a one-line note. If you name it in prose, it MUST be in this list (the antagonist included). Later stages are required to flesh out exactly these.
+- entities: the ENTITY REGISTRY - everything NAMED that your premise, arc, and chapter summaries mention, each with a one-line note. If you name it in prose, it MUST be in this list (the antagonist included). Choose the kind by what the thing IS:
+  - "npc" = an INDIVIDUAL PERSON the party could talk to or fight. One being with a name, a voice, and opinions.
+  - "location" = a place.
+  - "lore" = everything else named: factions, guilds, squads, orders, armies, cults ("the Iron Hand Guild", "Valerius's agents", "the lost expedition"), and forces, curses, plagues or phenomena ("the Blight", "the Murkheart"). These are real parts of the world and will be described in play - they simply are not individual people.
+  A GROUP IS NEVER AN NPC, even when the party fights it: a fight against a squad is built from creature counts, and if the party ever needs to TALK to a faction, a specific named representative gets created at that moment. A FORCE IS NEVER AN NPC: it cannot hold a conversation. Getting this wrong gives a squad or a plague a heartbeat, a mood, and a seat in conversations, which breaks the game.
 - ${shape}
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
@@ -58,7 +64,7 @@ Respond with ONLY a JSON object, no prose, in exactly this shape:
     "arc": "how the antagonist's plan advances chapter by chapter"
   },
   "ending_premises": [ "one-line ending sketch" ],
-  "entities": [ { "kind": "npc"|"location", "name": "exact name used in prose", "note": "one-line role" } ],
+  "entities": [ { "kind": "npc"|"location"|"lore", "name": "exact name used in prose", "note": "one-line role" } ],
   "chapters": [
     { "title": "short chapter title", "arc_summary": "hidden DM summary of the chapter's real events, 3-6 sentences" }
   ]

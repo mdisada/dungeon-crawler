@@ -1,4 +1,4 @@
-import { Bug, Dices, ScrollText, Swords } from 'lucide-react'
+import { Bug, BookOpen, Dices, ScrollText, Swords } from 'lucide-react'
 import { useState } from 'react'
 
 import { Tabs, TabsList, TabsPanel } from '@/components/ui/tabs'
@@ -12,6 +12,7 @@ import { useIntents } from '../hooks/use-intents'
 import { usePlay } from '../hooks/use-play-context'
 import { DebugTab } from './debug-tab'
 import { SidebarIconTab } from './sidebar-icon-tab'
+import { StoryLogTab } from './story-log-tab'
 
 /**
  * F06 SS4: objective header, tabbed sheet (Ability & Skills / Combat / Background), persistent
@@ -84,6 +85,7 @@ export function PlayerSidebar() {
                 <SidebarIconTab value="skills" label="Ability & Skills" icon={Dices} />
                 <SidebarIconTab value="combat" label="Combat" icon={Swords} />
                 <SidebarIconTab value="background" label="Background" icon={ScrollText} />
+                <SidebarIconTab value="log" label="Story log" icon={BookOpen} />
                 {showDebug && <SidebarIconTab value="debug" label="Debug" icon={Bug} />}
               </TabsList>
             </div>
@@ -96,6 +98,9 @@ export function PlayerSidebar() {
               </TabsPanel>
               <TabsPanel value="background" className="mt-0">
                 <BackgroundTab sheet={sheetState.sheet} />
+              </TabsPanel>
+              <TabsPanel value="log" className="mt-0">
+                <StoryLogTab />
               </TabsPanel>
               {showDebug && (
                 <TabsPanel value="debug" className="mt-0">

@@ -9,7 +9,7 @@ all 15 feature specs every time. Update it before ending any session (see §7).
 ## 1. Source documents — read only what the current task needs
 
 | Document | What it's for | When to read it |
-|---|---|---|
+| --- | --- | --- |
 | `MAIN-SPEC.md` | Vision, architecture (Agents/Engines/Managers/States/Memories/Tools), tech stack, data model, full feature inventory (§9), build order (§10), key risks (§11) | Once for orientation; re-read a specific section only when a cross-feature architecture question comes up |
 | `DEVELOPMENT-PLAN.md` | The BUILD -> AI-TEST -> CHECKPOINT -> GATE workflow, phase-by-phase plan, checkpoint block format, cost discipline, the "Claude Code can't do this alone" catalog | Read §1 once per session (short, governs how you work); read the relevant PHASE section when starting/continuing that phase |
 | `docs/F0X-*.md` | Full spec + acceptance criteria for one feature | Read **only** the F0X doc(s) for the feature you are actively building. Do not bulk-read all 15 — that's the token cost this file exists to avoid |
@@ -18,7 +18,7 @@ all 15 feature specs every time. Update it before ending any session (see §7).
 Feature doc index:
 
 | # | Doc | Feature |
-|---|---|---|
+| --- | --- | --- |
 | F01 | `docs/F01-auth-settings-ai-connectivity.md` | Auth, Settings & AI Connectivity |
 | F02 | `docs/F02-character-page-creator.md` | Character Page & Creator |
 | F03 | `docs/F03-adventure-creation-wizard.md` | Adventure Creation Wizard |
@@ -81,6 +81,25 @@ user tasks. Deviations (see DECISIONS): braided live resolution → Phase 7, amb
 objective completion (Adjudicator) deferred, emergent/refusal endings + holistic ending pass
 wait on F13 summaries, backstory interlocks wait on F11 personal loops.
 
+**Story-spine overhaul + climax/ending pass (2026-07-23 → 24, `docs/F08` §12 / §12.10;
+`docs/DECISIONS.md` 2026-07-23 and 2026-07-24).** F08 was rebuilt on the principle *code owns
+identity, sequencing and liveness; LLMs choose from menus and write prose*: canonical atom
+registry, two-call Beat Planner, per-turn Progress Director (one escalation ladder), route
+health, guaranteed routes, fail-forward, encounter templates, reachability gate, canon-only
+consistency. The 2026-07-24 pass added the **climax as a designated beat** (final objective,
+framed as the peak whatever its form — combat never forced), a **combat floor + ceiling** (1
+major fight guaranteed, 3 total), the **ending actually reaching the player once** (direct
+publish, atomic single-winner commit, `absent`≠`alive` selection fix), and the combat/narration
+split. Court dropped from the genre set (wrong game for armed adventurers). **Verified:**
+`packages/rules` 588/588, `story-live.mjs` 132/132 at $0, and the first natural (un-driven)
+one-shot completion on record — a heist finished with a readable arc and correct ending in 18
+turns. Session tooling: Adventure Lab invariant checkpoints (abort a dead spine), climax-aware
+autocomplete, a boot gate that fails on undefined identifiers. **Open:** natural-play *throughput*
+(objective `all`-chains are the lever, not the machinery); two backstops deployed but unseen
+firing (`combat_floor_forced`, climax full-set alignment); boss-state signals read a placeholder
+combat outcome until F09. **Still at CHECKPOINT** (`docs/CHECKPOINTS/PHASE6.md`) — Phase 6 gate
+is the user's.
+
 **Next up:** On Phase 6 PASS, PHASE 7 (F9 Combat + F11 Progression). TTS remains Phase 8.
 
 ---
@@ -121,6 +140,14 @@ wait on F13 summaries, backstory interlocks wait on F11 personal loops.
    live via `--dry-run`. Inspect results in the hosted Supabase Studio, not a local one. CI keeps
    using Docker (GitHub Actions runners have it) as the from-scratch migrations-apply-cleanly
    check — that's unaffected by this constraint. See `docs/DECISIONS.md` and `supabase/README.md`.
+7. **Story engine: code owns structure, LLMs choose from menus (2026-07-23 → 24).** The spine
+   (atoms, sequencing, liveness, the climax, the combat floor) is deterministic code; agents pick
+   from schema-enum'd menus and write prose. A prompt reword is never a fix for a structural bug.
+   Full records in `docs/DECISIONS.md` (2026-07-23 overhaul, 2026-07-24 climax/ending) and
+   `docs/F08` §12/§12.10.
+8. **Court dropped from the genre set (2026-07-24).** A pure court-intrigue premise makes an armed
+   party's weapons/races/skills inert — the wrong game for adventurers. Every premise must carry
+   a real fight; political pressure lives INSIDE the other genres, not as a whole adventure.
 
 ---
 
@@ -135,7 +162,7 @@ match MAIN-SPEC (see §3.1).
 **Worth reusing as reference when building the matching feature:**
 
 | Pattern | Where | Relevant feature |
-|---|---|---|
+| --- | --- | --- |
 | Sentence/paragraph-chunked TTS streaming, natural pauses, out-of-order buffering | `frontend/src/features/campaign-session/hooks/use-audio-chunk-player.ts`, `use-live-narration-audio.ts`, `backend/tts.py` | F12 |
 | "Transition" filler narration streamed while the real draft generates, to cover LLM latency | `backend/campaign/session_handlers.py: _stream_transition_narration`, `backend/campaign/narration.py` | F07 / F12 |
 | Branch-option chips + DM edit + auto-publish-with-countdown flow | `frontend/src/features/campaign-session/components/dm-page.tsx` | F07 §5.1 ("Narrate the next story") is the spec version of this |
@@ -151,7 +178,7 @@ matches spec but hasn't been through a CHECKPOINT/GATE) / **gated** (user has PA
 checkpoint — the only status that means "done" per `DEVELOPMENT-PLAN.md` rule zero).
 
 | # | Feature | Status | Existing reference code | Next task |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | F01 | Auth, Settings & AI Connectivity | gated | `supabase/functions/ai-proxy` (+ `ai-credit`, `worker-token`, `worker-heartbeat`), `frontend/src/features/settings/`, `frontend/src/components/navbar.tsx`, RLS migrations | Real BYOK key rotation (Vault-backed) and localStorage fallback still unwired past the settings toggle — backlog, not blocking |
 | F02 | Character Page & Creator | gated | `supabase/migrations/20260717150000_create_srd_races_backgrounds.sql`, `..._create_characters.sql`, `packages/rules/src/character/`, `frontend/src/features/characters/` | Backlog (non-blocking): Cleric skill/equipment data gap in SRD source; real image-gen quality + crop-tool feel unjudged (placeholder-mode only); no RTL tests for wizard/crop tool |
 | F03 | Adventure Creation Wizard | gated | `supabase/migrations/20260717180000_create_adventures.sql`, `frontend/src/features/adventures/` (old prototype `frontend/src/features/new-campaign/` kept as F04 reference) | Backlog (non-blocking): genre/tone preset chips deferred (F03 §7 nice-to-have) |
@@ -159,7 +186,7 @@ checkpoint — the only status that means "done" per `DEVELOPMENT-PLAN.md` rule 
 | F05 | Lobby & Session Lifecycle | gated | migrations `20260718110000-110200`, `supabase/functions/session/`, `frontend/src/features/play/` (lobby modal, join page), `supabase/seed/seed-demo-adventure.mjs`, `tests/integration/session-live.mjs` | Disconnect/auto-delay combat turns + adventure-completion unlock are Phase 5/7 work; music playback test carried to Phase 8 |
 | F06 | Adventure Page (Live Play Frontend) | gated | `frontend/src/features/play/` (3 renderers + battle map, DM/Player sidebars, `@rules/state` contract mirrored to `_shared/state`) | Input row / TTS-synced subtitles wired to F07/F12 in later phases; proposal tray scaffold dormant until Phase 10 (AI-Assist deferral) |
 | F07 | Live Orchestration Core | gated | `supabase/functions/session/` (intent/prompts/npc-dialogue/narration/proposals/agents), `packages/rules/src/play/`, migration `20260718130000`, `tests/integration/orchestration-live.mjs` | Braided intents + loop-mismatch flag land with F8 (Phase 6); DM console/proposal tray UX is Phase 10; combat verbs 409 until F09 |
-| F08 | Story & Loop System | built, ungated | `packages/rules/src/story/`, `supabase/functions/session/` (story, beats, progress, steward, story-agents), migrations `20260718150000-170000`, `tests/integration/story-live.mjs` | Awaiting Phase 6 gate. Deferred: braided live resolution (Phase 7), Adjudicator objective-completion proposals, emergent/refusal endings + holistic pass (with F13), backstory interlocks (with F11) |
+| F08 | Story & Loop System | built, ungated | `packages/rules/src/story/`, `supabase/functions/session/` (story, beats, progress, director, route-health, steward, story-agents), migrations `20260718150000-170000` + `20260723*` (story_atoms, objective outcomes, award surfaces), `tests/integration/story-live.mjs` (132), `packages/rules` (588) | Awaiting Phase 6 gate. **Rebuilt on the deterministic spine (§12) + climax/ending pass (§12.10, 2026-07-24).** Open: natural-play throughput (objective `all`-chains); 2 backstops unseen firing; boss-state signals read placeholder combat. Deferred: braided live resolution (Phase 7), emergent/refusal endings + holistic pass (with F13), backstory interlocks (with F11) |
 | F09 | Combat Engine & Tactical Map | not started | none | Everything; depends on SRD data (Phase 0) |
 | F10 | Social Encounter System | gated | `supabase/functions/session/npc-dialogue.ts`, `npc_dispositions`/`npc_interactions` tables, `frontend/src/features/play/` (input row, check prompts, openings, Story tab) | TTS deferred to Phase 8 (no provider-side voice cloning yet); multi-NPC crosstalk v1.1; interaction-memory embeddings arrive with F13 |
 | F11 | Progression System | not started | none | Everything; depends on SRD data (Phase 0) |

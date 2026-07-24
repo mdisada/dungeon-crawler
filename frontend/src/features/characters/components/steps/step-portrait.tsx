@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { Textarea } from '@/components/ui/textarea'
+import { useSession } from '@/features/auth'
+import { uploadImageReference, useImageGeneration } from '@/features/image'
+import { getAssetUrl } from '@/lib/asset-storage'
+import { useAssetUrl } from '@/hooks/use-asset-url'
 import { timeJob } from '@/lib/job-timer'
-import { editPortrait, generatePortrait } from '../../api/generate-portrait'
 import { uploadCharacterImage } from '../../api/upload-character-image'
 import { useCharacterImageUrl } from '../../hooks/use-character-image-url'
 import { TokenCropTool, type CropOutputs } from '../token-crop-tool'
@@ -27,7 +30,6 @@ function assemblePrompt(
     .join(', ')
 
   return [
-    'Full-body fantasy character portrait, standing pose, plain background, 9:16',
     race?.name,
     srdClass?.name,
     background && `${background.name} background`,
@@ -38,19 +40,9 @@ function assemblePrompt(
     .join(', ')
 }
 
-async function toDataUrl(url: string): Promise<string> {
+async function fetchBlob(url: string): Promise<Blob> {
   const res = await fetch(url)
-  const blob = await res.blob()
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = () => reject(new Error('Failed to read image'))
-    reader.readAsDataURL(blob)
-  })
-}
-
-async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
-  const res = await fetch(dataUrl)
+  if (!res.ok) throw new Error('Could not read the current image')
   return res.blob()
 }
 
@@ -69,71 +61,102 @@ export function StepPortrait({
   classes: SrdClass[]
   backgrounds: SrdBackground[]
 }) {
+  const { session } = useSession()
+  const userId = session?.user.id ?? null
+
   const race = races.find((r) => r.key === draft.raceKey)
   const srdClass = classes.find((c) => c.key === draft.classKey)
   const background = backgrounds.find((b) => b.key === draft.backgroundKey)
 
-  const [isGenerating, setIsGenerating] = useState(false)
   const [isSavingCrops, setIsSavingCrops] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
-  // The freshest full-body image as a data/placeholder URL, before it lands in Storage - also
-  // what gets fed back into image-to-image edits.
-  const [workingImage, setWorkingImage] = useState<string | null>(null)
+  // The freshest full-body image as an `assets` bucket path (or a /placeholders/... path),
+  // before its crops land in the characters bucket - also the source fed into image-to-image edits.
+  const [workingPath, setWorkingPath] = useState<string | null>(null)
   const [cropPreviews, setCropPreviews] = useState<{ token: string; avatar: string; portrait: string } | null>(null)
 
+  const { isRunning, stage, error: genError, generate, edit } = useImageGeneration()
+  const workingUrl = useAssetUrl(workingPath)
   const storedFullbodyUrl = useCharacterImageUrl(draft.images.fullbodyUrl)
-  const displayUrl = workingImage ?? storedFullbodyUrl
+  const displayUrl = workingUrl ?? storedFullbodyUrl
 
-  async function persistFullbody(imageUrl: string) {
-    // Placeholder path stays a public-asset reference; real generations go to Storage.
-    if (!characterId || imageUrl.startsWith('/')) {
-      updateDraft({ images: { ...draft.images, fullbodyUrl: imageUrl } })
+  async function persistFullbody(path: string, displayable: string | undefined) {
+    // Placeholder paths stay public-asset references; real generations get copied into the
+    // owner-scoped characters bucket so the rest of the app resolves them the usual way.
+    if (!characterId || path.startsWith('/') || !displayable) {
+      updateDraft({ images: { ...draft.images, fullbodyUrl: path } })
       return
     }
-    const blob = await dataUrlToBlob(imageUrl)
-    const { result: path } = await timeJob('upload-character-image-fullbody', () =>
+    const blob = await fetchBlob(displayable)
+    const { result: storedPath } = await timeJob('upload-character-image-fullbody', () =>
       uploadCharacterImage(characterId, 'fullbody', blob),
     )
-    updateDraft({ images: { ...draft.images, fullbodyUrl: path } })
+    updateDraft({ images: { ...draft.images, fullbodyUrl: storedPath } })
   }
 
-  async function runGeneration(fn: () => Promise<string>, label: string) {
-    setIsGenerating(true)
-    setError(null)
-    try {
-      const { result: imageUrl } = await timeJob(label, fn)
-      setWorkingImage(imageUrl)
-      setCropPreviews(null)
-      await persistFullbody(imageUrl)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Image generation failed')
-    } finally {
-      setIsGenerating(false)
-    }
+  async function runGenerate() {
+    if (!userId) return
+    const outcome = await generate({
+      userId,
+      route: 'openrouter',
+      preset: 'base_char',
+      prompt: assemblePrompt(draft, race, srdClass, background),
+    })
+    if (!outcome) return
+    setWorkingPath(outcome.storagePath)
+    setCropPreviews(null)
+    const displayable = outcome.storagePath.startsWith('/')
+      ? outcome.storagePath
+      : await getAssetUrl(outcome.storagePath)
+    await persistFullbody(outcome.storagePath, displayable)
   }
 
   // Auto-generate on first arrival: the wizard has the full description by this step, so the
   // initial portrait needs no button press (F02 review feedback).
   const autoStartedRef = useRef(false)
   useEffect(() => {
-    if (autoStartedRef.current || draft.images.fullbodyUrl || isGenerating) return
+    if (autoStartedRef.current || draft.images.fullbodyUrl || isRunning) return
     autoStartedRef.current = true
-    void runGeneration(() => generatePortrait(assemblePrompt(draft, race, srdClass, background)), 'generate-portrait')
+    void runGenerate()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot auto-start on entry
   }, [])
 
+  /** Returns an `assets` bucket path for whatever is displayed, uploading it as a reference if needed. */
+  async function currentSourcePath(): Promise<string | null> {
+    if (workingPath && !workingPath.startsWith('/')) return workingPath
+    if (!userId || !displayUrl) return null
+    const blob = await fetchBlob(displayUrl)
+    const file = new File([blob], 'source.png', { type: blob.type || 'image/png' })
+    return uploadImageReference(userId, file)
+  }
+
   async function handleEdit() {
-    if (!editText.trim() || !displayUrl) return
-    const current = displayUrl.startsWith('data:') ? displayUrl : await toDataUrl(displayUrl)
-    await runGeneration(() => editPortrait(current, editText.trim()), 'edit-portrait')
+    if (!editText.trim() || !userId) return
+    const sourcePath = await currentSourcePath()
+    if (!sourcePath) return
+    const outcome = await edit({
+      userId,
+      route: 'openrouter',
+      preset: 'base_char',
+      prompt: '',
+      sourcePath,
+      instruction: editText.trim(),
+    })
+    if (!outcome) return
+    setWorkingPath(outcome.storagePath)
+    setCropPreviews(null)
+    const displayable = outcome.storagePath.startsWith('/')
+      ? outcome.storagePath
+      : await getAssetUrl(outcome.storagePath)
+    await persistFullbody(outcome.storagePath, displayable)
     setEditText('')
   }
 
   async function handleCrops({ token, avatar, portrait }: CropOutputs) {
     if (!characterId) return
     setIsSavingCrops(true)
-    setError(null)
+    setSaveError(null)
     setCropPreviews({
       token: URL.createObjectURL(token),
       avatar: URL.createObjectURL(avatar),
@@ -154,22 +177,25 @@ export function StepPortrait({
         },
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to upload crops')
+      setSaveError(err instanceof Error ? err.message : 'Failed to upload crops')
     } finally {
       setIsSavingCrops(false)
     }
   }
 
   const cropsDone = Boolean(draft.images.tokenUrl && draft.images.avatarUrl && draft.images.portraitUrl)
+  const error = genError ?? saveError
 
   return (
     <div>
       <h2 className="mb-4 text-xl font-semibold">Portrait</h2>
 
-      {isGenerating && <p className="mb-4 text-sm text-muted-foreground">Generating portrait…</p>}
+      {isRunning && (
+        <p className="mb-4 text-sm text-muted-foreground">Generating portrait{stage ? ` (${stage})` : ''}...</p>
+      )}
       {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
 
-      {displayUrl && !isGenerating && (
+      {displayUrl && !isRunning && (
         <div className="flex flex-wrap gap-8">
           <div>
             <img
@@ -189,20 +215,15 @@ export function StepPortrait({
                 <button
                   type="button"
                   onClick={() => void handleEdit()}
-                  disabled={!editText.trim() || isGenerating}
+                  disabled={!editText.trim() || isRunning}
                   className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
                 >
                   Apply edit
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    void runGeneration(
-                      () => generatePortrait(assemblePrompt(draft, race, srdClass, background)),
-                      'generate-portrait',
-                    )
-                  }
-                  disabled={isGenerating}
+                  onClick={() => void runGenerate()}
+                  disabled={isRunning}
                   className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
                 >
                   Regenerate from scratch

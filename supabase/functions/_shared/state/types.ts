@@ -212,6 +212,15 @@ export interface DmSettingsState {
   nudgeMinutes?: number
   /** Stuck-hint auto-detector threshold in no-progress turns; absent = default 3. */
   hintTurns?: number
+  /** Progress Director threshold overrides (Phase 3); absent fields use the defaults. */
+  directorThresholds?: {
+    nudge?: number
+    reveal?: number
+    replanBeat?: number
+    guaranteedRoute?: number
+    failForward?: number
+    offerPressure?: number
+  }
 }
 
 export interface ReviewCandidate {
@@ -311,8 +320,20 @@ export interface DmState {
   /** Optional: absent in states persisted before Slice 2 - read via dmSettings()/pendingReview helpers. */
   settings?: DmSettingsState
   pendingReview?: PendingReviewState | null
-  /** F08 story bookkeeping (optional, absent pre-Phase 6): the off-loop mismatch streak. */
-  story?: { offLoopStreak: number }
+  /**
+   * F08 story bookkeeping (optional, absent pre-Phase 6): the off-loop mismatch streak, plus
+   * the Progress Director's per-turn counters (overhaul Phase 3 - see story/director.ts).
+   */
+  story?: {
+    offLoopStreak: number
+    director?: {
+      turnsSinceProgress: number
+      turnsOnObjective: number
+      offerPendingTurns: number
+      rung: number
+      lastRungTurn: number
+    }
+  }
   /** Hidden spec of the open encounter; null/absent when no encounter is open. */
   encounterSpec?: EncounterSpecState | null
   /**

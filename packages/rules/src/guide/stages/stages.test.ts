@@ -73,7 +73,11 @@ describe('stage 1 (chapter arcs)', () => {
     if (!result.ok) expect(result.errors[0]).toMatch(/no JSON object/)
   })
 
-  it('drops registry entities whose kind is not npc/location instead of failing', () => {
+  it('KEEPS a faction as lore instead of dropping it (2026-07-23)', () => {
+    // Dropping these left the model exactly two buckets - npc and location - so a faction or a
+    // force had to be authored as a PERSON. That is how "Valerius's Agents" got a life state
+    // and a disposition, and how an adventure whose only two "NPCs" were a dead group and an
+    // absent force ended up unwinnable. Kept as lore they are named and described, never staged.
     const withFaction = STAGE1_RESPONSE.replace(
       '"entities": [',
       '"entities": [\n    { "kind": "faction", "name": "The Salvagers", "note": "the cult" },',
@@ -81,8 +85,22 @@ describe('stage 1 (chapter arcs)', () => {
     const result = parseStage1(withFaction, SEED)
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.data.metaLoop.entities?.map((e) => e.kind)).not.toContain('faction')
-    expect(result.data.metaLoop.entities?.map((e) => e.name)).not.toContain('The Salvagers')
+    const salvagers = result.data.metaLoop.entities?.find((e) => e.name === 'The Salvagers')
+    expect(salvagers).toBeDefined()
+    expect(salvagers?.kind).toBe('lore')
+    // Critically: it did NOT become a person.
+    expect(salvagers?.kind).not.toBe('npc')
+  })
+
+  it('an explicit lore entity round-trips', () => {
+    const withLore = STAGE1_RESPONSE.replace(
+      '"entities": [',
+      '"entities": [\n    { "kind": "lore", "name": "The Blight", "note": "the spreading corruption" },',
+    )
+    const result = parseStage1(withLore, SEED)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.metaLoop.entities?.find((e) => e.name === 'The Blight')?.kind).toBe('lore')
   })
 })
 
@@ -309,13 +327,29 @@ describe('stage 4 (ingredients + coop sets)', () => {
     expect(result.data.warnings.some((w) => w.includes(coopKey) && w.includes('demoted'))).toBe(true)
   })
 
-  it('rejects a response missing a required registry entity (F04 SS2.1)', () => {
-    // Drop Harbormaster Quill from the NPC rows; he is a required entity.
+  it('an unmade required PERSON is reclassified as lore, not a stage failure', () => {
+    // Drop Harbormaster Quill from the NPC rows; he is a required entity. Stage 4 declining to
+    // make a person is now read as "stage 1 mis-filed a group", because that is what it has
+    // meant every time it happened live - and failing the stage instead deadlocked generation.
     const missing = JSON.parse(STAGE4_RESPONSE)
     missing.npcs = missing.npcs.filter((n: { name: string }) => n.name !== 'Harbormaster Quill')
+    // ...and the clue placed on him, or the dangling placement ref fails the stage for an
+    // unrelated (and correct) reason, which would make this test prove nothing.
+    missing.ingredients = missing.ingredients.filter(
+      (i: { placement?: { npc_key?: string } }) => i.placement?.npc_key !== 'npc:harbormaster-quill')
+    const result = parseStage4(JSON.stringify(missing), STAGE4_CONTEXT)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.reclassifyAsLore).toContain('Harbormaster Quill')
+      expect(result.data.warnings.join(' ')).toContain('Harbormaster Quill')
+    }
+  })
+
+  it('but an unmade required PLACE still fails the stage', () => {
+    const missing = JSON.parse(STAGE4_RESPONSE)
+    missing.locations = []
     const result = parseStage4(JSON.stringify(missing), STAGE4_CONTEXT)
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.errors.some((e) => e.includes('Harbormaster Quill'))).toBe(true)
   })
 })
 
@@ -327,7 +361,7 @@ describe('entity coverage (SS2.1)', () => {
   })
 
   it('reports every uncovered required entity by name and kind', () => {
-    const errors = validateEntityCoverage(
+    const { errors, reclassifyAsLore } = validateEntityCoverage(
       [
         { kind: 'npc', name: 'Xyloth', note: 'lich' },
         { kind: 'location', name: 'Mount Cinderpeak', note: 'volcano' },
@@ -335,8 +369,9 @@ describe('entity coverage (SS2.1)', () => {
       ['Some Other NPC'],
       ['Mount Cinderpeak Summit'],
     )
-    expect(errors).toHaveLength(1)
-    expect(errors[0]).toContain('Xyloth')
+    // The location matched leniently; the missing NPC is a reclassification, not an error.
+    expect(errors).toHaveLength(0)
+    expect(reclassifyAsLore.map((e) => e.name)).toEqual(['Xyloth'])
   })
 })
 
@@ -835,5 +870,49 @@ describe('stage 4 established-entity contract', () => {
   it('says nothing about existing entities in the first chapter', () => {
     const { user } = buildStage4Prompt({ ...STAGE4_CONTEXT, existingNpcs: [], existingLocations: [] })
     expect(user).not.toContain('never author anything that contradicts it')
+  })
+})
+
+describe('lore entities are context, not rows (2026-07-23)', () => {
+  it('does NOT demand a row for a faction or a force', () => {
+    // Before this, the coverage contract fell through to the location pool for any non-npc
+    // kind, so "the Iron Hand Guild" had to be materialized - and the only bucket for a group
+    // was the npcs table.
+    const errors = validateEntityCoverage(
+      [
+        { kind: 'lore', name: 'The Iron Hand Guild', note: 'the smuggling ring' },
+        { kind: 'lore', name: 'The Blight', note: 'the spreading corruption' },
+      ],
+      [], [],
+    ).errors
+    expect(errors).toEqual([])
+  })
+
+  it('demands rows for places, and reclassifies unmade people as lore', () => {
+    // The deadlock this replaces (live 2026-07-23, The Tidewater Vault): stage 1 filed
+    // "Silver Scale Guild guards" as an npc, stage 4 refused to make a group into a person,
+    // the contract demanded the row anyway, and generation died after four retries.
+    const { errors, reclassifyAsLore } = validateEntityCoverage(
+      [
+        { kind: 'npc', name: 'Sereth Vane', note: 'the harbormistress' },
+        { kind: 'location', name: 'The Quay', note: 'the harbor' },
+      ],
+      [], [],
+    )
+    expect(errors).toHaveLength(1)
+    expect(errors.join(' ')).toContain('The Quay')
+    expect(reclassifyAsLore.map((e) => e.name)).toEqual(['Sereth Vane'])
+  })
+
+  it('a mixed registry only requires the materializing kinds', () => {
+    const { errors, reclassifyAsLore } = validateEntityCoverage(
+      [
+        { kind: 'npc', name: 'Sereth Vane', note: 'the harbormistress' },
+        { kind: 'lore', name: "Valerius's Agents", note: 'the squad hunting the witness' },
+      ],
+      ['Sereth Vane'], [],
+    )
+    expect(errors).toEqual([])
+    expect(reclassifyAsLore).toEqual([])
   })
 })

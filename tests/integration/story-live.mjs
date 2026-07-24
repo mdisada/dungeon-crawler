@@ -192,6 +192,11 @@ async function main() {
     giver_npc_id: maren.id, is_entry: true,
     reward: { gold_floor: 50, gold_ceiling: 100, extras: [] },
     stakes: 'The village fades, one dreamer at a time.',
+    // A DEADLINE, deliberately. Without one this fixture never reached the branch that starts a
+    // quest clock on acceptance - so the suite's 130 assertions all passed while acceptOffer was
+    // throwing a ReferenceError on every real adventure that had one (run e7711f6e, 2026-07-23:
+    // 100 turns, 0 objectives). A fixture that avoids the interesting path tests nothing.
+    deadline: { days: 8 },
     objective_ids: [objective.id],
   })
 
@@ -274,6 +279,12 @@ async function main() {
   const [objRow1] = await serviceRest('GET', `objectives?id=eq.${objective.id}&select=reveal_state`)
   ok('objective row active in the guide', objRow1.reveal_state === 'active')
   ok('accept system line landed', state.dialogue.lines.some((l) => l.text.startsWith('Contract accepted:')))
+  const deadlineEvents = await eventsOf(advId, 'deadline_started')
+  ok('accepting a contract with a deadline starts its clock',
+    deadlineEvents.length === 1 && deadlineEvents[0].payload.days === 8, deadlineEvents)
+  ok('the clock is in state, due 8 days out',
+    (state.dm?.story?.deadlines ?? []).some((d) => d.contractId === contract.id && d.dueDay === state.scene.day + 8),
+    state.dm?.story?.deadlines)
   const [loopRow] = await serviceRest('GET', `core_loops?adventure_id=eq.${advId}&select=id,type,status,custom_label`)
   ok('core loop pushed and active', loopRow && loopRow.status === 'active' && loopRow.custom_label === 'Escort Maren to the coast', loopRow)
   const acceptedOfferId = state.objectives.quests[0].id

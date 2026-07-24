@@ -2,8 +2,11 @@
 // cross-chapter entity reuse, and the handle digests stages 6/7 address entities with.
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
+import { minimalSatisfyingAtoms } from '../_shared/guide/guaranteed-route.ts'
 import type { AdventureSeed, MetaLoop } from '../_shared/guide/types.ts'
 import type { GuideDigest } from '../_shared/guide/stages/stage6.ts'
+import { canonicalizeAtomSlug, listMilestoneAtoms } from '../_shared/story/index.ts'
+import type { Json } from '../_shared/state/index.ts'
 
 export interface AdventureRow {
   id: string
@@ -137,6 +140,102 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
 
 export function assertOk(error: { message: string } | null, what: string): void {
   if (error) throw new Error(`${what}: ${error.message}`)
+}
+
+/**
+ * Recomputes the spine half of the atom registry from ALL current objective predicates
+ * (overhaul Phase 1). Idempotent by design - runs after any stage that authors or repairs
+ * completion_predicates (stage 3 per chapter, stage 8 as the final authoritative pass, and
+ * the editor's regen apply), so the registry never drifts from what evaluation actually reads.
+ * First slug wins on collision: two objectives sharing an atom is legitimate reuse.
+ */
+export async function syncSpineAtoms(db: SupabaseClient, adventureId: string): Promise<void> {
+  const { data, error } = await db
+    .from('objectives')
+    .select('id, completion_predicates')
+    .eq('adventure_id', adventureId)
+  assertOk(error, 'story_atoms objectives load failed')
+  const rows: Record<string, unknown>[] = []
+  const seen = new Set<string>()
+  for (const objective of (data ?? []) as { id: string; completion_predicates: unknown }[]) {
+    const atoms = listMilestoneAtoms(objective.completion_predicates)
+    const push = (label: string, kind: string) => {
+      const slug = canonicalizeAtomSlug(label)
+      if (!slug || seen.has(slug)) return
+      seen.add(slug)
+      rows.push({
+        adventure_id: adventureId, slug, kind, scope: 'spine', label,
+        source_table: 'objectives', source_id: objective.id,
+      })
+    }
+    atoms.flags.forEach((f) => push(f, 'flag'))
+    atoms.events.forEach((e) => push(e, 'event'))
+    atoms.facts.forEach((f) => push(f, 'fact'))
+  }
+  const { error: wipeError } = await db
+    .from('story_atoms')
+    .delete()
+    .eq('adventure_id', adventureId)
+    .eq('source_table', 'objectives')
+  assertOk(wipeError, 'story_atoms wipe failed')
+  if (rows.length > 0) {
+    // Local atoms registered by earlier sessions may already hold a slug a repaired predicate
+    // now claims - upsert on the (adventure_id, slug) key keeps the registry consistent
+    // rather than failing the stage over legitimate reuse.
+    const { error: insertError } = await db
+      .from('story_atoms')
+      .upsert(rows, { onConflict: 'adventure_id,slug', ignoreDuplicates: true })
+    assertOk(insertError, 'story_atoms insert failed')
+  }
+
+  await resyncAwardAtoms(db, adventureId)
+}
+
+/**
+ * Re-derive `encounters.outcome_atoms` from the objectives they serve.
+ *
+ * Stage 5 derives them from the predicate rather than asking a model, precisely so they cannot
+ * drift - but it derives them ONCE, and stage 7's repair loop rewrites predicates afterwards.
+ * The registry is re-synced to the repaired predicate (above) and the awards were not, so the
+ * two disagreed by exactly the edit stage 7 made. Live 2026-07-23: the encounter awarded
+ * `crimson_hand_ambush_survived` while the objective had become `crimson_hand_ambushed_survived`
+ * - one letter - and the reachability lint duly reported an orphan award and a thin route.
+ *
+ * Same class as the rest of today's bugs: a DERIVED value whose source changed underneath it.
+ */
+async function resyncAwardAtoms(db: SupabaseClient, adventureId: string): Promise<void> {
+  // The link runs objective -> encounter_ids (there is no objective_id on encounters).
+  const { data, error } = await db
+    .from('objectives')
+    .select('id, completion_predicates, encounter_ids')
+    .eq('adventure_id', adventureId)
+  assertOk(error, 'award atom resync load failed')
+
+  const { data: current, error: loadError } = await db
+    .from('encounters')
+    .select('id, outcome_atoms')
+    .eq('adventure_id', adventureId)
+  assertOk(loadError, 'award atom resync encounters load failed')
+  const existing = new Map(
+    ((current ?? []) as { id: string; outcome_atoms: unknown }[]).map((e) => [e.id, e.outcome_atoms]),
+  )
+  const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+
+  for (const objective of (data ?? []) as {
+    id: string; completion_predicates: unknown; encounter_ids: string[] | null
+  }[]) {
+    const ids = (objective.encounter_ids ?? []).filter((id) => existing.has(id))
+    if (ids.length === 0) continue
+    const derived = minimalSatisfyingAtoms(objective.completion_predicates)
+    if (derived === null) continue
+    const stale = ids.filter((id) => !same(derived, existing.get(id)))
+    if (stale.length === 0) continue
+    const { error: updateError } = await db
+      .from('encounters')
+      .update({ outcome_atoms: derived as unknown as Json })
+      .in('id', stale)
+    assertOk(updateError, 'award atom resync failed')
+  }
 }
 
 /**

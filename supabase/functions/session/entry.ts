@@ -9,7 +9,8 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import type { Json } from '../_shared/state/index.ts'
 import { runEntryMapper } from './agents.ts'
 import type { AgentEnv, SceneEffects } from './agents.ts'
-import { loadLoops } from './beats.ts'
+import { loadLoops, planAndOpenBeat } from './beats.ts'
+import { activeLoop } from '../_shared/story/index.ts'
 import {
   handleChallengeIntent, openSkillChallengeFromSpec, parseStoredBeatSpec, runCombatPlaceholderEncounter,
 } from './encounters.ts'
@@ -26,7 +27,6 @@ import { recordProposal } from './proposals.ts'
 import { applySceneEffects } from './scene-director.ts'
 import { openSocialEncounter } from './social-encounter.ts'
 import { runAdhocDesigner } from './story-agents.ts'
-import { activeLoop } from '../_shared/story/index.ts'
 import { noteSuspicion } from './steward.ts'
 import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
 
@@ -172,7 +172,10 @@ async function executeEntry(
   if (entry === 'offered') {
     const offered = spec!
     if (offered.kind === 'combat') {
-      await runCombatPlaceholderEncounter(service, env, sessionId, offered)
+      await runCombatPlaceholderEncounter(
+        service, env, sessionId, offered,
+        `The party commits: ${mapping.interpretation}.${sceneNote}`,
+      )
       return { status: 200, body: { ok: true, resolved: 'encounter_entered', encounter_kind: 'combat' } }
     }
     if (offered.kind === 'skill_challenge') {
@@ -207,7 +210,24 @@ async function executeEntry(
           body: { ok: true, resolved: 'encounter_entered', encounter_kind: 'social', encounter_id: encounter.id },
         }
       }
-      // No NPC resolvable: fall through to ad-hoc structure below.
+      // STILLBORN beat (Phase 2 defense-in-depth): plan-time resolution should make this
+      // unreachable, but if the cast died between planning and engaging, falling through to an
+      // ad-hoc challenge with EMPTY outcome maps is how the story became unwinnable - the beat
+      // never opened its own encounter, so it could never be "spent", so nothing re-planned it
+      // (live 2026-07-22). Force a re-plan instead: the loop gets a beat it can actually play.
+      await logEvent(service, env.adventureId, sessionId, 'incident', {
+        kind: 'beat_stillborn', label: offered.label, beat_id: beatId,
+      })
+      const loop = activeLoop(await loadLoops(service, env.adventureId))
+      if (loop) {
+        try {
+          await planAndOpenBeat(service, env, sessionId, loop.id, 'stillborn')
+          return { status: 200, body: { ok: true, resolved: 'beat_replanned', reason: 'stillborn' } }
+        } catch (err) {
+          console.error('stillborn re-plan failed', err)
+        }
+      }
+      // Re-plan unavailable: fall through to ad-hoc structure below rather than stall.
     }
     if (offered.kind === 'puzzle') {
       const encounter = await openPuzzleFromSpec(service, env, sessionId, offered)
@@ -250,7 +270,10 @@ async function executeEntry(
       onFailure: [],
     }
     if (adhocSpec.kind === 'combat') {
-      await runCombatPlaceholderEncounter(service, env, sessionId, adhocSpec)
+      await runCombatPlaceholderEncounter(
+        service, env, sessionId, adhocSpec,
+        `The party commits: ${mapping.interpretation}.${sceneNote}`,
+      )
       return { status: 200, body: { ok: true, resolved: 'adhoc_encounter', encounter_kind: 'combat' } }
     }
     const encounter = await openSkillChallengeFromSpec(service, env, sessionId, adhocSpec)

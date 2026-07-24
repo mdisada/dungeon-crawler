@@ -29,14 +29,25 @@ function holds(p: Predicate, world: WorldFacts): boolean {
   if ('all' in p) return p.all.every((branch) => holds(branch, world))
   if ('fact' in p) {
     const value = world.facts[p.fact]
-    if (value === undefined) return false
+    if (value === undefined) return 'eq' in p && p.eq === false
     if ('eq' in p && p.eq !== undefined) return scalarEq(value, p.eq)
     if ('in' in p && p.in) return p.in.some((candidate) => scalarEq(value, candidate))
     return false
   }
   if ('flag' in p) {
     const value = world.flags[p.flag]
-    return value !== undefined && scalarEq(value, p.eq)
+    // An unset flag IS false. Demanding an explicit `false` write made every "has not happened
+    // yet" clause permanently unsatisfiable, because nothing writes a flag false - applyMilestones
+    // only ever sets atoms true. "Reach Oakhaven" needed {elara_reached_oakhaven: true,
+    // eight_days_passed: false} and could therefore never complete by ANY route: authored,
+    // rescue, or adjudicated. Live 2026-07-23, it was the one objective still active when the
+    // run ended. Deadlines, "the witness is still alive", "the alarm was never raised" - every
+    // negative stake in the escort genre needs this reading.
+    //
+    // Narrow on purpose: only `eq: false` is satisfied by absence. An unset flag still does not
+    // equal true, a string, or a number.
+    if (value === undefined) return p.eq === false
+    return scalarEq(value, p.eq)
   }
   return world.events.has(p.event)
 }

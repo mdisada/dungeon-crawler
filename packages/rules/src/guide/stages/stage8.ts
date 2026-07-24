@@ -48,6 +48,7 @@ Rules:
 - Each ending gets ${SIGNALS_PER_ENDING.min}-5 trigger signals. A signal's "when" is EXACTLY one of:
   {"objective": <number from the list>, "outcome": "completed"|"failed"}
   {"npc": <number from the list>, "state": "dead"|"alive"|"allied"|"hostile"}
+    Only the INDIVIDUAL PEOPLE in the NPC list below can carry this signal, and "allied"/"hostile" mean a real person's feelings toward the party. The fate of a FORCE, a curse, a plague or a faction is NOT an npc state - "the Blight is destroyed" is an OBJECTIVE outcome (it is what the climax objective is for), and "the party gave in to the corruption" or "the guild stands with us" is a DIAL. An ending resting on a phenomenon having feelings can never fire, because nothing in play gives a phenomenon feelings.
   {"dial": "<dial key>", "gte" or "lte": <${DIAL_RANGE.min}..${DIAL_RANGE.max}>}
   Nothing else - no free-form flags or facts. "weight" is a signed nonzero number in [-5, 5] (negative = this condition argues AGAINST the ending). Use negative weights as counter-signals.
 - EVERY ending needs at least one positively-weighted OBJECTIVE signal, and it should reference the FINAL objective in the list - the climax. Dials alone must never be able to land an ending: dials describe how the party played, objectives are what they actually did.

@@ -393,7 +393,7 @@ score accumulates per ending, and at a late threshold the system commits one.
   deterministic weighted-signal scoring each state diff (argmax = leading, tie→lowest index so one
   always leads), an LLM holistic pass on chapter boundaries, gentle-pull steering into Beat
   Planner/Hook Weaver, late commitment proposal (assist: DM; Full-AI: auto only on decisive margin
-  + clean Consistency), and emergent-ending proposals. Live state (`ending_scores`,
+  - clean Consistency), and emergent-ending proposals. Live state (`ending_scores`,
   `committed_ending_id`, `endings.status` transitions) is F8's, not in F4's authored shape.
 
 **Why:** reuses the predicate engine + the proven commitment/canonization patterns rather than a
@@ -852,3 +852,349 @@ validation, types) and `features/play/` (idle sweep); seed;
   anything a repair newly broke.
 - Stage-5 encounter-budget warnings are explicitly out of scope (combat balance, not
   consistency; the F09 combat work owns that).
+
+## 2026-07-23 — Story-engine overhaul: code owns identity, sequencing and liveness
+
+**What:** A four-phase rebuild of the story spine, adding `MAIN-SPEC.md` §1.1(2a) as a first-class
+design principle and §5.1 as its engine inventory. Full implementation detail in
+`docs/F08-story-loop-system.md` §12; pipeline-side changes in `docs/F04` §4.0a.
+
+- **Phase 1 — atom registry.** New `story_atoms` table: the single naming authority for the
+  flag/event/fact strings predicates complete through. Stage 3 registers spine atoms (stage 8 and
+  objective regen re-sync); the Beat Planner split into two calls so it *declares* local atoms and
+  then maps outcomes over a schema-enum'd menu. Three divergent vocabulary windows collapsed into
+  one. DM `set_flag`/`mark_event` and the Adjudicator's `mark_event` are registry-gated.
+- **Phase 2 — plan-time stageability.** NPC liveness moved from open time to plan time; planners
+  see only stageable cast; names resolve to ids when a beat is authored; a social spec with nobody
+  stageable downgrades deterministically to a skill challenge with the same outcome maps; the
+  planner may declare `create_npcs`; stage 4 hard-fails an all-dead/absent chapter.
+- **Phase 3 — the Progress Director.** One monotonic escalation ladder running on *every* turn,
+  replacing three uncoordinated ladders. New `route-health.ts` (`healthy`/`stillborn`/`spent`/
+  `missing`) replaced `beatHasNoRouteLeft`.
+- **Phase 4 — guaranteed routes, fail-forward, templates.** Per-objective code-authored rescue
+  encounters (minimal provably-satisfying atom set); `objectives.outcome` terminal states; ending
+  scoring now reads real outcomes; a 14-shape encounter template library with required twist axes.
+
+**Why:** Paid playtest `6675274d` produced a **permanently unwinnable adventure** — the active
+objective's only route was a social encounter naming a dead collective NPC and a survivor who
+existed only in prose, so the encounter could never open, so the beat was never "spent", so
+nothing ever re-planned it. Three causes had to line up and every safety net was blind to at
+least one. The diagnosis was structural, not "the model erred": identity, sequencing and liveness
+were delegated to free text and then checked by string equality, with a cheap default model.
+
+**Trade accepted:** this moves the system *toward* the railroad end of the design axis (assessed
+~4/10, `MAIN-SPEC.md` §1.1a). The user approved the trade on the grounds that what preceded it was
+not freedom but fragility. Terminal rungs are full-AI only (assist gets DM proposals), sit at
+distant thresholds, and are kill-switch flagged. §1.1a records the backlog for raising the ceiling
+— parallel active objectives is item 1 and would change what "reachable" means for Phase 5.
+
+**Owner decisions:** fail-forward approved but full-AI only at a high threshold; turn budgets
+one-shot 30–50 / multi-chapter 80–120; an encounter template library (the user's own proposal) as
+the mitigation for generic rescue encounters.
+
+**Updated:** `MAIN-SPEC.md` §1.1, §1.1a, §4, §5.1, §6, §7.2, §9 F8, §11; `docs/F08` §12;
+`docs/F04` §4.0a; `docs/F15` §6.1–6.2.
+
+---
+
+## 2026-07-23 — Never fuzzy-match atom names (amends the Phase-1 design)
+
+**What:** Milestone-atom auto-repair is **canonical equality only** — case, punctuation,
+apostrophes, separators. Edit-distance and token-reorder matching are demoted to *suggestions*
+attached to a rejection, never applied.
+
+**Why:** The first Phase-1 implementation auto-merged near-misses. Adversarial review with
+executed repros showed this merges opposites: `guards_averted` → `guards_alerted` is distance 1;
+the entire `un-` prefix class (`door_unlocked`/`door_locked`, sealed/unsealed) is distance 2;
+token reorder flips subject and object (`party_betrayed_varga` ≠ `varga_betrayed_party`); and
+sequential atoms collide (`ward_2_broken` → `ward_1_broken`, whose predicate is *already true*,
+so the new beat exits instantly with zero play). Decisively: the Beat Planner is *instructed* to
+author success/setback **pairs**, so it manufactures antonym neighbours by design. Menus at
+generation time are the real typo defense; fuzzy repair at award time is a mis-crediting engine.
+
+**Also:** created local atoms keep the **declared** name as their label (canonicalizing labels
+broke exact matching in shadow mode — caught by the $0 suite on first deploy), and a slug
+collision across kinds (flag vs event) is a rejection, not a silent namespace fusion.
+
+**Updated:** `packages/rules/src/story/atoms.ts` module header; `docs/F08` §12.1.
+
+---
+
+## 2026-07-23 — The offer ladder must terminate (found by the Adventure Lab)
+
+**What:** After `OFFER_PRESSURE_MAX_PRESSES` (3) unanswered presses, the Director stops asking and
+**starts the story** (`forceAcceptOffer`) — mechanically a normal acceptance, narrated as events
+overtaking the party, never as scolding. Full-AI only; assist leaves the call to the DM.
+
+**Why:** A party that never accepts the entry offer has no active objective, which makes the
+*entire* objective ladder — guaranteed routes and fail-forward included — unreachable, so offer
+pressure repeated forever. Observed in a 30-turn passive lab run: 6 presses, 0 objectives, the
+adventure never began. This is the clearest instance of the general rule that every escalation
+track needs a terminal step; the objective ladder had one (fail-forward) and the offer track did
+not.
+
+**Related fixes from the same lab sweep:** offer pressure backs off (4-turn interval) instead of
+firing every turn past threshold; a bare `{"flag":"x"}` in a beat's exit conditions is coerced to
+`eq:true` rather than hard-failing the whole beat into an unplayable null-encounter fallback.
+
+**Updated:** `docs/F08` §12.5; `docs/F15` §6.1 (the Lab as the instrument that found these).
+
+---
+
+## 2026-07-23 — Boot-gate edge functions before deploying
+
+**What:** `node scripts/check-functions.mjs [name]` must be run before `supabase functions deploy`.
+It boots each function under Deno and fails on module-load errors.
+
+**Why:** `--use-api` deploys neither typecheck nor module-load the bundle. A duplicate `activeLoop`
+import in `entry.ts` deployed cleanly and every request returned `503 BOOT_ERROR` until it was
+found by hand. Type errors are deliberately non-fatal in the gate — the repo carries known
+strictness noise (`TS18047` beatRow-null, `TS2304 NegotiateStash`) that the runtime strips; only
+load failures boot-fail. Deno is installed locally at `~/.deno/bin/deno.exe`.
+
+**Updated:** `docs/F15` §6.2.
+
+---
+
+## 2026-07-23 — Phase 5: the reachability gate needs derived award surfaces, not authored ones
+
+**What:** `encounters.outcome_atoms` and `ingredients.awards_atoms` added, and a deterministic
+reachability lint (`packages/rules/src/guide/graph.ts`) now runs at the end of stage 8, immediately
+before the `guide_ready` flip. Findings land as `guide_warnings` plus a `reachability_lint` event.
+`REACHABILITY_GATE` starts at `'warn'`.
+
+**Why the derivation, not an enum:** the plan called for stage 5 to *choose* outcome atoms via a
+schema enum. It does not need to. The Encounter Designer already declares which objective each
+encounter serves, and that objective's predicate already determines the minimal atom set that
+completes it — so code computes the atoms (`minimalSatisfyingAtoms`) and no model is asked to
+re-pick them. This is MAIN-SPEC §1.1(2a) applied: the link is authored, the identity is derived.
+It is also free (no extra LLM call) and cannot drift.
+
+**Gate contents:** hard errors for an objective with no claimable atom, an objective no route can
+award and with no guaranteed route, a chapter with no living NPC (the Sunken Chapel failure), and
+an ending keyed on nonexistent objectives. Warnings for fewer than 2 authored routes (Three-Clue
+Rule — the guaranteed route is the third clue, not the first), no ending that can absorb a
+fail-forward run, and orphan award atoms.
+
+**Starts at `'warn'` deliberately:** a false hard error blocks guide generation outright, which is
+worse than the bug it prevents. Tighten to `'fail'` after a release of lab data.
+
+**Updated:** `docs/F08` §12.7a; `MAIN-SPEC.md` §7.2.
+
+---
+
+## 2026-07-23 — Phase 6: the consistency checker sees canon, never the transcript or its own prompt
+
+**What:** New `supabase/functions/session/canon.ts`. The **narrator** still receives everything
+(prompt, transcript, memories, party profiles); the **checker** now receives durable canon only —
+location/day, party roster, dead/absent roster, committed world flags.
+
+**Why:** `narration.ts` appended `The draft was instructed to: <prompt>` to the checker's facts, and
+`factSheet` put the live transcript there under "Recent lines". A narrator told to continue along a
+direction wrote exactly that, and the checker then flagged the sentence as contradicting itself
+(`claim: "two figures emerge..."`, `conflictsWith: "two figures emerge..."`). Because
+`parseConsistency` forces `ok:false` on any violation, that blocked the draft, forced a regeneration
+under a `NEVER:` constraint quoting the thing it was asked to write, and on the second failure
+published the mechanical fallback — players saw "The attempt is resolved; the outcome stands."
+
+**Also:** the Archivist's NPC life/death verdicts now require a **verbatim evidence quote** that
+must actually appear in the transcript. A false "dead" removes an NPC from staging and blocks their
+dialogue for the rest of the session; unverified claims log `npc_state_unverified` and become a DM
+proposal. Restorative `present` commits without proof — it can only widen what is possible, which is
+what keeps an arrived NPC from being locked out.
+
+**Verified:** a paid horror run (the plot shape that historically produced speaking-corpse bugs):
+0 fallback lines, 0 `consistency_double_failure`, 0 unverified NPC states, and death verdicts
+carrying real quotes ("the mother, her face frozen in a silent scream…").
+
+**Updated:** `docs/F08` §12.7b; `MAIN-SPEC.md` §4.
+
+---
+
+## 2026-07-23 — Boot gate also fails on duplicate object keys (TS1117)
+
+**What:** `scripts/check-functions.mjs` now runs `deno check` after the boot check and fails on a
+curated list of always-real type errors, currently just `TS1117` (duplicate key in an object
+literal).
+
+**Why:** a `completionPredicates: null` placeholder sat below my new `completionPredicates: <real>`
+in the same object literal. Duplicate keys are legal JS and silently keep the LAST value, so every
+encounter shipped with `outcome_atoms: null` and the reachability lint counted zero routes for
+everything. It boots fine, so the boot gate missed it; a full `deno check` would have caught it but
+is too loud to gate on (pre-existing `TS18047`/`TS2304` noise). Curating the codes gets the signal
+without the noise. Found by a paid lab run, not by tests.
+
+**Updated:** `docs/F15` §6.2.
+
+---
+
+## 2026-07-24 — Assets Lab: shared image/tts features, per-request route, storage-pointer transport
+
+**What:** New `/assets-lab` page (own `isAssetsLabUser` allowlist, combat-lab/adventure-lab
+precedent) to compare image and TTS generation across OpenRouter and the local worker. Built two
+reusable features — `frontend/src/features/image` (preset registry + generate/edit) and
+`frontend/src/features/tts` (voice profiles + synthesize) — sharing transport in
+`frontend/src/lib/asset-job.ts` (progress-aware realtime helper) and `lib/asset-storage.ts`
+(private `assets` bucket, owner-scoped, signed URLs). `step-portrait.tsx` migrated onto
+`features/image`; `characters/api/generate-portrait.ts` deleted. Voice clip list/upload/preview
+moved from `guide/api/voices.ts` to `features/tts`; guide keeps `setNarratorVoice` only. Backend
+`backend/` promoted from retired prototype to the local asset worker: `assets.py` handlers on a
+per-user `assets:{user_id}` channel, `image.py` stub generator (full transport, placeholder
+render), a second single-worker `JobQueue` isolating GPU work from campaign LLM jobs.
+
+Several documented contracts were deliberately forked:
+
+- **Route is chosen per request, not by `user_settings.provider`.** The image/tts feature APIs take
+  `route: 'openrouter' | 'local'`, so comparing routes never reroutes the rest of the app. ai-proxy
+  now 409s LOCAL_MODE only for text/embedding; image/tts reach it only when the caller already
+  chose OpenRouter.
+- **ai-proxy accepts a client `model` for image/tts, allowlisted** (`_shared/media-models.ts`,
+  `MEDIA_MODEL_ALLOWLIST` secret). Model comparison is the lab's purpose; the allowlist preserves
+  the "no arbitrary client model" guarantee. Text/embedding unchanged.
+- **Worker returns a storage pointer, not streamed chunks.** F01 §5 documented
+  `{job_id, seq, chunk}` over Realtime; broadcast can't carry image/audio bytes (~256KB ceiling).
+  Worker uploads to the `assets` bucket and broadcasts `asset-progress {stage}` / `asset-result
+  {storagePath}`.
+- **`assets:{user_id}` broadcast channels are unauthenticated** (anon key ships in the bundle).
+  Accepted for a personal dev-machine lab and documented here; the real fix is Supabase private
+  channels / RLS-authorized realtime, deferred. The worker serves one account via
+  `ASSETS_USER_ID` in `backend/.env`.
+- **Voice clips normalize client-side to 16kHz mono WAV, cropped to 15s** (no MP3-encoder
+  dependency; WAV is decoder-free for Chatterbox and safe for Voxtral). The old 3-30s hard
+  rejection in `voices.ts` becomes: 3s minimum still rejects, 30s ceiling auto-crops.
+- **OpenRouter images are 1024x1024 for every preset** (hosted models give no reliable dimension
+  control); the preset shifts the prompt only. `base_char`'s suffix carries "full body, head to
+  toe, centered" framing and `TokenCropTool`'s default crop was re-tuned for a square source. The
+  local route sends only the preset key; the worker owns resolution/workflow.
+
+**Why:** The lab exists so image/TTS generation components can be validated and then dropped into
+the wizard, NPC editor, and play loop. Slice 1 ships cloud-complete with the local half scaffolded
+(worker offline reports honestly, image render is a stub) so ComfyUI is a fill-in-the-blanks job
+on `image.py::render`.
+
+**Updated:** `docs/F01` §5 (transport + auth gap), `docs/F12` §2-4 (no jobs table; storage-pointer
+transport; preset registry; client-side clip normalization), root `CLAUDE.md` (backend paragraph:
+`backend/` now hosts the local asset worker), `supabase/functions/ai-proxy` (model override),
+new migration `20260724090000_create_assets_bucket.sql`.
+
+## 2026-07-24 — Climax as a structural beat, a combat floor, and the ending actually reaching the player
+
+A session of live playtesting (Adventure Lab, gemini-flash-lite, ~$2.3 total) drove the story
+spine from "can stall silently" to "produces a complete, correctly-resolved arc." The changes,
+and the bug each was chasing:
+
+- **The climax is a designated beat, and its form follows the story — not the genre.** When the
+  active objective is the last one left AND at least one has already resolved (an arc must exist),
+  `planAndOpenBeat` flags the beat as the climax: the beat-opening narration is framed as the
+  culmination ("pitch the stakes at their peak… whatever its form: a confrontation, a desperate
+  escape, a reckoning, a choice"), TYPE-AGNOSTIC on purpose. Forcing every story to peak on a
+  boss fight is the generic-gameplay trap — a heist climaxes on the *escape*, not a duel. The
+  planner is told the boss's name only IF this finale is about facing them.
+- **A boss combat opens ITSELF; a social/skill climax is still played.** A beat's encounter
+  normally waits for the player to commit to it (the `entry='offered'` tier bridge). For a boss
+  *fight* at the finale that meant the confrontation the whole story built toward could go
+  un-triggered if the party never phrased an attack (live: "Confronting Silas Vane" staged
+  correctly, never opened, turns ran out on the approach). So a combat climax auto-opens. A
+  social or skill climax is *meant* to be played, so it still waits.
+- **The climax's `on_success` must credit the FULL minimal satisfying set, not one atom.**
+  `beat_alignment_forced` guaranteed *at least one* objective atom — enough for an `any`
+  predicate, not for an `all` chain. A finale credited half a conjunction, its objective never
+  completed, the beat re-planned, and the climax fired four times (three boss fights, no ending).
+  The climax now appends `minimalSatisfyingAtoms(predicate)`; the combat budget doubles as a
+  loop backstop.
+- **Combat has a floor AND a ceiling: 1 major fight guaranteed, 3 total.** These are adventurers
+  — weapons, races, skills — so a story with no fight is the wrong game; but real-time combat is
+  the slowest thing at the table. `COMBAT_FLOOR=1`, `COMBAT_BUDGET=3`. A cap alone let the count
+  land 0–5 (a plague run finished with none, a heist opened with two). The floor escalates:
+  guidance past the ladder midpoint, then a hard structural force at the climax if still unmet.
+  Across every genre tested the guidance sufficed — `combat_floor_forced` never fired.
+- **Court is dropped from the genre set.** A pure court-intrigue premise ("steel settles nothing
+  here") generated coherent stories, but for armed, trained adventurers it makes weapons, races,
+  and skills inert — the wrong game. Political and social pressure still belong INSIDE the other
+  premises (the guild, the magistrate), just not as a whole adventure.
+- **The committed ending now reaches the player, once.** Publishing the climax through
+  `publishNarration` re-ran the narrator — a second heavy call at the very end of the app's
+  longest tail; when that worker hit its resource limit the ending was silently lost and the
+  story just stopped mid-scene (both committed runs did this). It now publishes the climax
+  author's finished prose DIRECTLY, guarded by the deterministic structural claim-check (a
+  dead/absent NPC speaking) rather than a fragile second LLM pass, and the commit itself is an
+  atomic single-winner claim (`.is('committed_ending_id', null)`) — three overlapping progress
+  passes had been committing and narrating the same ending three times.
+- **Combat resolution is a marker event; the narration around it is ours.** The bare "party
+  victorious (placeholder auto-resolve)" line no longer enters the transcript. Lead-in and
+  aftermath stay as real narration; the fight itself is a `combat_resolved` event — the seam the
+  F09 battle map plugs into without touching the story layer.
+- **`state:alive` means present and not dead — NOT "anything but dead".** An `absent` NPC (one
+  who left the scene) was scored as alive, so a triumph ending's "villain still alive" penalty
+  and a tragedy's reward both fired on a defeated-and-departed boss; a won heist (every objective
+  completed, manifest secured) committed a DEFEAT ending 3–2. `alive` now excludes both `dead`
+  and `absent`.
+
+**Result:** the first natural playthrough (no autocomplete) on record to both FINISH and show its
+ending — a heist, 18 turns, rising action → a tide-clocked climax (water tracked ankles → knees →
+chest-high across six narrations without contradiction) → the correct "Justice Served" conclusion,
+published once. Historical natural-completion rate before this work: 1 of 14, and that one
+committed an ending the player never saw.
+
+**Also this session (bug fixes worth noting, not standalone decisions):** NPC replies now carry a
+JSON schema so `reveals` is an enum of real ingredient ids (the agent had been returning clue
+*prose*, which the reveal gate correctly refused — clues silently dropped, objectives stalled);
+the recognition judge fires on director escalation, not only on a beat exit the stuck story can't
+produce; retrieval annotates stale memories against live NPC state ("…(since then: X has died)")
+so RAG stops feeding the narrator contradictions; player-theory canonization is gated on a player
+having actually asserted it (the NPC agent had been inventing AND granting theories); quest
+deadlines are consumed (`deadline_started`/`deadline_missed`); an expired check sweeps itself on
+the next intent (a pending prompt nobody answered had locked the table for 12 turns); the boot
+gate now fails on undefined identifiers (TS2304/TS2552) after a missing `loadState` import wasted
+a 100-turn run; the lab runner aborts on a dead-spine invariant and stops when the story commits
+an ending.
+
+**Updated:** `docs/F08` §12.10 (climax + combat floor + ending presentation), `MAIN-SPEC.md` §5.1
+(story-spine engines) + §1.1a (endings) + F8 inventory, `frontend/src/features/adventure-lab/
+types.ts` (court removed), `packages/rules/src/story/endings.ts` (+tests), `tests/lab/` (invariants,
+autocomplete, climax-aware handoff). No migration.
+
+
+---
+
+## 2026-07-24 — Voxtral TTS via OpenRouter: preset slugs, not cloning (bug fix)
+
+**What:** First real OpenRouter TTS call from the Assets Lab returned `404 Provider returned 404`.
+Diagnosed against the live API: the lab was passing a signed voice-clip URL as `payload.voice`,
+but OpenRouter's `/audio/speech` expects a **preset voice slug** (`{lang}_{name}_{style}`).
+Verified working slugs: `en_paul_{neutral,happy,sad,angry,excited}`, `fr_marie_{neutral,happy,sad}`
+(HTTP 200, valid mp3). Fixed by adding `frontend/src/features/tts/voxtral-voices.ts` (curated slug
+list + free-text), making the lab's TTS panel route-aware (preset dropdown on OpenRouter, clip
+picker on local), and making `synthesize()` throw a clear error if a clip profile is used on the
+OpenRouter route instead of silently 404ing.
+
+**Why it matters beyond the bug:** **Voxtral zero-shot cloning is not reachable through OpenRouter.**
+Cloning is a separate Mistral endpoint (`audio.voices.create`: base64 sample → `voice_id`, then
+`voice_id` in the speech call) that OpenRouter does not proxy (`/api/v1/audio/voices` → 404). So
+the F12 §4.1 assumption ("cloning uses the clip directly as the voice prompt per request") holds
+**only for the local Chatterbox path**. Cloud route = preset voices only; cloning = local worker
+only. `previewVoice` now defaults to the local route (falls back to the raw clip when no worker).
+
+**Also corrected:** OpenRouter model ids for TTS need the date suffix
+(`openai/gpt-4o-mini-tts-2025-12-15`, not `openai/gpt-4o-mini-tts`), and TTS models don't appear
+in `/api/v1/models` — they resolve via `/api/v1/models/<id>/endpoints`.
+
+**Updated:** `docs/F12` §4.1 (cloning-local-only correction) + §8 (open question resolved),
+`frontend/src/features/tts` (voxtral-voices, synthesize guard, preview default route), Assets Lab
+TTS panel.
+
+
+---
+
+## 2026-07-24 — TTS cost was always null: generation-stats lag + premature lookup
+
+**What:** TTS runs logged `cost_usd = null`. Root cause: OpenRouter's `/audio/speech` returns cost
+only via the generation-stats endpoint (`GET /generation?id=`), which 404s "not found" for ~6-15s
+after the audio finishes. `ai-proxy`'s `handleTts` fetched stats **once, immediately**, always
+inside that 404 window. Fixed: poll stats with backoff (1.5/2.5/4/6/8s) until a cost lands, wrapped
+in `EdgeRuntime.waitUntil` so the isolate isn't torn down mid-poll (same pattern as guide-pipeline
+/session). The Assets Lab cost poll was extended to 12x3s to outlast the now-later usage_log write.
+Verified: stats returns `total_cost` (e.g. 0.000608 for a short line) ~9s in. Also affects real
+narration cost tracking, not just the lab. Redeployed ai-proxy.
+
+**Updated:** `supabase/functions/ai-proxy` (handleTts), Assets Lab `use-lab-runs.ts`.

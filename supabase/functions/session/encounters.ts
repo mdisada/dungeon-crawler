@@ -200,12 +200,25 @@ export function spawnInstantiator(service: SupabaseClient, env: AgentEnv, sessio
     if (entry.kind === 'combat') {
       const frame: EncounterState = { ...newEncounter('combat', entry.label, '', { placeholder: true }), interrupted: current }
       await openEncounter(service, env.adventureId, sessionId, frame, spawnedSpec)
-      await commitDiffs(service, env.adventureId, (s) => [
-        appendLinesDiff(s, [newLine(null, null, `Combat: ${entry.label} - party victorious (placeholder auto-resolve)`)]),
-      ])
+      // Same entry beat the skill-challenge spawn below gets: an ambush the party never saw
+      // arrive reads as a cutscene, not a fight (live 2026-07-22).
+      await narrationBeat(
+        service, env, sessionId,
+        `Without warning, the world interrupts: a fight - "${entry.label}".` +
+          (current ? ` It cuts straight across the party's business with "${current.label}".` : '') +
+          ' Narrate the ambush landing - what comes at them and from where - and end on the clash ' +
+          'being joined. Do NOT resolve it or decide a winner.',
+        'Encounter entered',
+      )
+      // Resolution is the separate combat mechanic (marker event, not a narration line); the
+      // aftermath is our narration.
+      await logEvent(service, env.adventureId, sessionId, 'combat_resolved', {
+        label: entry.label, outcome: 'victory', resolver: 'placeholder',
+      })
       await resolveOpenEncounter(
         service, env, sessionId, 'full',
-        `Out of nowhere, a fight ("${entry.label}") crashed into the party - and they won decisively.`,
+        `The ambush ("${entry.label}") is over and the party won. Narrate the AFTERMATH as the ` +
+          'dust settles - not the blow-by-blow of the fight.',
       )
       return
     }
@@ -291,21 +304,49 @@ export async function openSkillChallengeFromSpec(
   return encounter
 }
 
-/** Combat stays the pre-Phase 7 placeholder: instant party victory, full tier, outcome map. */
+/**
+ * Combat stays the pre-Phase 7 placeholder: instant party victory, full tier, outcome map.
+ *
+ * `opening` is the transition INTO the fight - what the party just did, plus any travel/time the
+ * entry applied. Every other encounter kind narrates on entry (entry.ts stages an "Encounter
+ * entered" beat for skill_challenge, social and puzzle); combat alone did not, so the table cut
+ * from conversation straight to an aftermath cutscene describing enemies it never saw arrive.
+ * Live 2026-07-22, The Whispering Depths: "go through the gates" -> encounter_opened ->
+ * encounter_resolved inside 5s, and the only narration published was the guardians ALREADY
+ * shattering. Narrate the clash being JOINED before resolving it - and keep that beat when the
+ * real engine lands, because it is the bridge onto the battle map, not placeholder scaffolding.
+ */
 export async function runCombatPlaceholderEncounter(
   service: SupabaseClient,
   env: AgentEnv,
   sessionId: string,
   spec: StoredBeatSpec,
+  opening?: string,
 ): Promise<void> {
   const encounter = newEncounter('combat', spec.label, spec.stakes, { placeholder: true })
   await openEncounter(service, env.adventureId, sessionId, encounter, specState(spec))
-  await commitDiffs(service, env.adventureId, (s) => [
-    appendLinesDiff(s, [newLine(null, null, `Combat: ${spec.label} - party victorious (placeholder auto-resolve)`)]),
-  ])
+  await narrationBeat(
+    service, env, sessionId,
+    `${opening ?? 'A fight is forced on the party.'} Combat begins: "${spec.label}"` +
+      `${spec.stakes ? ` - at stake: ${spec.stakes}` : ''}. Narrate the moment it STARTS - what comes ` +
+      'at them, from where, and how the party is forced to react. End on the clash being joined. ' +
+      'Do NOT resolve the fight, decide a winner, or describe how it ends.',
+    'Encounter entered',
+  )
+  // The combat RESOLUTION is a separate mechanic (the F09 battle map; a placeholder auto-win for
+  // now). It is a marker event, NOT a narration line - the bare "party victorious (placeholder
+  // auto-resolve)" used to be appended to the transcript, dropping a mechanical stub into the
+  // middle of the prose. What belongs in OUR narration is the story AROUND the fight: the
+  // lead-in above (the clash joined) and the aftermath below. So log the outcome and let the
+  // aftermath beat carry it.
+  await logEvent(service, env.adventureId, sessionId, 'combat_resolved', {
+    label: spec.label, outcome: 'victory', resolver: 'placeholder',
+  })
   await resolveOpenEncounter(
     service, env, sessionId, 'full',
-    `A fight ("${spec.label}") broke out and the party won decisively - carry the clash and its aftermath.`,
+    `The fight ("${spec.label}") is over and the party won. Narrate the AFTERMATH - the enemy ` +
+      'defeated, what the victory cost and what it opens - as the scene settles. Do not re-narrate ' +
+      'the blow-by-blow of the fight itself.',
   )
 }
 

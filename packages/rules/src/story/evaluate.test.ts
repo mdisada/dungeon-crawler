@@ -57,3 +57,40 @@ describe('evaluatePredicate (deterministic, F08 SS9)', () => {
     expect(evaluatePredicate(null, world)).toBe(false)
   })
 })
+
+describe('an unset flag reads as false (2026-07-23)', () => {
+  const world = { facts: {}, flags: {}, events: new Set<string>() }
+
+  it('satisfies a "has not happened yet" clause', () => {
+    expect(evaluatePredicate({ flag: 'eight_days_passed', eq: false }, world)).toBe(true)
+  })
+
+  it('THE Reach Oakhaven predicate: completable once the positive half is awarded', () => {
+    // Live 2026-07-23 - this objective was still active when the run ended, because nothing
+    // writes a flag false and the negative half could therefore never hold.
+    const predicate = {
+      all: [{ flag: 'elara_reached_oakhaven', eq: true }, { flag: 'eight_days_passed', eq: false }],
+    }
+    expect(evaluatePredicate(predicate, world)).toBe(false)
+    expect(evaluatePredicate(predicate, {
+      ...world, flags: { elara_reached_oakhaven: true },
+    })).toBe(true)
+  })
+
+  it('still fails once the deadline actually passes', () => {
+    expect(evaluatePredicate({
+      all: [{ flag: 'elara_reached_oakhaven', eq: true }, { flag: 'eight_days_passed', eq: false }],
+    }, { ...world, flags: { elara_reached_oakhaven: true, eight_days_passed: true } })).toBe(false)
+  })
+
+  it('absence satisfies only eq:false - never true, a string, or a number', () => {
+    expect(evaluatePredicate({ flag: 'never_set', eq: true }, world)).toBe(false)
+    expect(evaluatePredicate({ fact: 'npc.x.status', eq: 'dead' }, world)).toBe(false)
+    expect(evaluatePredicate({ fact: 'count', eq: 0 }, world)).toBe(false)
+    expect(evaluatePredicate({ fact: 'gone', eq: false }, world)).toBe(true)
+  })
+
+  it('an unset fact matches no `in` list', () => {
+    expect(evaluatePredicate({ fact: 'npc.x.status', in: ['dead', 'absent'] }, world)).toBe(false)
+  })
+})

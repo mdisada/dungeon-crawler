@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom'
 
 import { ThemeToggle } from '@/components/ui/theme-toggle'
+import { isAdventureLabUser } from '@/features/adventure-lab'
+import { isAssetsLabUser } from '@/features/assets-lab'
 import { SignOutButton, useSession } from '@/features/auth'
 import { useAiCredit, useUserSettings, useWorkerStatus } from '@/features/settings'
 
@@ -19,38 +21,56 @@ export function Navbar() {
   const isLocalMode = state.status === 'ready' && state.settings.provider === 'local'
 
   return (
-    <header className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b py-4 sm:py-5">
-      <Link to="/" className="text-lg font-semibold tracking-tight text-foreground">
-        Dungeon Crawler
-      </Link>
-      <nav aria-label="Main" className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:gap-x-5">
-        <span className="text-sm text-muted-foreground">
-          Credit: {creditUsd === null ? '—' : `$${creditUsd.toFixed(2)}`}
-        </span>
-        {isLocalMode && (
-          <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <span
-              className={`h-2 w-2 rounded-full ${WORKER_STATUS_DOT[workerStatus ?? 'red']}`}
-              aria-hidden="true"
-            />
-            Local worker
+    <header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div className="mx-auto flex w-full max-w-[1600px] flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3 sm:px-6 lg:px-8">
+        <Link to="/" className="text-lg font-semibold tracking-tight text-foreground">
+          Dungeon Crawler
+        </Link>
+        <nav aria-label="Main" className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:gap-x-5">
+          <span className="text-sm text-muted-foreground">
+            Credit: {creditUsd === null ? '—' : `$${creditUsd.toFixed(2)}`}
           </span>
-        )}
-        <Link
-          to="/characters"
-          className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-          Characters
-        </Link>
-        <Link
-          to="/settings"
-          className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-          Settings
-        </Link>
-        {session && <SignOutButton />}
-        <ThemeToggle />
-      </nav>
+          {isLocalMode && (
+            <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <span
+                className={`h-2 w-2 rounded-full ${WORKER_STATUS_DOT[workerStatus ?? 'red']}`}
+                aria-hidden="true"
+              />
+              Local worker
+            </span>
+          )}
+          <Link
+            to="/characters"
+            className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Characters
+          </Link>
+          {isAdventureLabUser(session?.user.email) && (
+            <Link
+              to="/adventure-lab"
+              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Lab
+            </Link>
+          )}
+          {isAssetsLabUser(session?.user.email) && (
+            <Link
+              to="/assets-lab"
+              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Assets
+            </Link>
+          )}
+          <Link
+            to="/settings"
+            className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Settings
+          </Link>
+          {session && <SignOutButton />}
+          <ThemeToggle />
+        </nav>
+      </div>
     </header>
   )
 }

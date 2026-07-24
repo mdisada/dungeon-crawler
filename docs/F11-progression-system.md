@@ -23,7 +23,7 @@ All the "getting somewhere" loops: XP/leveling per SRD, loot/equipment flow, and
 
 ## 4. Renown
 
-```
+```text
 config: { thresholds: [{score, tier_name, unlocks: [ingredient_spec|flag|access]}] }
 state:  { party_score int, per_pc jsonb? }
 ```

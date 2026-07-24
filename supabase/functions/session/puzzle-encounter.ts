@@ -222,13 +222,17 @@ async function executeFailConsequence(
   }
   // spawn_encounter: the combat placeholder carries it until the Slice 6 random-encounter
   // machinery takes over spawning.
-  await runCombatPlaceholderEncounter(service, env, sessionId, {
-    kind: 'combat',
-    label: typeof params.label === 'string' && params.label.trim() ? params.label : `Drawn by the noise at ${label}`,
-    stakes: '',
-    params: {},
-    onSuccess: [],
-    onPartial: [],
-    onFailure: [],
-  })
+  await runCombatPlaceholderEncounter(
+    service, env, sessionId,
+    {
+      kind: 'combat',
+      label: typeof params.label === 'string' && params.label.trim() ? params.label : `Drawn by the noise at ${label}`,
+      stakes: '',
+      params: {},
+      onSuccess: [],
+      onPartial: [],
+      onFailure: [],
+    },
+    `The party's failure at "${label}" has drawn something to them.`,
+  )
 }

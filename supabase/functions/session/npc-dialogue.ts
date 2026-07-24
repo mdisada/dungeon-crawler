@@ -7,18 +7,24 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import {
   actionAutoAllowed, canConsumeOpening, dialogueGateActive, dmSettings,
-  effectiveDispositionDelta, filterReveals, openingDcMod, promptDeadline, socialDc,
+  effectiveDispositionDelta, filterReveals, openingDcMod, playerLines, promptDeadline, socialDc,
   SOLO_PROMPT_WINDOW_S,
 } from '../_shared/play/index.ts'
 import type { CheckResult, OpeningView, RevealCandidate } from '../_shared/play/index.ts'
 import type { GameState, Json, OpeningState, PendingReviewState, StateDiff } from '../_shared/state/index.ts'
-import { runConsistency, runNpcAgent, runReplyGists, runSocialClassifier } from './agents.ts'
+import {
+  runClaimCheck, runConsistency, runNpcAgent, runReplyGists, runSocialClassifier,
+  runTheoryGrounding,
+} from './agents.ts'
 import type { AgentEnv, NpcContext } from './agents.ts'
-import { activeLoop } from '../_shared/story/index.ts'
+import { activeLoop, addressedNpcId } from '../_shared/story/index.ts'
 import { loadLoops } from './beats.ts'
+import { buildCanon } from './canon.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { challengeCheckResolved } from './encounters.ts'
-import { directedNarrationPrompt, narrationBeat, publishNarration, stageNarrationReview } from './narration.ts'
+import {
+  directedNarrationPrompt, narrationBeat, PROSE_CLAIM_CHECK, publishNarration, stageNarrationReview,
+} from './narration.ts'
 import {
   agentContextLines, appendLinesDiff, loadPartyCharacters, newLine, partyProfileLines,
   pcLineCounts, pendingDiffs, typingDiff,
@@ -110,6 +116,17 @@ async function loadNpcBundle(
     ? (beatRow.goals as unknown[]).filter((g): g is string => typeof g === 'string')
     : []
 
+  // Terms already in state, from the offer banner and the quest journal. Both carry the exact
+  // gold; neither has ever been shown to the NPC saying the words.
+  const offerTerms = [
+    ...(state.objectives.offers ?? []).map((o) => ({
+      label: o.label, gold: o.gold, stakes: o.stakes, accepted: false,
+    })),
+    ...(state.objectives.quests ?? []).map((q) => ({
+      label: q.label, gold: q.gold, stakes: '', accepted: true,
+    })),
+  ]
+
   const lineCounts = pcLineCounts(state)
   // Personalization (2026-07-20): the NPC reacts to who each PC is, not just their name.
   const profiles = await partyProfileLines(service, await loadPartyCharacters(service, env.adventureId))
@@ -139,6 +156,7 @@ async function loadNpcBundle(
     partyProfiles: profiles,
     hooks: (hookRows ?? []).map((h) => h.hook_text as string),
     beatGoals,
+    offerTerms,
     constraint,
     direction,
   })
@@ -168,18 +186,48 @@ export async function npcReply(
 
   const npcs = [{ id: npc.id, name: npc.name }]
   const npcStates = state.dm?.facts.npcStates ?? {}
-  // NPC replies used to be checked against an EMPTY fact sheet, so scene contradictions passed
-  // ("if only I could reach the volcano" said while standing at it, seen live 2026-07-19).
-  const npcFactSheet =
-    `Location: the party and ${npc.name} are together at ${state.scene.locationName || 'an unknown place'} ` +
-    `(scene mode: ${state.scene.mode}, day ${state.scene.day}), speaking face to face.`
-  let verdict = await runConsistency(env, output.dialogue, npcs, npcStates, npcFactSheet, { draftIsNpcSpeech: true })
+  // Phase 6 rebuilt the NARRATOR's checker on canon and left this path on the old machinery,
+  // and social encounters run entirely through this one. Its whole fact sheet was a single
+  // location line, so location was the only thing an NPC could be blocked for - in an escort
+  // quest, where every useful line names the destination:
+  //
+  //   "The Assizes is referred to as the location, but the established facts state the party is
+  //    at The Capital City."
+  //
+  // Two blocks in 26 turns, both that shape (live 2026-07-23). Canon draws the line the
+  // narrator already gets: context grounds the writing, only RESTRICTIONS can be contradicted,
+  // and a violation must cite one by id and quote the draft. When a scene holds no restriction
+  // the checker is skipped outright - which also spares the most-called agent in the app.
+  const canon = await buildCanon(service, env.adventureId, state)
+  const checkOpts = { draftIsNpcSpeech: true, restrictions: canon.restrictions }
+
+  // The rebuilt prose check (narration.ts PROSE_CLAIM_CHECK), shadow-logged here too. An NPC
+  // reply is where a dead person is most likely to be handed a line: the speaker themself is
+  // already guarded structurally by draftIsNpcSpeech, but the reply can also stage someone
+  // ELSE - "Elias steps from the shadows and says..." - and nothing has ever checked that.
+  if (PROSE_CLAIM_CHECK !== 'off') {
+    const roster = canon.npcs.map((n) => ({ ...n, state: canon.npcStates[n.id] ?? 'alive' }))
+    const claimCheck = await runClaimCheck(env, output.dialogue, roster)
+    if (claimCheck.violations.length > 0) {
+      await logEvent(service, env.adventureId, sessionId, 'claim_check_shadow', {
+        enforced: false, source: 'npc_reply', npc_id: npcId,
+        violations: claimCheck.violations.map((v) => ({ name: v.name, role: v.role, state: v.state })) as unknown as Json,
+        draft: output.dialogue.slice(0, 400),
+      }).catch(() => {})
+    } else if (claimCheck.checked.length > 0) {
+      await logEvent(service, env.adventureId, sessionId, 'claim_check_clean', {
+        suspects: claimCheck.checked, source: 'npc_reply',
+      }).catch(() => {})
+    }
+  }
+
+  let verdict = await runConsistency(env, output.dialogue, npcs, npcStates, canon.text, checkOpts)
   if (!verdict.ok) {
     const constraint = verdict.violations.map((v) => `${v.claim} (${v.conflictsWith})`).join('; ')
     await logEvent(service, env.adventureId, sessionId, 'consistency_blocked', { draft: output.dialogue, violations: constraint })
     if (!env.demo) {
       output = await runNpcAgent(env, buildContext(`NEVER: ${constraint}`, direction))
-      verdict = await runConsistency(env, output.dialogue, npcs, npcStates, npcFactSheet, { draftIsNpcSpeech: true })
+      verdict = await runConsistency(env, output.dialogue, npcs, npcStates, canon.text, checkOpts)
     }
     if (env.demo || !verdict.ok) {
       await logEvent(service, env.adventureId, sessionId, 'incident', { kind: 'npc_consistency_failure', npc_id: npcId })
@@ -239,12 +287,45 @@ export async function npcReply(
       // "Make it true" surface arrives with the Phase 10 console.
       const theory = action.theory.trim()
       if (!theory) continue
+      // GATE ONE, and the one that matters: did a PLAYER propose this? F08 SS5 specifies
+      // canonization as a player-agency feature - the party theorises, the world makes it true -
+      // but the NPC Agent emits the action, so nothing stopped it inventing the theory AND
+      // granting it. Measured 2026-07-23: 3 canonizations across every paid run, none traceable
+      // to anything a player said. Code owns the menu (the party's own lines this scene), the
+      // model only points at one, and no match means no canon.
+      const menu = playerLines(state.dialogue.lines, state.players.list.map((p) => p.name))
+      const grounding = await runTheoryGrounding(env, theory, menu)
+      if (!grounding.canonize) {
+        await logEvent(service, env.adventureId, sessionId, 'canonization_ungrounded', {
+          npc_id: npcId, theory: theory.slice(0, 200), reason: grounding.reason,
+        })
+        continue
+      }
       // The retro-consistency check scans the whole registry, not just the staged NPC.
       const { data: registryNpcs } = await service.from('npcs').select('id, name').eq('adventure_id', env.adventureId)
+      // Judging whether a player's theory contradicts canon while passing NO canon ('') could
+      // only ever return ok - and in full_ai an ok verdict auto-commits it as world truth.
+      // Deliberately UNGATED, unlike the narration and dialogue paths above. The asymmetry is
+      // about what a false positive costs: silencing a narrator is expensive and invisible,
+      // while refusing to auto-canonize a player theory just routes it to the DM as a proposal,
+      // which is the safe default anyway. So this one gets a real semantic judgement against
+      // canon - what it must never get again is the empty fact sheet it used to be handed,
+      // which made every theory pass by construction.
       const theoryVerdict = await runConsistency(
-        env, theory, ((registryNpcs ?? []) as { id: string; name: string }[]), npcStates, '',
-        { draftAssertsCanon: true },
+        env, theory, ((registryNpcs ?? []) as { id: string; name: string }[]), npcStates,
+        canon.text, { draftAssertsCanon: true },
       )
+      // KNOWN-WEAK GATE (measured 2026-07-23, not yet fixed). This verdict cannot realistically
+      // come back false: canon.text always ends "RESTRICTIONS: none. Nothing in this scene can
+      // be contradicted", and the checker's system prompt classifies novel assertions as never
+      // violations. Across every paid run, 3 of 3 theories were auto-applied and none was ever
+      // blocked. Handing it canon.text instead of '' raised the floor but did not make it a gate.
+      //
+      // Left as auto ON PURPOSE. In full_ai there is no DM, so a human-mode proposal never
+      // resolves - flipping this to false does not route the theory to review, it silently
+      // deletes player-theory canonization in the only mode we ship. A permissive gate beats a
+      // dead feature. The real fix is a structural one (does a PLAYER actually assert this?) and
+      // is tracked separately; see the note in docs/F08.
       const auto = env.mode === 'full_ai' && theoryVerdict.ok
       await recordProposal(service, {
         adventureId: env.adventureId,
@@ -372,7 +453,11 @@ export async function handleSay(
   targetNpcId: string | null,
 ) {
   const state = (await loadState(service, env.adventureId)).state
-  const npcId = targetNpcId ?? state.dialogue.speakers[0]?.npcId
+  // Address the NPC the party actually named. Falls back to speakers[0] when nobody is named or
+  // two staged NPCs both are - the historical behaviour, which is only wrong when it is confident.
+  const npcId = targetNpcId ??
+    addressedNpcId(utterance.text, state.dialogue.speakers) ??
+    state.dialogue.speakers[0]?.npcId
   if (!npcId) return { status: 409, body: { error: 'No NPC in this scene' } }
   const npc = await loadNpc(service, env.adventureId, npcId)
   if (!npc) return { status: 404, body: { error: 'NPC not found' } }

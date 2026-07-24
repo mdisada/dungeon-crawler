@@ -4,9 +4,11 @@
 **Depended on by:** all features
 
 ## 1. Purpose
+
 User identity, per-user configuration, and the single gateway through which every AI call (text, image, TTS, embeddings) flows — whether served by OpenRouter or the user's local Python server.
 
 ## 2. Auth
+
 - Supabase Auth: email/password. **OAuth (Google, Discord) deferred to backlog for v1** — see
   `docs/DECISIONS.md` 2026-07-16. Because there's no OAuth identity layer as a second factor,
   protected-route/page guards carry more weight than they would otherwise — see that entry.
@@ -16,7 +18,9 @@ User identity, per-user configuration, and the single gateway through which ever
 ## 3. AI Gateway (Edge Function `ai-proxy`)
 
 ### 3.1 Design
+
 Single Supabase Edge Function that all clients call. Responsibilities:
+
 1. Verify Supabase JWT.
 2. Resolve the model for the requested `agent_role` from the caller's settings (fall back to system defaults).
 3. Route to provider: OpenRouter (default) or reject with `LOCAL_MODE` if the user has local mode active (client then goes through the Job Queue instead — §5).
@@ -24,7 +28,8 @@ Single Supabase Edge Function that all clients call. Responsibilities:
 5. Record usage into `usage_log` (fire-and-forget after stream completes).
 
 ### 3.2 API
-```
+
+```text
 POST /functions/v1/ai-proxy
 {
   "kind": "text | tts | image | embedding",
@@ -34,32 +39,37 @@ POST /functions/v1/ai-proxy
   "stream": true
 }
 ```
+
 - Server injects `model` (from role map) and `Authorization` (from edge secret `OPENROUTER_API_KEY`).
 - **Streaming validation task (build-time):** confirm OpenRouter streams Voxtral audio chunks rather than buffering. If buffered, add a second secret `MISTRAL_API_KEY` and route `kind: tts` directly to Mistral's audio endpoint. The client contract does not change.
 - Structured-output requests pass `response_format: json_schema`; the proxy retries once on parse failure before returning an error envelope.
 
 ### 3.3 Key handling
+
 - Default: platform key in edge secret. Optional per-user key: users may store *their own* OpenRouter key encrypted in `user_api_keys` (pgsodium) — still server-side, still proxied.
 - **BYO-key-in-localStorage fallback** exists only behind Settings → Advanced → "I understand this key is exposed to browser scripts" toggle; UI links to OpenRouter per-key spend limits. Not the default path.
 
 ### 3.4 Usage tracking
-```
+
+```text
 usage_log: id, user_id, adventure_id?, agent_role, model, kind,
            prompt_tokens, completion_tokens, cost_usd, latency_ms, created_at
 ```
+
 - Navbar meter: remaining OpenRouter credit (edge function `GET /ai-credit`, polls OpenRouter key endpoint, cached 60s) + session spend (sum of `usage_log` since session start, via Realtime-updated Postgres view).
 - Adventure detail shows lifetime cost per adventure.
 
 ## 4. Settings Page
 
 Sections:
+
 1. **Provider** — radio: `OpenRouter (cloud)` / `Local server`. Local shows connection state + "how to run the worker" help.
 2. **Model map** — table of agent roles → model dropdown (curated list: MiMo-V2.5, DeepSeek V4 Flash, DeepSeek V4 Pro, Gemini 2.5 FlashLite, Mistral Nemo). "Reset to defaults" button. Stored in `user_settings.model_map (jsonb)`.
 3. **Media models** — TTS model (Voxtral Mini TTS default), image model (Nano Banana 2 Lite default), embedding model (fixed: Qwen3-Embedding 8B — changing it invalidates existing vectors; show warning + "re-embed" job trigger if ever changed).
 4. **API keys** — own OpenRouter key (server-stored) management; Advanced localStorage fallback.
 5. **Audio** — default volumes (narration / music / SFX), autoplay policy note.
 
-```
+```text
 user_settings: user_id pk, provider ('openrouter'|'local'), model_map jsonb,
                tts_model, image_model, byok_local_storage boolean, updated_at
 ```
@@ -71,10 +81,21 @@ user_settings: user_id pk, provider ('openrouter'|'local'), model_map jsonb,
 - Job contract identical to OpenRouter path: the Job Queue (F12) publishes `{job_id, kind, agent_role, payload}`; worker replies on `jobs:{user_id}:results` with streamed chunks `{job_id, seq, chunk}` and terminal `{job_id, done, usage?}`.
 - v1 ships: token generation, heartbeat/indicator, and the message contract documented — no worker implementation required to launch.
 
+> **Superseded for media (2026-07-24, Assets Lab, F12):** the local asset worker returns a
+> **storage pointer, not streamed chunks** — Realtime broadcast can't carry image/audio bytes.
+> Image/TTS jobs go over a per-user `assets:{user_id}` broadcast channel; the worker uploads to
+> the private `assets` bucket and replies `asset-progress {jobId, stage}` / `asset-result
+> {jobId, storagePath|chunks|error}`. The worker token/heartbeat above is **not** what authorizes
+> that channel — the anon key ships in the client bundle, so `assets:{user_id}` is currently
+> **unauthenticated** (accepted gap for a personal dev-machine lab; real fix is Supabase private
+> channels). See `DECISIONS.md` 2026-07-24 and `docs/F12` §2-4.
+
 ## 6. Navbar (global component)
+
 - Left: app logo/nav. Right cluster: usage meter (credit remaining + session spend, click → usage popover), local-server indicator (only in local mode), profile menu.
 
 ## 7. Acceptance criteria
+
 - [ ] Unauthenticated users see only login; RLS verified by tests attempting cross-user reads.
 - [ ] A text call with `agent_role: narrator` uses the user's mapped model; changing the map changes the model on next call without redeploy.
 - [ ] Streamed narration reaches the client with first token < 2s p50.
@@ -84,5 +105,6 @@ user_settings: user_id pk, provider ('openrouter'|'local'), model_map jsonb,
 - [ ] No API key ever appears in client bundles, network payloads from the client, or localStorage (unless Advanced toggle is on).
 
 ## 8. Open questions
+
 - Rate limiting per user on the proxy (recommend: token bucket in edge function, 60 req/min default).
 - Whether adventure creators subsidize player AI costs or each player's calls bill to their own key — v1: **all AI calls in an adventure bill to the creator** (simplest; only the DM/system triggers generation anyway).

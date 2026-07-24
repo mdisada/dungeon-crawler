@@ -11,7 +11,7 @@ Transform the wizard output into a complete, structured, human-editable Adventur
 
 Runs as an orchestrated sequence of Job Queue jobs; the Guide page shows live stage progress. Each stage writes structured rows; each stage is individually re-runnable ("Regenerate" per entity or per stage).
 
-```
+```text
 Stage 1  Story Director   plot → meta loop + chapter arcs (commits chapter count within range)
                           + the global ENTITY REGISTRY: every named NPC/location the story
                           mentions, as {kind, name, note} (§2.1)
@@ -66,7 +66,7 @@ Failure handling: a stage failure pauses the pipeline with a retry button; parti
 
 ## 3. Data model
 
-```
+```text
 chapters:    id, adventure_id, index, title, arc_summary text (hidden), status,
              entities jsonb [{kind,name,note}]               -- chapter registry list (§2.1)
 scenes:      id, chapter_id, index, sketch text (hidden scaffolding)
@@ -134,6 +134,37 @@ Objectives complete via structured predicates, never encounter bindings:
 Supported atoms: `fact` (world-state path), `flag` (quest flags), `event` (event-log query, e.g. "party entered location X"), plus `any`/`all` combinators. The Adjudicator evaluates ambiguous cases (`propose_objective_completion` with evidence); deterministic atoms evaluate automatically on every state diff.
 
 **LLM strategy note (why scenes-first):** Stage 3 generates objectives *from* scene sketches so each objective carries concrete grounding (which map, which NPCs, what must be true) — this is what lets the live-play agents know how to move the story forward. Scene sketches are retained as hidden context for the Narrator/Beat Planner but are never shown to players.
+
+### 4.0a Atom registry + guaranteed routes (added 2026-07-23)
+
+Two things now happen alongside the objective insert (see `docs/F08` §12 for the full rationale):
+
+1. **Spine atoms are registered.** Every atom in a completion predicate is extracted into
+   `story_atoms` (`scope: 'spine'`, unique canonical `slug` per adventure). This is the registry
+   live play resolves *every* progression name against — the fix for a Beat Planner inventing
+   `found_expedition_journal` against an authored `lost_expedition_journal_found`. Stage 8
+   re-syncs after stage 7's repair loop may have rewritten predicates, and objective regen
+   re-syncs too, so the registry never drifts from what evaluation actually reads.
+2. **A guaranteed route is authored.** `objectives.guaranteed_route` holds a code-generated
+   rescue encounter whose `on_success` is the minimal atom set that *provably* satisfies the
+   predicate (property-tested against `evaluatePredicate`). It is the Progress Director's
+   rung-4 route and the fail-closed target for a misaligned beat. Its outcome map is generated,
+   never LLM-authored; the Encounter Designer may only skin the fiction over it.
+
+An objective whose predicate cannot be satisfied by writing atoms (e.g. an `all` chain
+containing `eq:false`) gets **no** route — deliberately, so the Phase-5 reachability lint flags
+it as an authoring bug rather than this stage papering over it.
+
+**Authoring rule (stage 3 prompt):** every objective must require NEW play. A rung the opening
+setup already satisfies — classically "find the NPC who is handing you this very quest" —
+completes the instant it is revealed, flashes up and vanishes "for no reason", and telescopes
+the ladder toward the climax. Observed live 2026-07-22 (*The Whispering Depths*): "Find Borin
+Stonehand" revealed and completed 6s apart, exposing the climax objective in scene one.
+
+**Authoring rule (stage 4):** a chapter whose NPCs are **all** dead or absent is a hard error
+into the regeneration loop. Such a chapter cannot host a social encounter and live play has no
+way to author its way out — *Below the Sunken Chapel* shipped with exactly two NPCs, one dead
+collective and one absent boss, and its only social route to the objective could never open.
 
 ## 4.1 Cooperative content generation (min_players > 1)
 

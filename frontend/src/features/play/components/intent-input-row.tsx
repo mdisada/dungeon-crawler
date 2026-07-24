@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 import { useIntents } from '../hooks/use-intents'
-import { useLineReveal } from '../hooks/use-line-reveal'
 import { usePlay } from '../hooks/use-play-context'
 import { CheckPrompt } from './check-prompt'
 
@@ -18,11 +17,11 @@ import { CheckPrompt } from './check-prompt'
  * stay presentation-only.
  */
 export function IntentInputRow() {
-  const { state, isSpectator } = usePlay()
+  const { state, isSpectator, reveal } = usePlay()
   const { myCharacterId, isBusy, error, clearError, say, requestHint } = useIntents()
   const [draft, setDraft] = useState('')
   const activeLine = state.dialogue.lines.find((l) => l.id === state.dialogue.activeLineId) ?? null
-  const { isRevealing } = useLineReveal(activeLine)
+  const { isRevealing } = reveal
 
   if (isSpectator || !myCharacterId || state.session.status !== 'active') return null
 
@@ -31,8 +30,10 @@ export function IntentInputRow() {
   // check is live - either way the input stays open. While a line is still being delivered the
   // input grays out too, so an ENABLED input always means "the table is waiting on you".
   // isBusy counts as thinking: the request is in flight before the server's typing flag can
-  // arrive, and that gap read as "stuck" in playtests.
-  const isThinking = typing || isBusy
+  // arrive, and that gap read as "stuck" in playtests. The player paces the reveal themselves
+  // now, so "the DM is thinking" only means anything once they have clicked to the end of the
+  // line - until then it would be telling them to wait for text they already have.
+  const isThinking = (typing || isBusy) && !isRevealing
   const inputBlocked = isThinking || pending != null || isRevealing
   const placeholder = isThinking
     ? 'The DM is thinking…'

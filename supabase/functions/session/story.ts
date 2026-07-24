@@ -10,17 +10,18 @@ import type { CheckResult } from '../_shared/play/index.ts'
 import type { Json, OfferBannerView, QuestJournalView, StateDiff } from '../_shared/state/index.ts'
 import {
   canReweave, canStageOffer, completeLoop, negotiatedGold, offerBanner, openingTerms,
-  parseRewardBounds, pushLoop,
+  parseDeadlineRecords, parseRewardBounds, pushLoop, scheduleDeadline,
 } from '../_shared/story/index.ts'
 import type { OfferTerms, RewardBounds } from '../_shared/story/index.ts'
 import { runOfferClassifier } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { loadLoops, persistLoops, planAndOpenBeat } from './beats.ts'
 import { narrationBeat } from './narration.ts'
-import { appendLinesDiff, newLine, pendingDiffs, typingDiff } from './orchestrate.ts'
+import { appendLinesDiff, loadPartyCharacters, newLine, pendingDiffs, typingDiff } from './orchestrate.ts'
 import type { CharacterRow } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
-import { assertOk, commitDiffs, logEvent } from './util.ts'
+import type { NegotiateStash } from './stashes.ts'
+import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
 
 export interface ContractRow {
   id: string
@@ -360,6 +361,35 @@ export async function maybeHandleOfferResponse(
   return stageNegotiation(service, env, sessionId, offer, character, text, giver)
 }
 
+/**
+ * The world makes the choice (overhaul Phase 4). A party that never answers the entry offer
+ * has no active objective, so the whole objective ladder - guaranteed routes and fail-forward
+ * included - is unreachable, and the director can only press the offer forever. Live
+ * 2026-07-23, a 30-turn passive run: 6 presses, 0 objectives, story never began.
+ *
+ * The tabletop answer is the hard move: stop asking and let events overtake them. Mechanically
+ * this is a normal acceptance (loop pushed, first objective active, first beat opened) - the
+ * narration just frames it as the situation closing around the party rather than a handshake.
+ */
+export async function forceAcceptOffer(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+): Promise<boolean> {
+  if (env.mode !== 'full_ai') return false
+  const [offer] = await offersByStatus(service, env.adventureId, ['offered'])
+  if (!offer) return false
+  const party = await loadPartyCharacters(service, env.adventureId)
+  const actor = party[0]
+  if (!actor) return false
+  const giver = (await npcNames(service, [offer.giver_npc_id ?? ''])).get(offer.giver_npc_id ?? '') ?? 'someone'
+  await logEvent(service, env.adventureId, sessionId, 'offer_forced', {
+    offer_id: offer.id, label: offer.quest_label, reason: 'unanswered - events overtook the party',
+  })
+  const result = await acceptOffer(service, env, sessionId, offer, actor, '', giver, { forced: true })
+  return result.status === 200
+}
+
 async function acceptOffer(
   service: SupabaseClient,
   env: AgentEnv,
@@ -368,6 +398,7 @@ async function acceptOffer(
   character: CharacterRow,
   text: string,
   giver: string,
+  opts?: { forced?: boolean },
 ) {
   const loops = await loadLoops(service, env.adventureId)
   const push = pushLoop(loops, { id: crypto.randomUUID(), type: 'custom', customLabel: offer.quest_label })
@@ -406,12 +437,45 @@ async function acceptOffer(
     offer_id: offer.id, core_loop_id: newLoopId, by: character.id, gold: terms.gold,
   })
 
+  // Start the clock the party just agreed to. `deadline.days` has been authored by stage 6,
+  // parsed here, and printed in the banner as a term since the beginning - with nothing
+  // anywhere consuming it. A deadline nobody enforces advertises stakes the engine cannot
+  // deliver, which is worse than having none.
+  if (offer.contract_id && terms.deadlineDays && terms.deadlineDays > 0) {
+    const current = (await loadState(service, env.adventureId)).state
+    const records = scheduleDeadline(
+      parseDeadlineRecords(current.dm?.story?.deadlines as Json),
+      {
+        contractId: offer.contract_id,
+        label: offer.quest_label,
+        dueDay: current.scene.day + terms.deadlineDays,
+        giverNpcId: offer.giver_npc_id ?? null,
+      },
+    )
+    await commitDiffs(service, env.adventureId, () => [
+      { domain: 'dm', patch: { story: { deadlines: records as unknown as Json } } },
+    ])
+    await logEvent(service, env.adventureId, sessionId, 'deadline_started', {
+      contract_id: offer.contract_id, label: offer.quest_label,
+      due_day: current.scene.day + terms.deadlineDays, days: terms.deadlineDays,
+    })
+  }
+
   const patch = await journalPatch(service, env.adventureId)
-  const accepted = `Contract accepted: ${offerBanner(offer.quest_label, giver, terms.gold)}`
+  const accepted = opts?.forced
+    ? `The matter is no longer optional: ${offerBanner(offer.quest_label, giver, terms.gold)}`
+    : `Contract accepted: ${offerBanner(offer.quest_label, giver, terms.gold)}`
   await commitDiffs(service, env.adventureId, (s) => {
     const activated = activatedObjective
     const diffs: StateDiff[] = [
-      appendLinesDiff(s, [newLine(character.name, null, text), newLine(null, null, accepted)], { typing: true }),
+      appendLinesDiff(
+        s,
+        // A forced start has no player utterance to echo - only the world's line.
+        opts?.forced
+          ? [newLine(null, null, accepted)]
+          : [newLine(character.name, null, text), newLine(null, null, accepted)],
+        { typing: true },
+      ),
       patch,
     ]
     if (activated) {
@@ -434,9 +498,13 @@ async function acceptOffer(
   // (the acceptance itself is already durable; the beat can open later via plan_beat/nudge).
   try {
     await planAndOpenBeat(
-      service, env, sessionId, newLoopId, 'quest_accepted',
-      `${character.name} just accepted ${giver}'s offer ("${offer.quest_label}", ${terms.gold} gp promised) - ` +
-        `narrate ${giver}'s reaction first.`,
+      service, env, sessionId, newLoopId, opts?.forced ? 'quest_forced' : 'quest_accepted',
+      opts?.forced
+        ? `The party never answered ${giver} about "${offer.quest_label}", so events have overtaken them - ` +
+          'narrate the situation closing around the party so they are IN it now whether they agreed or not ' +
+          '(something arrives, gives way, or is discovered). Never scold them for hesitating.'
+        : `${character.name} just accepted ${giver}'s offer ("${offer.quest_label}", ${terms.gold} gp promised) - ` +
+          `narrate ${giver}'s reaction first.`,
     )
   } catch (err) {
     console.error('beat open after acceptance failed', err)

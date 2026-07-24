@@ -4,13 +4,15 @@
 **Depended on by:** —
 
 ## 1. Purpose
+
 The same system with no human in the loop: every proposal auto-applies, and a set of conservative policies + hard guardrails keeps the story coherent and the game fair without a human safety net.
 
 ## 2. Core mechanism
+
 `approval_mode` resolves per proposal type from a policy table (not a single global flag), so trust is granular:
 
 | Proposal type | Full-AI policy |
-|---|---|
+| --- | --- |
 | narration / npc dialogue | auto after Consistency pass (mandatory, blocking) |
 | ruling (adjudication) | auto with DC clamps; `impossible` flag honored (polite refusal narration) |
 | objective_completion | **conservative predicate policy** (§3) |
@@ -25,17 +27,20 @@ The same system with no human in the loop: every proposal auto-applies, and a se
 All auto-applied proposals still write full `proposal_log` rows (`auto_applied`) — the audit trail is identical to assist mode.
 
 ## 3. Conservative objective policy
+
 - Deterministic predicate atoms: auto-complete as always.
 - Ambiguous (Adjudicator `propose_objective_completion`): require confidence ≥ 0.85 **and** at least one deterministic atom satisfied; otherwise treat as not-complete and instruct the Hook Weaver to plant one additional hook toward an unambiguous completion route.
 - Rationale: a stalled objective is recoverable; a wrongly-skipped chapter is not. Stall detector: same objective active for > 2 sessions with no predicate progress → escalate hook density + surface a gentle in-fiction nudge (NPC reminds the party of the goal).
 
 ## 4. Automated scene direction
+
 - **Scene transitions:** Scene Manager policies replace DM judgment — combat start on hostile-intent resolution or scripted encounter trigger; roleplay on approach-NPC intents; narration for travel/time-skips (Narrator with a transition seed); downtime on explicit party rest/shop intents. Ambiguity resolves toward the *less* destructive mode (roleplay over combat) with an in-fiction off-ramp ("the guards raise weapons but hold — 'last chance to explain yourselves'").
 - **Immersion:** music/background per F12 §5 tag mapping; Ken Burns backgrounds per location.
 - **Pacing:** session-start recap; Story Director invoked at scene boundaries every ~45 real minutes with a pacing check (`{assessment: fine | drag | rushed, suggestion}`) — suggestions feed the Beat Planner, never force scenes.
 - **Turn keeping:** in roleplay, if one player dominates (> 60% of intents over 15 minutes), the Narrator receives a "invite the others" seed (address a quiet PC in-fiction). Disconnects per F5 §5 (auto AI-play after 60s countdown).
 
 ## 5. v1 exclusions & fairness rails
+
 - **No dungeon puzzles** (puzzle scene mode disabled at generation time — Encounter Designer never emits `puzzle` in full-AI adventures).
 - Difficulty fixed at creation; Budget Engine still validates every generated encounter against the current party (level drift → composition adjusts within the fixed modifier set).
 - Dice fairness: all rolls public in the session log, seeded RNG, no rerolls by the AI — the AI DM cannot fudge.
@@ -43,7 +48,9 @@ All auto-applied proposals still write full `proposal_log` rows (`auto_applied`)
 - Content: adventure-level tone setting (from F3, default "standard fantasy") passed to all creative agents; safety wordings in system prompts; player "X-card" button (any player, anonymous) → immediately ends the current scene thread and pivots (logged, no discussion in-fiction).
 
 ## 6. Degradation ladder
+
 When components fail live (provider outage, repeated schema failures):
+
 1. Retry (F1/F12 policies) →
 2. Fallback model for the role (each role defines one) →
 3. Minimal-mechanical mode: engines keep running, narration degrades to structured event text ("The goblin misses. Kaelen's turn.") →
@@ -51,7 +58,9 @@ When components fail live (provider outage, repeated schema failures):
 Every rung logs an F15 incident.
 
 ## 7. Readiness gate (launch criteria for the mode)
+
 From F15 analytics over assist-mode usage:
+
 - Narration proposals: ≥ 90% accepted unedited (rolling 200)
 - Rulings: ≥ 85% accepted; zero accepted proposals later flagged as contradictions
 - Loop pivots: ≥ 80% acceptance at the ≥ 0.8 confidence band
@@ -59,6 +68,7 @@ From F15 analytics over assist-mode usage:
 Plus: 3 full internal one-shots completed in full-AI staging without a rung-3 degradation.
 
 ## 8. Acceptance criteria
+
 - [ ] Policy table drives approval_mode per type; changing a policy requires no code change (config row).
 - [ ] Ambiguous objective at 0.7 confidence does NOT complete; extra hook is planted (fixture).
 - [ ] Seeded contradiction attempt is caught → regeneration → clean output (both narration and dialogue paths).

@@ -27,7 +27,7 @@ Visual-novel-style roleplay scenes: NPC dialogue driven by the NPC Agent, social
    conversation skips checks entirely — no roll-for-everything.
 3. **NPC Agent invocation** (one call per responding NPC):
 
-```
+```text
 Input:  { npc {personality, description, faction, disposition_to_each_pc,
               interaction_memory (top-k), knowledge (linked ingredients:
               what this NPC knows/can reveal, with reveal conditions)},
@@ -46,7 +46,7 @@ Output: { dialogue: string, tone: string,
           proposed_actions?: [{type: 'join_combat'|'leave'|'give_item'|'canonize_theory', payload}] }
 ```
 
-4. **Guardrails:** `reveals` filtered server-side — an NPC cannot reveal an ingredient whose placement condition is unmet (e.g. requires successful DC 16 persuasion). Disposition deltas clamped and applied via `update_npc_disposition`. `proposed_actions` become proposals (assist) or conservative autos (full-AI: give_item/leave auto; join_combat auto only if the NPC's tactics profile allows; canonize per F8 §5).
+1. **Guardrails:** `reveals` filtered server-side — an NPC cannot reveal an ingredient whose placement condition is unmet (e.g. requires successful DC 16 persuasion). Disposition deltas clamped and applied via `update_npc_disposition`. `proposed_actions` become proposals (assist) or conservative autos (full-AI: give_item/leave auto; join_combat auto only if the NPC's tactics profile allows; canonize per F8 §5).
 2. **Broadcast + TTS:** dialogue streams to the text box; TTS fires per completed sentence with the NPC's voice profile, audio chunks stream to clients (F12). Subtitle/portrait active-speaker states follow audio playback.
 3. Consistency pass (F7 §6) runs on the dialogue draft before broadcast (fact checks only; tone is free).
 
@@ -93,7 +93,7 @@ memory (§6) + retrieval memory (F8 §9.2.5); this fix is strictly the *current*
 
 DM console "Generic NPC" (or Adjudicator flags "player is talking to an unnamed shopkeeper"):
 
-```
+```text
 Input:  { role_hint ("shopkeeper","guard"...), location, scene context }
 Output: { name, one_line_personality, disposition_default, voice: pick-from-generic-pool }
 ```

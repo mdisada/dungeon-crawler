@@ -15,7 +15,7 @@ import {
 } from '../_shared/guide/regen-entity.ts'
 import type { Json } from '../_shared/guide/types.ts'
 import { generateParsed, processNextJob } from './runner.ts'
-import { assertOk, type AdventureRow } from './util.ts'
+import { assertOk, syncSpineAtoms, type AdventureRow } from './util.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
@@ -31,7 +31,7 @@ const REGEN_TABLES: Record<string, RegenEntityType> = {
 }
 
 // Deletion order for a fresh start: leaves before parents (chapters cascade scenes/objectives).
-const WIPE_TABLES = ['guide_jobs', 'guide_warnings', 'hooks', 'ingredients', 'coop_sets', 'encounters', 'endings', 'chapters', 'npcs', 'locations']
+const WIPE_TABLES = ['guide_jobs', 'guide_warnings', 'hooks', 'ingredients', 'coop_sets', 'encounters', 'endings', 'story_atoms', 'chapters', 'npcs', 'locations']
 
 function json(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
@@ -248,6 +248,8 @@ Deno.serve(async (req) => {
         .update({ ...fields, updated_at: new Date().toISOString() })
         .eq('id', id)
       assertOk(applyError, 'regen apply failed')
+      // Objective regen may rewrite completion_predicates - keep the atom registry in step.
+      if (table === 'objectives') await syncSpineAtoms(service, adventure.id)
       return json(200, { result: 'applied', fields })
     }
 

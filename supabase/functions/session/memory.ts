@@ -7,7 +7,9 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { callEmbedding } from '../_shared/llm.ts'
+import { annotateStaleMemories } from '../_shared/story/index.ts'
 import type { AgentEnv } from './agents.ts'
+import { loadState } from './util.ts'
 
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? ''
 
@@ -65,9 +67,36 @@ export async function retrieveMemories(
       console.error('memory retrieval failed', error)
       return []
     }
-    return ((data ?? []) as { content: string }[]).map((r) => r.content)
+    const memories = ((data ?? []) as { content: string }[]).map((r) => r.content)
+    return await annotateStale(service, env, memories)
   } catch (err) {
     console.error('memory retrieval failed', err)
     return []
   }
+}
+
+/**
+ * A memory records what was true THEN, so it is never wrong - only out of date. Retrieval was
+ * handing the narrator "Elias Thorne begs you to escort him" long after Elias died, with no
+ * filter against live state: we were feeding in the contradiction and then blaming the writer
+ * for it. Deterministic, no model, and it annotates rather than suppresses - dropping the line
+ * would lose real history and fail silently.
+ */
+async function annotateStale(
+  service: SupabaseClient,
+  env: AgentEnv,
+  memories: string[],
+): Promise<string[]> {
+  if (memories.length === 0) return memories
+  const { data } = await service
+    .from('npcs')
+    .select('id, name, initial_state')
+    .eq('adventure_id', env.adventureId)
+  const rows = (data ?? []) as { id: string; name: string; initial_state: string | null }[]
+  if (rows.length === 0) return memories
+  const live = (await loadState(service, env.adventureId)).state.dm?.facts.npcStates ?? {}
+  return annotateStaleMemories(
+    memories,
+    rows.map((n) => ({ name: n.name, state: live[n.id] ?? n.initial_state ?? 'alive' })),
+  )
 }

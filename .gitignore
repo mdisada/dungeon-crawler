@@ -226,3 +226,6 @@ backend/data/
 .sql
 # Playtest run logs (paid live runs, regenerated on demand)
 tests/integration/.playtest-logs/
+
+# Adventure Lab run logs (paid simulated playthroughs, one JSONL + summary per run)
+tests/lab/logs/

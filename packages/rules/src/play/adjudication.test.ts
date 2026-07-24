@@ -162,3 +162,77 @@ describe('parseNarrationOptions', () => {
     expect(parseNarrationOptions({})).toEqual([])
   })
 })
+
+describe('parseConsistency - blocking a draft must be EARNED (2026-07-23)', () => {
+  const RESTRICTIONS = ['dead_1', 'absent_2']
+  const draft = 'Elias Thorne lets out a shallow breath, the tension draining from his shoulders.'
+
+  it('legacy mode (no gates) behaves exactly as before', () => {
+    const verdict = parseConsistency({
+      ok: false,
+      violations: [{ claim: 'anything', conflicts_with: 'anything at all' }],
+    })
+    expect(verdict.ok).toBe(false)
+    expect(verdict.violations).toHaveLength(1)
+  })
+
+  it('drops a violation citing a restriction that does not exist', () => {
+    // The live failure: the model cited the party roster - which is context, not a restriction -
+    // to block an NPC simply for existing. With a closed menu that is unrepresentable.
+    const verdict = parseConsistency({
+      ok: false,
+      violations: [{
+        claim: draft,
+        restriction_id: 'not_a_real_restriction',
+        conflicts_with: 'Party: Bram, Kestrel, Dain. Elias Thorne is not in the party.',
+      }],
+    }, { allowedIds: RESTRICTIONS, draft })
+    expect(verdict.ok).toBe(true)
+    expect(verdict.violations).toEqual([])
+  })
+
+  it('drops a violation whose quoted claim is not actually in the draft', () => {
+    const verdict = parseConsistency({
+      ok: false,
+      violations: [{
+        claim: 'The duke rose from his coffin and danced',
+        restriction_id: 'dead_1',
+        conflicts_with: 'Duke Eldrin is DEAD',
+      }],
+    }, { allowedIds: RESTRICTIONS, draft })
+    expect(verdict.ok).toBe(true)
+  })
+
+  it('KEEPS a real violation: cited restriction exists and the claim is quoted from the draft', () => {
+    const verdict = parseConsistency({
+      ok: false,
+      violations: [{
+        claim: 'Elias Thorne lets out a shallow breath',
+        restriction_id: 'dead_1',
+        conflicts_with: 'Elias Thorne is DEAD',
+      }],
+    }, { allowedIds: RESTRICTIONS, draft })
+    expect(verdict.ok).toBe(false)
+    expect(verdict.violations).toHaveLength(1)
+  })
+
+  it('tolerates quote whitespace/case drift, but not invention', () => {
+    const verdict = parseConsistency({
+      ok: false,
+      violations: [{
+        claim: '  ELIAS THORNE   lets out a shallow breath ',
+        restriction_id: 'dead_1',
+        conflicts_with: 'Elias Thorne is DEAD',
+      }],
+    }, { allowedIds: RESTRICTIONS, draft })
+    expect(verdict.ok).toBe(false)
+  })
+
+  it('a too-short claim cannot ground a block (nothing to verify)', () => {
+    const verdict = parseConsistency({
+      ok: false,
+      violations: [{ claim: 'he', restriction_id: 'dead_1', conflicts_with: 'x' }],
+    }, { allowedIds: RESTRICTIONS, draft })
+    expect(verdict.ok).toBe(true)
+  })
+})

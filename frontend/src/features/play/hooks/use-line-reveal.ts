@@ -1,16 +1,28 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 
 import type { DialogueLine } from '@rules/state'
 
-const REVEAL_INTERVAL_MS = 2200
+import { splitSentences } from '../sentences'
+
+export interface LineReveal {
+  sentences: string[]
+  /** How many sentences of the active line the player has asked for (1-based). */
+  visibleCount: number
+  /** True while the line still has sentences the player has not advanced to. */
+  isRevealing: boolean
+  advance: () => void
+}
 
 /**
- * Sentence-by-sentence reveal cadence for the active line (F06 SS3.2) - stands in for TTS
- * playback progress until F12. Consumers (scene renderers, the intent input row) stay in sync
- * because they all key off the same activeLineId change from the same broadcast.
+ * Player-paced, sentence-by-sentence delivery of the active line (F06 SS3.2), visual-novel
+ * style: the renderers show one sentence and the player clicks for the next. Lives in the play
+ * context so the renderers and the input row share one pace - `isRevealing` is what tells the
+ * input row the player has not caught up with the story yet.
+ *
+ * `advance` moving to sentence N is also the cue F12 will use to start that sentence's audio.
  */
-export function useLineReveal(active: DialogueLine | null) {
-  const sentences = active ? (active.text.match(/[^.!?]+[.!?]*\s*/g) ?? [active.text]) : []
+export function useLineReveal(active: DialogueLine | null): LineReveal {
+  const sentences = useMemo(() => (active ? splitSentences(active.text) : []), [active])
 
   // Reset on line change - render-time adjustment (react.dev "adjusting state"), not an effect.
   const [reveal, setReveal] = useState<{ lineId: string | null; count: number }>({ lineId: null, count: 0 })
@@ -18,19 +30,18 @@ export function useLineReveal(active: DialogueLine | null) {
     setReveal({ lineId: active?.id ?? null, count: sentences.length > 0 ? 1 : 0 })
   }
 
-  useEffect(() => {
-    if (!active || sentences.length <= 1) return
-    const timer = setInterval(() => {
-      setReveal((prev) =>
-        prev.lineId === active.id && prev.count < sentences.length ? { ...prev, count: prev.count + 1 } : prev,
-      )
-    }, REVEAL_INTERVAL_MS)
-    return () => clearInterval(timer)
-  }, [active, sentences.length])
+  const advance = useCallback(() => {
+    setReveal((prev) => (prev.count < sentences.length ? { ...prev, count: prev.count + 1 } : prev))
+  }, [sentences.length])
 
-  return {
-    sentences,
-    visibleCount: reveal.count,
-    isRevealing: active !== null && reveal.count < sentences.length,
-  }
+  const count = reveal.count
+  return useMemo(
+    () => ({
+      sentences,
+      visibleCount: count,
+      isRevealing: count < sentences.length,
+      advance,
+    }),
+    [sentences, count, advance],
+  )
 }

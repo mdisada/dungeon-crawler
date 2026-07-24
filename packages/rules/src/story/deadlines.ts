@@ -1,0 +1,98 @@
+// Quest deadlines (2026-07-23): the clock the guide has always authored and nothing ever read.
+//
+// `quest_contracts.deadline.days` is authored by stage 6, parsed in session/story.ts, printed in
+// the offer banner as a term the party agrees to - and then nothing anywhere consumes it. The
+// party can dawdle for any number of days past "eight days to reach the Assizes" and the world
+// never notices. A deadline nobody enforces is set dressing, and worse than none: it advertises
+// stakes the engine cannot deliver.
+//
+// This is also our weakest consistency axis by the research taxonomy. ConStory-Bench finds
+// long-form contradictions concentrate in the FACTUAL and TEMPORAL dimensions; we have spent
+// this whole overhaul hardening the factual side (atom registry, canon, claim checks, evidence
+// gates) and have done nothing temporal at all.
+//
+// Deliberately NOT auto-failing the objective when the clock runs out. Missing a deadline is a
+// consequence in the fiction - the antagonist gains, the world moves - not a silent loss of the
+// story. The Progress Director already owns retiring objectives, and it retires them for being
+// STUCK, which is a different thing from being LATE.
+
+/** A clock started when the party accepted a contract. */
+export interface DeadlineRecord {
+  contractId: string
+  label: string
+  /** scene.day on which this comes due; the miss fires once the day is PAST it. */
+  dueDay: number
+  giverNpcId: string | null
+  /** Set once the miss has fired, so a long game does not re-narrate it every single day. */
+  missed?: boolean
+}
+
+/** Records with the given contract replaced, so re-accepting cannot stack two clocks. */
+export function scheduleDeadline(
+  records: readonly DeadlineRecord[],
+  next: DeadlineRecord,
+): DeadlineRecord[] {
+  return [...records.filter((r) => r.contractId !== next.contractId), next]
+}
+
+/** Deadlines whose day has come and which have not yet been paid for. */
+export function dueDeadlines(
+  records: readonly DeadlineRecord[],
+  currentDay: number,
+): DeadlineRecord[] {
+  return records.filter((r) => !r.missed && currentDay > r.dueDay)
+}
+
+export function markMissed(
+  records: readonly DeadlineRecord[],
+  contractIds: readonly string[],
+): DeadlineRecord[] {
+  const ids = new Set(contractIds)
+  return records.map((r) => (ids.has(r.contractId) ? { ...r, missed: true } : r))
+}
+
+/** Clears a contract's clock - it completed, or the quest left the stack. */
+export function clearDeadline(
+  records: readonly DeadlineRecord[],
+  contractId: string,
+): DeadlineRecord[] {
+  return records.filter((r) => r.contractId !== contractId)
+}
+
+/**
+ * What the narrator and the NPCs should know about the clock. Only live, unmissed deadlines -
+ * a missed one has already been paid for and becomes ordinary history.
+ */
+export function deadlinePressureLines(
+  records: readonly DeadlineRecord[],
+  currentDay: number,
+): string[] {
+  return records
+    .filter((r) => !r.missed && r.dueDay >= currentDay)
+    .sort((a, b) => a.dueDay - b.dueDay)
+    .map((r) => {
+      const left = r.dueDay - currentDay
+      if (left === 0) return `${r.label}: TODAY is the last day.`
+      if (left === 1) return `${r.label}: 1 day left.`
+      return `${r.label}: ${left} days left.`
+    })
+}
+
+export function parseDeadlineRecords(raw: unknown): DeadlineRecord[] {
+  if (!Array.isArray(raw)) return []
+  const out: DeadlineRecord[] = []
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) continue
+    const r = item as Record<string, unknown>
+    if (typeof r.contractId !== 'string' || !r.contractId) continue
+    if (typeof r.dueDay !== 'number' || !Number.isFinite(r.dueDay)) continue
+    out.push({
+      contractId: r.contractId,
+      label: typeof r.label === 'string' ? r.label : 'a promise',
+      dueDay: r.dueDay,
+      giverNpcId: typeof r.giverNpcId === 'string' ? r.giverNpcId : null,
+      ...(r.missed === true ? { missed: true } : {}),
+    })
+  }
+  return out
+}

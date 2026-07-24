@@ -84,7 +84,8 @@ Rules:
   combinators: {"any": [<predicate>...]}, {"all": [<predicate>...]}
 - NEVER use "fact" atoms - live play does not write them (NPC status is tracked by internal id, not by name).
 - The cast is NOT named yet - NPCs are authored after you. So never invent placeholder identities to stand in for them ("claimant_a_arrived", "guard_b_bribed"): at play time an observer sees "Lady Isolde arrived" and has no way to know which letter she was, so that milestone can never be recognised and the objective never completes. Write each atom as something the PARTY accomplished, recognisable from the scene alone ("all_claimants_received", "passage_secured"). Where a step really is per-person, prefer ONE atom covering the set over one atom each.
-- Prefer "any" combinators that honor multiple resolutions (kill OR ally OR outwit); keep any "all" chain to at most 2 atoms.${''}
+- Prefer "any" combinators that honor multiple resolutions (kill OR ally OR outwit); keep any "all" chain to at most 2 atoms.
+- Every objective must require NEW play the party has not already done when it becomes their goal. NEVER author a rung the opening setup ALREADY satisfies - most often a "find/meet/reach" step aimed at an NPC or place the party is already with as the chapter begins. The quest-giver who hands them this quest is already found; "locate them" completes the instant it is revealed, flashes up and vanishes "for no reason", and the ladder telescopes to whatever comes next. Each rung is an obstacle still ahead of them, not a restatement of where they start.
 
 ${ctx.adventureType === 'one_shot'
   ? oneShotArcRules(ctx)

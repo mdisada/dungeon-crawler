@@ -19,8 +19,31 @@ export interface AdventureSeed {
 }
 
 /** One named entity from the story prose - the cohesion contract of F04 SS2.1. */
+/**
+ * What a named entity IS, which decides whether it becomes a row.
+ *
+ * - `npc` -> a row in `npcs`. An INDIVIDUAL the party can fight or talk to.
+ * - `location` -> a row in `locations`.
+ * - `lore` -> no row. Factions, forces, phenomena, organizations: named and described in canon,
+ *   referenced freely, never an agent.
+ *
+ * The distinction is not cosmetic. Only `npc` rows carry a life state, a disposition, a voice
+ * and a staging slot - so anything that cannot hold a conversation acquires four properties
+ * that are meaningless for it and harmful when set. `Valerius's Agents` (a squad) was authored
+ * as an NPC, marked dead when the party killed some of them, and the consistency checker then
+ * read every description of their corpses as the dead ACTING. `Lost Expedition` (a group) and
+ * `The Murkheart` (a force) were the only two "NPCs" in one adventure, which meant it had no
+ * living person to talk to and its social route could never open - the unwinnable-story bug.
+ * Both were TYPE ERRORS, not model mistakes.
+ *
+ * When play needs a faction present, the individuals are created then: a fight uses the
+ * stage-5 composition spec (CR x count, no rows), and a negotiation uses the beat planner's
+ * `create_npcs` to make a named representative - who is, correctly, an `npc`.
+ */
+export type EntityKind = 'npc' | 'location' | 'lore'
+
 export interface EntityRef {
-  kind: 'npc' | 'location'
+  kind: EntityKind
   name: string
   /** One-line role, e.g. "lich antagonist" / "volcano where the ritual completes". */
   note: string

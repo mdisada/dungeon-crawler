@@ -1,0 +1,56 @@
+// Scene props (2026-07-23): the physical things play has left in the world - bodies, and
+// later anything else a state change turns into an object.
+//
+// The design this belongs to: an NPC is always a living AGENT. When one dies the agent leaves
+// the roster and a PROP enters the world. A prop is a thing - no speech, no life state - so
+// describing it can never contradict anything, which is what removes an entire class of
+// consistency false positive at the source rather than suppressing it.
+//
+// Pure so the "is this a prop, and is it here?" rules are testable without a database.
+
+export interface PropRow {
+  id: string
+  /** ingredients.content - a prop carries `prop` and `text`; authored items do not. */
+  content: unknown
+  /** ingredients.placement - `{location_id}` when it sits somewhere specific. */
+  placement: unknown
+}
+
+export interface ScenePropView {
+  id: string
+  text: string
+  /** What kind of prop, e.g. 'corpse' - lets callers group or filter later. */
+  prop: string
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+/**
+ * Props visible where the party stands.
+ *
+ * Two rules, both deliberate:
+ * - Only rows carrying a `prop` marker count. Authored `item` ingredients are treasure and
+ *   inventory - listing those as scene dressing would put the whole loot table in every prompt.
+ * - A prop with no location is world-wide; one with a location appears only there. So the body
+ *   in the chapel is not described while the party is three rooms away.
+ */
+export function scenePropsAt(rows: readonly PropRow[], locationId: string | null): ScenePropView[] {
+  return rows.flatMap((row) => {
+    const content = record(row.content)
+    if (typeof content.prop !== 'string' || !content.prop) return []
+    if (typeof content.text !== 'string' || !content.text.trim()) return []
+    const placement = record(row.placement)
+    const at = typeof placement.location_id === 'string' ? placement.location_id : null
+    if (at !== null && at !== locationId) return []
+    return [{ id: row.id, text: content.text.trim(), prop: content.prop }]
+  })
+}
+
+/** The body's canonical name. Code owns the identity; the narrator owns the description. */
+export function corpsePropText(npcName: string): string {
+  return `The body of ${npcName}`
+}

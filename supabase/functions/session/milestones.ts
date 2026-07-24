@@ -4,9 +4,23 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
-import { listMilestoneAtoms } from '../_shared/story/index.ts'
+import {
+  canonicalizeAtomSlug, listMilestoneAtoms, resolveAtomText, suggestAtomTexts,
+} from '../_shared/story/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { commitDiffs, loadState, logEvent } from './util.ts'
+
+/**
+ * Atom-registry rollout switch (overhaul Phase 1). false = SHADOW: proposals that miss the
+ * exact vocabulary but resolve through canonicalization (case/punctuation/apostrophes) or a
+ * conservative near-miss (word reorder, <=2 edits) are LOGGED as `atom_registry_shadow` and
+ * still rejected, exactly as before. Flip to true once a paid lab sweep shows every shadow
+ * repair is one we'd want: then those proposals apply and log `milestone_canonicalized`.
+ * The observed drift class this exists for: "found_expedition_journal" proposed against
+ * authored "lost_expedition_journal_found" must STILL reject (different meaning) while
+ * "ignored_scholar's_warning" vs "ignored_scholars_warning" must repair (same meaning).
+ */
+export const ATOM_REGISTRY_ENFORCES = false
 
 /**
  * The authored milestone vocabulary: predicate atoms from the active objective's completion
@@ -106,13 +120,31 @@ export async function applyMilestones(
   const flagByLower = new Map(vocab.flags.map((f) => [f.toLowerCase(), f]))
   const eventByLower = new Map(vocab.events.map((e) => [e.toLowerCase(), e]))
   const factByLower = new Map(vocab.facts.map((f) => [f.toLowerCase(), f]))
+  const authoredAll = [...vocab.flags, ...vocab.events, ...vocab.facts]
   const state = (await loadState(service, env.adventureId)).state
   const flags = state.dm?.facts.flags ?? {}
   const world = state.dm?.facts.world ?? {}
 
   const applied: string[] = []
   for (const raw of proposed) {
-    const key = raw.toLowerCase().trim()
+    let key = raw.toLowerCase().trim()
+    // Canonical resolution (Phase 1): a proposal the exact-lowercase window misses may still
+    // be a case/punctuation/reorder variant of an authored atom. Shadow-first - see the flag.
+    if (!flagByLower.has(key) && !eventByLower.has(key) && !factByLower.has(key)) {
+      const resolution = resolveAtomText(raw, authoredAll)
+      if (resolution.ok) {
+        if (ATOM_REGISTRY_ENFORCES) {
+          await logEvent(service, env.adventureId, sessionId, 'milestone_canonicalized', {
+            proposed: raw, resolved: resolution.text, via: resolution.via, source,
+          })
+          key = resolution.text.toLowerCase()
+        } else {
+          await logEvent(service, env.adventureId, sessionId, 'atom_registry_shadow', {
+            proposed: raw, resolved: resolution.text, via: resolution.via, source, would: 'repair',
+          })
+        }
+      }
+    }
     const flag = flagByLower.get(key)
     const eventTag = eventByLower.get(key)
     const fact = factByLower.get(key)
@@ -151,7 +183,12 @@ export async function applyMilestones(
       await logEvent(service, env.adventureId, sessionId, 'milestone_reached', { milestone: eventTag, kind: 'event', source })
       applied.push(eventTag)
     } else {
-      await logEvent(service, env.adventureId, sessionId, 'scene_effect_rejected', { effect: 'milestone', proposed: raw })
+      // Suggestions turn a silent drop into a debuggable one - the lab reads these to tell a
+      // paraphrase from a near-miss worth adding to the canonicalizer's test suite.
+      await logEvent(service, env.adventureId, sessionId, 'scene_effect_rejected', {
+        effect: 'milestone', proposed: raw,
+        suggestions: suggestAtomTexts(canonicalizeAtomSlug(raw), authoredAll),
+      })
     }
   }
   return applied

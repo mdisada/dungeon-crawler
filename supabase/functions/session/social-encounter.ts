@@ -25,6 +25,28 @@ export interface SocialExit {
 /** Disposition at or below this forces a hostile (failure-tier) exit. */
 export const HOSTILE_EXIT_THRESHOLD = -8
 
+/**
+ * Exchanges a conversation may absorb before the CODE closes it, whatever the exit judge
+ * thinks. The overhaul plan called this the exitless-social watchdog and it was never built:
+ * `exchanges` has been counted since Slice 4 and read by nothing, so a conversation the judge
+ * never called finished simply stayed open.
+ *
+ * That is not a small leak, because an open encounter is the single condition three separate
+ * guards key on: the director floors its gentle rungs (story/director.ts minRung), blanks its
+ * rescue rung (`!state.encounter`), and route health reports 'healthy' forever on the grounds
+ * that the beat is "still being played". Live 2026-07-23 (The Long Road to Emberfall): 11 turns
+ * inside one social encounter, 9 of them with no progress, the ladder fired ZERO times, and the
+ * party spent four turns asking a quest-giver what the pay was. Closing the conversation is what
+ * makes the beat 'spent', which is what lets the existing rung-3 replan fire.
+ */
+export const SOCIAL_MAX_EXCHANGES = 8
+
+function exchangeCount(progress: Json | undefined): number {
+  if (typeof progress !== 'object' || progress === null || Array.isArray(progress)) return 0
+  const raw = (progress as Record<string, Json>).exchanges
+  return typeof raw === 'number' ? raw : 0
+}
+
 export function socialExits(params: Record<string, Json>): SocialExit[] {
   const raw = Array.isArray(params.exits) ? params.exits : []
   return raw.flatMap((e): SocialExit[] => {
@@ -189,7 +211,25 @@ export async function detectSocialExit(
     : '')
   const recent = state.dialogue.lines.slice(-8).map((l) => `${l.speaker ?? 'Narrator'}: ${l.text}`)
   const outcome = await runSocialExitJudge(env, goal, exits, recent)
-  if (!outcome) return null
+  if (!outcome) {
+    // The judge says the conversation is still going. Past the ceiling that stops being its
+    // call - but running out of TIME is not the same as failing.
+    //
+    // The first version returned a null exit, which is 'left_unresolved' (failure tier). Live
+    // 2026-07-23, run 02c5f711: an eight-exchange scene with Elara Vance banked four milestones
+    // - elara_vance_met, _contacted, _trust_gained and mission_accepted (events 48896-48899) -
+    // and was then closed as `tier: failed` four events later. The party got everything the
+    // scene existed for and the engine wrote it down as a loss, applying the onFailure atoms.
+    //
+    // A timeout is a PARTIAL outcome: something was achieved, the conversation simply stopped
+    // being the way forward. Prefer the authored partial exit; fall back to failure only when
+    // the designer wrote no partial at all.
+    if (exchangeCount(encounter.progress) >= SOCIAL_MAX_EXCHANGES) {
+      const partial = exits.find((e) => e.tier === 'partial') ?? null
+      return { exit: partial, forced: true }
+    }
+    return null
+  }
   return { exit: exits.find((e) => e.outcome === outcome) ?? null, forced: false }
 }
 

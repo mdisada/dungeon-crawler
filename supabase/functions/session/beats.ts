@@ -9,18 +9,48 @@ import type { GameState, Json } from '../_shared/state/index.ts'
 import {
   activeLoop, advanceBeat, completeLoop, computeVarietyFlags, encounterKindGuidance,
   intentPillar, isOffLoop,
-  listMilestoneAtoms, LOOP_TEMPLATES, nextStreak, PIVOT_REEVALUATE_EVENTS, pivotHandling,
-  pushLoop, streakTriggersClassifier, suspendLoop, varietyGuidance,
+  listMilestoneAtoms, listPredicateAtomNames, LOOP_TEMPLATES, nextStreak, PIVOT_REEVALUATE_EVENTS,
+  pivotHandling, pushLoop, registerLocalAtoms, resolveAtomText, resolveNpcNames,
+  rewritePredicateAtoms, stageableNpcs, streakTriggersClassifier, suspendLoop, varietyGuidance,
 } from '../_shared/story/index.ts'
-import type { BeatPlan, CoreLoop, LoopStatus, LoopType, Pillar, VarietyInput } from '../_shared/story/index.ts'
+import type {
+  BeatPlan, CoreLoop, LoopStatus, LoopType, NpcStageRow, Pillar, RegistryAtom, VarietyInput,
+} from '../_shared/story/index.ts'
 import type { AgentEnv } from './agents.ts'
+import { minimalSatisfyingAtoms } from '../_shared/guide/guaranteed-route.ts'
+import { parseStoredBeatSpec, runCombatPlaceholderEncounter } from './encounters.ts'
 import { narrationBeat } from './narration.ts'
 import { loadPartyCharacters, loadPlayContext, partyProfileLines, partySkillList } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
 import { antagonistTurn } from './steward.ts'
 import { retrieveMemories } from './memory.ts'
-import { runBeatPlanner, runEncounterDesigner, runHookWeaverLive, runLoopClassifier } from './story-agents.ts'
+import {
+  runBeatOutcomeMapper, runBeatPlanner, runEncounterDesigner, runHookWeaverLive, runLoopClassifier,
+} from './story-agents.ts'
 import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
+
+/**
+ * Phase-2 rollout switch. false = the planner may not add cast; a social beat with nobody
+ * stageable still downgrades deterministically (that half ships unflagged - it is strictly
+ * safer than persisting an encounter that can never open).
+ */
+export const PLANNER_CREATES_NPCS = true
+
+/**
+ * Combat budget for one story: every adventure gets ONE major fight, plus up to two smaller
+ * ones. These are adventurers - weapons, races, skills - so a story with no fight at all is the
+ * wrong game for them; but real-time combat is the slowest thing at the table, so three is the
+ * ceiling, not the target.
+ *
+ * A cap alone was not enough. Live 2026-07-23/24 the count landed anywhere between zero and
+ * five, purely on the planner's whim - the plague run finished with NO fight, the heist opened
+ * with two back to back. So the budget now has a floor as well as a ceiling: past the midpoint
+ * of the objective ladder, a story that has not fought yet is steered into its major fight, and
+ * at the finale it is required.
+ */
+export const COMBAT_BUDGET = 3
+/** Fights that must happen before a story is allowed to end. */
+export const COMBAT_FLOOR = 1
 
 export async function loadLoops(service: SupabaseClient, adventureId: string): Promise<CoreLoop[]> {
   const { data, error } = await service
@@ -134,10 +164,20 @@ async function activeObjectiveRow(service: SupabaseClient, state: GameState) {
   if (!state.objectives.currentId) return null
   const { data } = await service
     .from('objectives')
-    .select('id, title, hidden_description, completion_predicates')
+    .select('id, title, hidden_description, completion_predicates, guaranteed_route')
     .eq('id', state.objectives.currentId)
     .maybeSingle()
-  return data as { id: string; title: string; hidden_description: string; completion_predicates: Json } | null
+  return data as {
+    id: string; title: string; hidden_description: string
+    completion_predicates: Json; guaranteed_route: Json
+  } | null
+}
+
+/** The rescue route's provably-satisfying atoms, for the fail-closed alignment (Phase 4). */
+function guaranteedRouteAtoms(raw: Json): string[] {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return []
+  const onSuccess = (raw as Record<string, Json>).onSuccess
+  return Array.isArray(onSuccess) ? onSuccess.filter((a): a is string => typeof a === 'string') : []
 }
 
 /**
@@ -158,6 +198,15 @@ export async function planAndOpenBeat(
   if (!loop || loop.status !== 'active') return { status: 409, body: { error: 'No active loop with that id' } }
 
   const state = (await loadState(service, env.adventureId)).state
+  // Re-planning while an encounter is still open is legitimate (the director's rung 3 now fires
+  // against a stalled one), but the new beat's encounter overwrites state.encounter and the old
+  // one leaves no `encounter_resolved` behind. Say so, rather than letting it vanish - an
+  // encounter that disappears without a trace is exactly what made the last stall unreadable.
+  if (state.encounter) {
+    await logEvent(service, env.adventureId, sessionId, 'encounter_abandoned', {
+      label: state.encounter.label, kind: state.encounter.kind, trigger,
+    }).catch(() => {})
+  }
   const [beatRows, objective, party, pool, variety] = await Promise.all([
     service.from('beats').select('id, name, status').eq('core_loop_id', loop.id).order('index'),
     activeObjectiveRow(service, state),
@@ -185,6 +234,92 @@ export async function planAndOpenBeat(
     service, env,
     `${objective?.title ?? loop.type} - ${state.scene.locationName || 'the current scene'}`,
   )
+  // Who can actually take a stage right now (Phase 2). The planner sees ONLY these names, so
+  // it cannot aim a social beat at a corpse; anyone else it needs goes through create_npcs.
+  const { data: npcRoster } = await service
+    .from('npcs')
+    .select('id, name, initial_state, generated, role')
+    .eq('adventure_id', env.adventureId)
+  const npcRows: NpcStageRow[] = ((npcRoster ?? []) as {
+    id: string; name: string; initial_state?: string | null; generated?: boolean | null
+  }[]).map((n) => ({ id: n.id, name: n.name, initialState: n.initial_state, generated: n.generated }))
+  const liveNpcStates = state.dm?.facts.npcStates ?? {}
+  const livingCast = stageableNpcs(npcRows, liveNpcStates, { namedOnly: true })
+
+  // Climax + combat budget (2026-07-24). Two facts steer the finale and the pacing.
+  //
+  // isClimax: the active objective is the LAST one the story has left, so this beat is the
+  // set-piece everything built toward - not just another beat. The planner is told so, and the
+  // combat budget reserves a slot for it.
+  //
+  // combatCount: real-time combat is slow at the table, so a one-shot gets 1-2 fights, no more -
+  // and the last of them is saved for the climax. Nothing capped this before; combat landed
+  // wherever the planner felt like it (live 2026-07-23: combat clustered at the START and the
+  // ending was a skill check). The cap is enforced structurally below, not just requested.
+  const { data: objectiveLadder } = await service
+    .from('objectives').select('id, reveal_state').eq('adventure_id', env.adventureId)
+  const ladder = (objectiveLadder ?? []) as { id: string; reveal_state: string }[]
+  const remaining = ladder.filter((o) => o.reveal_state === 'hidden' || o.reveal_state === 'active')
+  // A climax needs an ARC behind it, so it also requires that something already finished.
+  // Without that clause `remaining <= 1` is true on turn ONE of any single-objective quest: the
+  // opening beat got flagged as the finale, the combat floor forced it to a fight, the climax
+  // auto-open resolved it, and the whole quest completed before the party acted. Caught by the
+  // $0 suite (2026-07-24: "quest in the journal, active" came back already completed).
+  const resolvedCount = ladder.length - remaining.length
+  const isClimax = Boolean(objective) && remaining.length <= 1 && resolvedCount >= 1
+  const livingBoss = stageableNpcs(
+    ((npcRoster ?? []) as { id: string; name: string; initial_state?: string | null; generated?: boolean | null; role?: string | null }[])
+      .filter((n) => n.role === 'boss')
+      .map((n) => ({ id: n.id, name: n.name, initialState: n.initial_state, generated: n.generated })),
+    liveNpcStates, { namedOnly: true },
+  )[0] ?? null
+  const combatGenre = LOOP_TEMPLATES[loop.type].pillars.includes('combat')
+  const { count: combatRows } = await service
+    .from('event_log').select('id', { count: 'exact', head: true })
+    .eq('adventure_id', env.adventureId).eq('type', 'encounter_opened').eq('payload->>kind', 'combat')
+  const combatCount = combatRows ?? 0
+  // Past the halfway mark of the objective ladder with no fight yet: this story still owes the
+  // party its major fight, and the room to place it well is running out.
+  const totalObjectives = (objectiveLadder ?? []).length
+  const pastMidpoint = totalObjectives > 0 && remaining.length * 2 <= totalObjectives
+  const owesMajorFight = combatCount < COMBAT_FLOOR && (pastMidpoint || isClimax)
+
+  // The major fight the story still owes the party. Stated first so it outranks the rest.
+  if (owesMajorFight) {
+    guidance.push(
+      `THIS STORY STILL OWES ITS MAJOR FIGHT. These are adventurers - armed, trained, and here ` +
+        `for danger - and not one real battle has happened yet. Author a COMBAT encounter for ` +
+        `this beat: the story's most dangerous physical threat` +
+        `${livingBoss ? `, ideally ${livingBoss.name} or their strongest forces` : ''}. Make it ` +
+        `matter - this is the fight the adventure is remembered for.`,
+    )
+  }
+
+  if (isClimax) {
+    // The finale is the peak, and its FORM follows the final objective - not the genre. A heist
+    // climaxes on the escape, a dungeon on the boss; forcing a sword fight onto every story is
+    // the generic-gameplay trap. So: make it the set-piece the objective calls for, name the
+    // boss only IF this finale is about facing them, and say outright not to manufacture a
+    // fight where the climax is an escape or a reckoning. Combat is one climax among many,
+    // chosen by the story - EXCEPT when the story still owes its major fight, in which case the
+    // finale is the last place it can happen.
+    guidance.push(
+      `THIS IS THE CLIMAX - the final objective and the peak the whole adventure has built ` +
+        `toward. Author the set-piece THIS story calls for and pitch the stakes to their ` +
+        `highest. ${combatGenre && livingBoss
+          ? `If this finale is where the party faces ${livingBoss.name}, make it a decisive confrontation. `
+          : ''}${owesMajorFight
+          ? 'This finale must also BE the major fight - it is the last chance for one. '
+          : `Do NOT force a battle where the story's climax is an escape, a reckoning, a choice ` +
+            `or a revelation - fit the form to the moment. `}`,
+    )
+  } else if (combatCount >= COMBAT_BUDGET) {
+    guidance.push(
+      `Do NOT author a combat encounter for this beat. The party's combat for this story is ` +
+        `spent (real-time fights are slow) - resolve tension through skill, social or puzzle play.`,
+    )
+  }
+
   const plannerCtx = {
     loop: { type: loop.type, completedBeatNames },
     objective: objective ? { title: objective.title, hiddenDescription: objective.hidden_description } : null,
@@ -195,6 +330,7 @@ export async function planAndOpenBeat(
     poolIngredients: ((pool.data ?? []) as { id: string; type: string; reveals: string }[]),
     varietyGuidance: guidance,
     establishedEarlier,
+    livingCast: livingCast.map((n) => n.name),
     plan: {
       partySize: party.length,
       partySkills: partySkillList(party),
@@ -213,41 +349,7 @@ export async function planAndOpenBeat(
     parsed = await runBeatPlanner(env, plannerCtx, parsed.errors)
       .catch(() => planFailed('beat planner repair call failed'))
   }
-  // A beat may parse perfectly and still lead nowhere. Live 2026-07-21, court: the objective
-  // needed "party_met_lord_cassian" and the planner authored "The Unfinished Decree" exiting on
-  // "decree_deciphered" - atoms of its own invention. Six beats resolved, the story read well,
-  // and the objective was never touched, because nothing required the beat to be ABOUT it.
-  // The alignment now guards on_success, not exit_conditions (1.1): a full success MUST credit the
-  // objective, but the beat is free to EXIT on its own local atoms so it stays exitable and beat
-  // throughput does not crater the way it did when the objective's big-step atom was forced into
-  // exit_conditions. One targeted repair, then fail open: a beat pointing the wrong way still
-  // beats no beat.
-  const objectiveVocab = plannerCtx.plan.milestones
-  if (parsed.ok && objectiveVocab.length > 0) {
-    const creditsObjective = (parsed.plan.encounter?.onSuccess ?? []).some((a) => objectiveVocab.includes(a))
-    if (!creditsObjective) {
-      // Guarded: this is an EXTRA agent call inside beat opening, and an agent call that throws
-      // here would escape planAndOpenBeat and leave the loop with no beat at all - which is the
-      // dead end this whole change set exists to remove. An alignment we could not get is a
-      // missed improvement; a beat we failed to open stops the story (live 2026-07-21, horror:
-      // beat_open_failed on trigger beat_exit, 2 objectives -> 0).
-      try {
-        const aligned = await runBeatPlanner(env, plannerCtx, [
-          `beat.encounter.on_success: not one atom comes from the current objective (${objectiveVocab.join(' | ')}). ` +
-          'A full success here would not move the objective one step. Author the beat so the party can ' +
-          'reach at least ONE of those milestones, and put that milestone verbatim in the encounter ' +
-          'on_success map. Leave exit_conditions as the beat\'s own local success/setback atoms so it ' +
-          'still exits on any resolution.',
-        ])
-        if (aligned.ok && (aligned.plan.encounter?.onSuccess ?? []).some((a) => objectiveVocab.includes(a))) {
-          parsed = aligned
-        }
-      } catch (err) {
-        console.error('beat alignment repair failed, keeping the original plan', err)
-      }
-    }
-  }
-  const plan: BeatPlan = parsed.ok
+  let plan: BeatPlan = parsed.ok
     ? parsed.plan
     : {
         name: LOOP_TEMPLATES[loop.type].beats[Math.min(completedBeatNames.length, LOOP_TEMPLATES[loop.type].beats.length - 1)],
@@ -258,6 +360,8 @@ export async function planAndOpenBeat(
         narrationSeed: 'The moment stretches - the next move belongs to the party.',
         // Null spec: this beat degrades to hook -> ad-hoc entries only.
         encounter: null,
+        localAtoms: [],
+        createNpcs: [],
       }
   if (!parsed.ok) {
     await logEvent(service, env.adventureId, sessionId, 'incident', {
@@ -265,27 +369,221 @@ export async function planAndOpenBeat(
     })
   }
 
-  // The Encounter Designer fills kind-specific mechanics; stored snake_case on the beat row.
+  // Register the declared local atoms (Phase 1) - the only door runtime atom creation has.
+  // Collisions reuse the existing atom (spine preferred), and the exit predicate is rewritten
+  // to registry labels so stored predicates never hold undeclared variants.
+  const { data: registryRows } = await service
+    .from('story_atoms')
+    .select('slug, kind, scope, label')
+    .eq('adventure_id', env.adventureId)
+  const registration = registerLocalAtoms(plan.localAtoms, (registryRows ?? []) as RegistryAtom[])
+  const objectiveVocab = plannerCtx.plan.milestones
+  const atomMapping = new Map(registration.mapping)
+  const localLabels = [...new Set(plan.localAtoms.map((a) => atomMapping.get(a.name)).filter((l): l is string => !!l))]
+  if (plan.exitConditions != null) {
+    // Every predicate atom rewrites to a registry label by CANONICAL lookup - the parser
+    // accepted variant spellings of declared atoms (canonical equality), so keying the rewrite
+    // on exact declared names alone left "scholars_trust_won" stored while the registered label
+    // read "scholar's_trust_won", and the beat's own success flag could never match it
+    // (adversarial review, 2026-07-22). Spine and just-registered labels share one index.
+    for (const name of listPredicateAtomNames(plan.exitConditions)) {
+      if (atomMapping.has(name)) continue
+      const resolution = resolveAtomText(name, [...objectiveVocab, ...localLabels])
+      if (resolution.ok && resolution.text !== name) atomMapping.set(name, resolution.text)
+    }
+    plan = { ...plan, exitConditions: rewritePredicateAtoms(plan.exitConditions, atomMapping) as Json }
+  }
+  if (registration.rejected.length > 0) {
+    await logEvent(service, env.adventureId, sessionId, 'atom_registration_rejected', {
+      rejected: registration.rejected as unknown as Json,
+    })
+  }
+
+  // Requested cast (Phase 2, the "Elara" fix): a social beat that needs somebody the roster
+  // lacks gets them CREATED before the designer runs, instead of naming a person who exists
+  // only in prose and can never be staged.
+  const castForBeat = [...livingCast]
+  if (PLANNER_CREATES_NPCS && plan.encounter?.kind === 'social' && plan.createNpcs.length > 0) {
+    const existing = new Set(npcRows.map((n) => n.name.toLowerCase().trim()))
+    const wanted = plan.createNpcs.filter((n) => !existing.has(n.name.toLowerCase().trim()))
+    if (wanted.length > 0) {
+      const { data: created, error: createError } = await service
+        .from('npcs')
+        .insert(wanted.map((n) => ({
+          adventure_id: env.adventureId,
+          name: n.name,
+          role: 'npc',
+          // Real cast, not a throwaway bystander: generated=true would hide them from the
+          // stall promoter and the rest of the cast machinery.
+          generated: false,
+          initial_state: 'alive',
+          personality: { summary: n.personality } as unknown as Json,
+          description: n.personality,
+        })))
+        .select('id, name')
+      if (createError) console.error('planner npc create failed', createError)
+      for (const row of ((created ?? []) as { id: string; name: string }[])) {
+        castForBeat.push({ id: row.id, name: row.name, initialState: 'alive', generated: false })
+      }
+      if ((created ?? []).length > 0) {
+        await logEvent(service, env.adventureId, sessionId, 'beat_npcs_created', {
+          npcs: (created ?? []).map((n) => (n as { name: string }).name) as unknown as Json,
+          beat: plan.name,
+        })
+      }
+    }
+  }
+
+  // The Encounter Designer fills kind-specific mechanics; the outcome mapper (call 2) maps
+  // tiers onto the closed menu of registered atoms; stored snake_case on the beat row.
   let encounterSpec: Json = null
   if (plan.encounter) {
-    const npcNames = plan.encounter.kind === 'social'
-      ? (((await service.from('npcs').select('name').eq('adventure_id', env.adventureId)).data ?? []) as { name: string }[])
-          .map((n) => n.name)
-      : []
+    // Living cast only. The designer's enum used to be the FULL registry, so it could name a
+    // dead or absent NPC that passed generation and died at open time (live 2026-07-22).
+    const npcNames = plan.encounter.kind === 'social' ? castForBeat.map((n) => n.name) : []
+    // Anti-repeat (Phase 4): the last few beats' shapes leave the menu, so the same template
+    // never lands twice running. Kind-level variety alone was not enough to stop encounters
+    // reading the same.
+    const { data: recentSpecs } = await service
+      .from('beats')
+      .select('encounter_spec')
+      .eq('core_loop_id', loop.id)
+      .order('index', { ascending: false })
+      .limit(3)
+    const recentTemplates = ((recentSpecs ?? []) as { encounter_spec: Json }[])
+      .map((b) => {
+        const spec = b.encounter_spec
+        if (typeof spec !== 'object' || spec === null || Array.isArray(spec)) return null
+        const params = (spec as Record<string, Json>).params
+        if (typeof params !== 'object' || params === null || Array.isArray(params)) return null
+        const key = (params as Record<string, Json>).template
+        return typeof key === 'string' ? key : null
+      })
+      .filter((k): k is string => Boolean(k))
+
+    // Combat budget, enforced not just requested. A non-climax combat past the budget is
+    // downgraded to a skill challenge - the planner's guidance can be ignored, this cannot. The
+    // climax's combat slot is reserved: it is never capped, so the finale can always be a fight.
+    if (plan.encounter.kind === 'combat' && !isClimax && combatCount >= COMBAT_BUDGET) {
+      plan.encounter.kind = 'skill_challenge'
+      await logEvent(service, env.adventureId, sessionId, 'combat_capped', {
+        beat: plan.name, combat_so_far: combatCount, budget: COMBAT_BUDGET,
+      })
+    }
+    // The floor, enforced the same way. At the FINALE with no fight yet, this is the last beat
+    // that can carry one, so it becomes combat whatever the planner chose - a party of
+    // adventurers should not finish a whole adventure without once drawing steel. Only at the
+    // climax: before that the guidance gets to persuade, and the story keeps its shape.
+    if (!env.demo && plan.encounter.kind !== 'combat' && isClimax && combatCount < COMBAT_FLOOR) {
+      plan.encounter.kind = 'combat'
+      await logEvent(service, env.adventureId, sessionId, 'combat_floor_forced', {
+        beat: plan.name, was: 'non-combat', combat_so_far: combatCount, floor: COMBAT_FLOOR,
+      })
+    }
+    if (isClimax) {
+      await logEvent(service, env.adventureId, sessionId, 'climax_beat', {
+        beat: plan.name, kind: plan.encounter.kind,
+        boss: combatGenre && livingBoss ? livingBoss.name : null,
+      })
+    }
+
     const params = await runEncounterDesigner(env, plan.encounter, {
       size: party.length,
       skills: partySkillList(party),
       profiles: profileLines,
-    }, npcNames)
+    }, npcNames, recentTemplates)
+    const maps = await runBeatOutcomeMapper(env, {
+      beatName: plan.name,
+      goals: plan.goals,
+      encounter: { kind: plan.encounter.kind, label: plan.encounter.label, stakes: plan.encounter.stakes },
+      spineAtoms: objectiveVocab,
+      localAtoms: localLabels,
+    })
+    // Deterministic spine guarantee (replaces the old LLM alignment-repair call): a full
+    // success MUST credit the current objective. Live 2026-07-21, court: six beats resolved on
+    // atoms of their own invention and "party_met_lord_cassian" was never touched. If the
+    // mapper's on_success credits no objective atom, code appends the first one - the planner
+    // was already instructed to make the beat about it.
+    if (objectiveVocab.length > 0 && !maps.onSuccess.some((a) => objectiveVocab.includes(a))) {
+      // Fail CLOSED (Phase 4): prefer the objective's code-authored rescue atoms - they are
+      // the provably-satisfying set - and fall back to the first objective atom only when no
+      // guaranteed route exists. Either way the beat credits the objective on a full success;
+      // shipping a beat that cannot is how six beats resolved and the objective never moved.
+      const routeAtoms = guaranteedRouteAtoms(objective?.guaranteed_route ?? null)
+      const appended = routeAtoms.length > 0 ? routeAtoms : [objectiveVocab[0]]
+      for (const atom of appended) if (!maps.onSuccess.includes(atom)) maps.onSuccess.push(atom)
+      await logEvent(service, env.adventureId, sessionId, 'beat_alignment_forced', {
+        appended: appended as unknown as Json,
+        source: routeAtoms.length > 0 ? 'guaranteed_route' : 'objective_vocab',
+        mapped: maps.onSuccess as unknown as Json,
+      })
+    }
+    // The CLIMAX must be able to finish the story it ends. One objective atom is enough for an
+    // `any` predicate but not for an `all` chain, and the guarantee above only requires one -
+    // so a finale could credit half a conjunction and leave its own objective unfinished.
+    //
+    // Live 2026-07-24, heist: obj2 needed manifest_secured AND party_escaped_tidal_vault; the
+    // boss fight credited party_escaped_tidal_vault (plus a local `secured_ledgers` that was
+    // NOT the objective's atom), the objective stayed open, the beat re-planned, and the climax
+    // fired FOUR times - three boss fights and no ending. Winning the finale has to end it.
+    if (isClimax) {
+      const satisfying = minimalSatisfyingAtoms(objective?.completion_predicates ?? null) ?? []
+      const missing = satisfying.filter((a) => !maps.onSuccess.includes(a))
+      if (missing.length > 0) {
+        maps.onSuccess.push(...missing)
+        await logEvent(service, env.adventureId, sessionId, 'climax_alignment_forced', {
+          beat: plan.name, appended: missing as unknown as Json,
+          mapped: maps.onSuccess as unknown as Json,
+        })
+      }
+    }
+    if (maps.dropped.length > 0) {
+      await logEvent(service, env.adventureId, sessionId, 'beat_outcome_dropped', {
+        dropped: maps.dropped as unknown as Json,
+      })
+    }
+    // Resolve NPC NAMES to IDS here, at plan time, against the living cast only. Resolution
+    // used to happen at open time inside openSocialEncounter, so an unresolvable name produced
+    // a STILLBORN beat: the encounter could never open, so it could never be "spent", so
+    // nothing ever re-planned it and the objective became unreachable (live 2026-07-22).
+    let kind = plan.encounter.kind
+    let resolvedParams = params
+    if (kind === 'social') {
+      const paramsObj = (typeof params === 'object' && params !== null && !Array.isArray(params)
+        ? params
+        : {}) as Record<string, Json>
+      const wanted = Array.isArray(paramsObj.npc_names)
+        ? (paramsObj.npc_names as Json[]).filter((v): v is string => typeof v === 'string')
+        : []
+      const { ids, unresolved } = resolveNpcNames(wanted, castForBeat)
+      if (ids.length > 0) {
+        resolvedParams = { ...paramsObj, npc_ids: ids as unknown as Json } as Json
+        if (unresolved.length > 0) {
+          await logEvent(service, env.adventureId, sessionId, 'beat_npcs_unresolved', {
+            unresolved: unresolved as unknown as Json, staged: ids.length,
+          })
+        }
+      } else {
+        // Nobody stageable: downgrade DETERMINISTICALLY rather than persist an encounter that
+        // can never open. The tier bridge makes this lossless for the spine - the same outcome
+        // maps ride a skill challenge instead of a conversation.
+        kind = 'skill_challenge'
+        resolvedParams = { needed_successes: 2, max_failures: 2, suggested_skills: partySkillList(party).slice(0, 3) } as unknown as Json
+        await logEvent(service, env.adventureId, sessionId, 'incident', {
+          kind: 'beat_downgraded_unstageable', label: plan.encounter.label,
+          wanted: wanted as unknown as Json, living_cast: castForBeat.length,
+        })
+      }
+    }
     encounterSpec = {
-      kind: plan.encounter.kind,
+      kind,
       label: plan.encounter.label,
       stakes: plan.encounter.stakes,
       rationale: plan.encounter.rationale,
-      params,
-      on_success: plan.encounter.onSuccess,
-      on_partial: plan.encounter.onPartial,
-      on_failure: plan.encounter.onFailure,
+      params: resolvedParams,
+      on_success: maps.onSuccess,
+      on_partial: maps.onPartial,
+      on_failure: maps.onFailure,
     }
   }
 
@@ -313,6 +611,20 @@ export async function planAndOpenBeat(
   assertOk(beatError, 'beat insert failed')
   const advanced = advanceBeat(loops, loop.id, beatRow.id as string)
   if (advanced.ok) await persistLoops(service, env.adventureId, loops, advanced.loops)
+
+  // Registry rows for the atoms this beat created (Phase 1). Best-effort: the beat is already
+  // open and its predicates hold the canonical labels; a registry insert hiccup must not stop
+  // the story (the upsert also absorbs a slug another session registered concurrently).
+  if (registration.created.length > 0) {
+    const { error: atomError } = await service.from('story_atoms').upsert(
+      registration.created.map((a) => ({
+        adventure_id: env.adventureId, slug: a.slug, kind: a.kind, scope: 'local', label: a.label,
+        source_table: 'beats', source_id: beatRow.id as string,
+      })),
+      { onConflict: 'adventure_id,slug', ignoreDuplicates: true },
+    )
+    if (atomError) console.error('story_atoms local insert failed', atomError)
+  }
 
   // Pool reuse before generation (F08 SS5): a pooled undiscovered ingredient of the requested
   // type serves the request; only unmet requests create new rows (logged as generated).
@@ -376,21 +688,61 @@ export async function planAndOpenBeat(
     }
   }
 
+  // A finale should FEEL like a finale, whatever shape it takes. The climax framing is
+  // type-agnostic ON PURPOSE: the climax of a heist is the escape, of a court the verdict, of a
+  // dungeon the boss - forcing every story to peak on a sword fight is the "generic gameplay"
+  // trap. So this raises the stakes and names the moment without presuming combat; the beat's
+  // own kind (a fight, an escape, a reckoning, a choice) supplies the form.
+  const climaxFraming = isClimax
+    ? 'THIS IS THE CLIMAX - the culmination the entire adventure has built toward. Pitch the ' +
+      'stakes at their absolute peak and make the pressure that has been mounting now immediate ' +
+      'and unmistakable. Frame this as the decisive, final moment - whatever its form: a ' +
+      'confrontation, a desperate escape, a reckoning, an irreversible choice. The party must ' +
+      'FEEL that everything has led here. '
+    : ''
+
   // The beat-opening cutscene: exposition voice, hook telegraphing the authored encounter.
   await narrationBeat(
     service, env, sessionId,
-    `${narrationContext ? `${narrationContext} ` : ''}Open the next story beat ("${plan.name}"). ` +
+    `${narrationContext ? `${narrationContext} ` : ''}${climaxFraming}Open the next story beat ("${plan.name}"). ` +
       `Establish these situations without resolving them: ${plan.goals.join(' / ')}. ` +
       `${plan.narrationSeed} Pick up from where the party actually stands - never presume travel ` +
       'or actions they did not take.' +
       (plan.encounter
-        ? ` Telegraph the encounter ahead - "${plan.encounter.label}"` +
+        ? ` Telegraph the ${isClimax ? 'FINAL confrontation' : 'encounter'} ahead - "${plan.encounter.label}"` +
           `${plan.encounter.stakes ? ` (at stake: ${plan.encounter.stakes})` : ''} - and make the ` +
           'closing ask invite the party into it.'
         : ''),
     'Beat opened',
     'exposition',
   )
+
+  // The climax's boss fight opens ITSELF. Every other beat's encounter waits for the party to
+  // commit to it (the entry='offered' tier bridge) - fine mid-story, wrong for the finale.
+  // Live 2026-07-24, heist: the climax beat "Confronting Silas Vane" was staged correctly as
+  // combat, but the party spent its last turns on the approach and never took an action that
+  // read as "attack the boss", so the confrontation the whole story built toward never opened.
+  // A climax should not depend on the players guessing to swing first. Combat only (a placeholder
+  // auto-win today, the battle map at F09): a social or skill climax is meant to be PLAYED, so it
+  // still waits for the party. Opening it here runs the lead-in -> resolution -> aftermath, whose
+  // on_success credits the final objective and lets the ending commit.
+  // `!env.demo` for the same reason the Progress Director skips demo adventures: the $0 suites
+  // are scripted, and an unsolicited auto-resolve advances their beats out from under their
+  // assertions (2026-07-24: it cascaded the siege fixture four beats deep in one turn).
+  // `combatCount < COMBAT_BUDGET` is the loop stop. A climax that re-plans (because its
+  // objective did not complete) would otherwise auto-open a fresh boss fight every single time -
+  // three in one run before the alignment fix above closed the underlying cause. The budget
+  // ceiling doubles as the backstop if a finale ever churns again.
+  if (!env.demo && isClimax && plan.encounter?.kind === 'combat' && encounterSpec
+      && combatCount < COMBAT_BUDGET) {
+    const spec = parseStoredBeatSpec(encounterSpec)
+    if (spec) {
+      await runCombatPlaceholderEncounter(
+        service, env, sessionId, spec,
+        'The party reaches the heart of the matter - the final confrontation is upon them.',
+      ).catch((err) => console.error('climax combat open failed', err))
+    }
+  }
   return { status: 200, body: { ok: true, beat_id: beatRow.id, name: plan.name, braided: plan.braided.length } }
 }
 
@@ -566,8 +918,13 @@ export async function idleNudge(service: SupabaseClient, env: AgentEnv, sessionI
 
   const escalate = (nudgesSince ?? 0) === 1
   await logEvent(service, env.adventureId, sessionId, 'idle_nudge', escalate ? { escalation: true } : {})
+
+  // Phase 3 note: this ladder stays separate from the Progress Director on purpose. The
+  // director counts TURNS (the party is acting but not progressing); the nudge measures
+  // WALL-CLOCK silence (nobody is acting at all) and is capped at 2, so the two never
+  // compete. Merging them would also make beats.ts import director.ts, which imports
+  // planAndOpenBeat from here - a module cycle this file has always avoided.
   if (escalate) {
-    // The world does not wait: one antagonist turn plus an intrusion beat, then silence.
     try {
       await antagonistTurn(service, env, sessionId, 'idle_escalation')
     } catch (err) {

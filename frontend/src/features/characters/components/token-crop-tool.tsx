@@ -59,10 +59,15 @@ export function TokenCropTool({ sourceUrl, onCrops, isBusy }: TokenCropToolProps
 
   function initTransform(img: HTMLImageElement) {
     if (transform) return
-    // Start framing the top-center of the image (a full-body shot has the head up there).
-    const scale = Math.max(VIEWPORT / img.naturalWidth, VIEWPORT / img.naturalHeight) * 2
+    // Frame the head: a "full body, head to toe, centered" figure puts the head near the top,
+    // horizontally centered, spanning roughly a quarter of the image width. This now assumes a
+    // ~square source (OpenRouter renders 1024x1024 since F12) rather than a 9:16 one, so the
+    // default window is sized to the width and nudged just below the top edge.
+    const headWindow = img.naturalWidth * 0.24
+    const scale = VIEWPORT / headWindow
     const offsetX = (VIEWPORT - img.naturalWidth * scale) / 2
-    setTransform({ scale, offsetX, offsetY: 0 })
+    const offsetY = -img.naturalHeight * scale * 0.06
+    setTransform({ scale, offsetX, offsetY })
   }
 
   function handlePointerDown(e: React.PointerEvent) {
@@ -186,9 +191,9 @@ export function TokenCropTool({ sourceUrl, onCrops, isBusy }: TokenCropToolProps
           id="zoom-slider"
           type="range"
           min={1}
-          max={6}
+          max={10}
           step={0.05}
-          defaultValue={2}
+          defaultValue={4}
           onChange={(e) => handleZoomChange(Number(e.target.value))}
           className="flex-1"
         />

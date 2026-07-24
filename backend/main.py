@@ -14,6 +14,7 @@ from typing import Optional
 
 from realtime.types import RealtimeSubscribeStates
 
+import assets
 import supabase_storage
 import tts
 from config.tts import audio_bucket_name
@@ -48,6 +49,9 @@ async def main() -> None:
 
     client = get_realtime_client()
     queue = JobQueue(num_workers=NUM_WORKERS)
+    # Assets (image/tts) get their own single-worker queue so a 60s GPU job never blocks campaign
+    # LLM jobs and vice versa, while GPU work stays serialized within itself (one GPU).
+    asset_queue = JobQueue(num_workers=1)
 
     # signal-test channel — ping/pong health check
     signal_channel = client.channel("signal-test")
@@ -99,9 +103,33 @@ async def main() -> None:
         session_handlers.make_handle_narrate_plot(live_channel),
     )
 
+    # assets:{user_id} channel — Assets Lab image/tts jobs (F12). Per-user topic; the worker
+    # serves the single account named by ASSETS_USER_ID.
+    asset_channel = None
+    if assets.ASSETS_USER_ID:
+        asset_topic = f"assets:{assets.ASSETS_USER_ID}"
+        asset_channel = client.channel(asset_topic)
+        asset_queue.register(
+            asset_channel, "generate-image", "asset-result", assets.make_handle_generate_image(asset_channel)
+        )
+        asset_queue.register(
+            asset_channel, "generate-tts", "asset-result", assets.make_handle_generate_tts(asset_channel)
+        )
+        asset_queue.register(
+            asset_channel,
+            "get-capabilities",
+            "asset-result",
+            assets.make_handle_get_capabilities(lambda: asset_queue.qsize()),
+        )
+    else:
+        print("ASSETS_USER_ID not set — Assets Lab worker channel disabled (set it in backend/.env).")
+
     queue.start()
+    asset_queue.start()
 
     await signal_channel.subscribe(_on_subscribe("signal-test"))
+    if asset_channel is not None:
+        await asset_channel.subscribe(_on_subscribe(f"assets:{assets.ASSETS_USER_ID}"))
     await campaign_channel.subscribe(_on_subscribe("campaign-builder"))
     await list_campaigns_channel.subscribe(_on_subscribe("campaign-session-list-campaigns"))
     await get_campaign_channel.subscribe(_on_subscribe("campaign-session-get-campaign"))

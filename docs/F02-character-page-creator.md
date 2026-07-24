@@ -4,13 +4,16 @@
 **Depended on by:** F5 (character selection), F6 (sidebar), F9 (combat stats), F10 (roleplay portraits)
 
 ## 1. Purpose
+
 Create, view, and edit player characters following SRD 5.2.1 rules, with a freeform uniqueness layer and a generated image set (full-body → avatar / map token / half-body portrait).
 
 ## 2. Routes & layout
+
 - `/characters` — **Character Select.** Right sidebar: scrollable list of the user's characters (avatar + name + class/level) + "New Character" button. Main panel: overview of the selected character (statistics, background, portrait, "Edit" button).
 - `/characters/new` and `/characters/:id/edit` — **Character Creator** (full-page wizard). Editing loads the saved draft into the same wizard.
 
 ## 3. Creator wizard steps
+
 State machine; progress bar; every step persists to a `draft` jsonb column so users can resume.
 
 1. **Race** — dropdown from `srd_races`; Size/Speed summary line + remaining traits read-only below the picker.
@@ -27,6 +30,7 @@ State machine; progress bar; every step persists to a `draft` jsonb column so us
 Derived stats are computed by shared TypeScript functions in `packages/rules` (same code the engines use) so sheet math has one implementation.
 
 ## 4. Portrait pipeline
+
 Revised 2026-07-17 per Phase 2 review: auto-generate + iterative edit + single-crop derivation.
 
 1. **Auto-generate on step entry:** the wizard already holds the full description by this step, so the first portrait generates automatically from an assembled prompt (race, class, background, physical fields, freeform text) — no button press. `kind: image` (Nano Banana 2 Lite), 9:16 full-body.
@@ -35,7 +39,8 @@ Revised 2026-07-17 per Phase 2 review: auto-generate + iterative edit + single-c
 4. **Testing mode:** placeholder assets (`/placeholders/{avatar|token|portrait|fullbody}.png`) injected when image gen disabled by env flag (`VITE_PLACEHOLDER_MEDIA`).
 
 ## 5. Data model
-```
+
+```text
 characters:
   id, user_id, name, race, class, level int default 1, alignment,
   ruleset text not null default 'srd-5.2.1',         -- edition the char was authored under (§9)
@@ -56,15 +61,18 @@ characters:
 srd_races / srd_classes / srd_backgrounds / srd_items / srd_spells / srd_feats:
   seeded from SRD 5.2.1 JSON at migration time; read-only.
 ```
+
 Storage: `characters/{character_id}/{fullbody|avatar|token|portrait}.png` (+ `history/`,
 `voice-sample.*` for the uploaded voice clip).
 
 **`background_narrative`:** on save, a one-shot LLM call (agent_role `user_direct`) merges freeform text + physical description + mechanical background into 2–3 paragraphs. Shown in the Background tab in play and fed to agents as the character's identity context. User can edit or regenerate.
 
 ## 6. Character overview panel
+
 Header: portrait, name, race/class/level/alignment. Body: ability block with modifiers, HP/AC, skills, equipment list, background narrative, image set thumbnails. Footer: Edit, Duplicate, Delete (confirm dialog; blocked if character is locked into an active adventure — see F5).
 
 ## 7. Acceptance criteria
+
 - [ ] A complete SRD-legal level-1 character can be created start-to-finish in < 5 min with no free-text required except a name.
 - [ ] Point Buy validation rejects illegal spends; Standard Array prevents duplicates.
 - [ ] Derived stats (AC, HP, save/skill mods) match SRD hand-calculated fixtures (unit tests in `packages/rules`).
@@ -73,6 +81,7 @@ Header: portrait, name, race/class/level/alignment. Body: ability block with mod
 - [ ] Placeholder mode functions with image gen disabled.
 
 ## 8. Open questions
+
 - Multiclassing: out of scope v1 (single class).
 - Custom homebrew races/classes: out of scope v1; schema's jsonb traits leave the door open.
 

@@ -8,11 +8,13 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { AgentCallError, callAgentText, callAgentTextWithMeta } from '../_shared/llm.ts'
 import {
-  extractJson, parseAdjudication, parseConsistency, parseGists, parseNarrationOptions,
-  parseNpcOutput, parseSocialClassification,
+  CLAIM_ROLES, claimViolations, decideCanonization, extractJson, parseAdjudication,
+  parseConsistency, parseEntityClaims, parseGists, parseGrounding, parseNarrationOptions,
+  parseNpcOutput, parseSocialClassification, suspectEntities,
 } from '../_shared/play/index.ts'
 import type {
-  AdjudicationOutput, ConsistencyVerdict, NpcAgentOutput, SocialClassification,
+  AdjudicationOutput, ClaimEntity, ClaimViolation, ConsistencyVerdict, GroundingDecision,
+  NpcAgentOutput, PlayerLine, SocialClassification,
 } from '../_shared/play/index.ts'
 import { parseOfferResponse } from '../_shared/story/index.ts'
 import type { OfferResponseKind } from '../_shared/story/index.ts'
@@ -57,8 +59,26 @@ export async function agentJson(
   // budget went to reasoning tokens instead of content. The parse failing is the symptom we
   // actually care about and the one signal that is always available.
   if (parsed === null || typeof parsed !== 'object') {
-    result = await call(maxTokens * 2)
+    // TWO different failures wear the same face here, and until now both got the same medicine.
+    //
+    //   TRUNCATION - the model was still writing when the budget ran out. More tokens help.
+    //   PROVIDER ERROR - finish_reason 'error' with completion_tokens 0. The call died upstream
+    //                    and produced nothing. More tokens are irrelevant; it needs another try.
+    //
+    // Live 2026-07-23, the 100-turn heist: 3 of 75 turns returned HTTP 500 to the player, every
+    // one an adjudicator call with finish_reason 'error' and 0 completion tokens. Doubling the
+    // cap on a dead call just bought a second dead call, and the player lost their turn. This
+    // file's own comment already suspected the truncation theory was wrong - the finish_reason
+    // was sitting right there in the logs, unread by the retry.
+    const providerFailed = result.finishReason === 'error' || result.completionTokens === 0
+    result = await call(providerFailed ? maxTokens : maxTokens * 2)
     parsed = extractJson(result.text)
+    // A provider error is transient by nature; one more plain attempt is far cheaper than
+    // charging a player for a failure that had nothing to do with them.
+    if ((parsed === null || typeof parsed !== 'object') && providerFailed) {
+      result = await call(maxTokens)
+      parsed = extractJson(result.text)
+    }
   }
   // Every parse failure so far has been diagnosed by guesswork, because the text that failed is
   // discarded here and the caller only ever reports "not an object". Raising the token cap on a
@@ -106,6 +126,150 @@ export const CONSISTENCY_SCHEMA = {
     ok: { type: 'boolean' },
     violations: { type: 'array', items: obj({ claim: str, conflicts_with: str }) },
   }),
+}
+
+/**
+ * Consistency schema bound to the scene's actual restrictions. `restriction_id` is an ENUM of
+ * canon restriction ids, so a violation the canon does not support cannot be expressed - the
+ * fix for a free-text `conflicts_with` that let the model invent grounds and block real prose
+ * (live 2026-07-23: "Elias Thorne is not in the party" silenced the narrator 10 times).
+ * `claim` must be quoted from the draft; the parser verifies that too.
+ */
+function consistencySchemaFor(restrictionIds: string[]) {
+  return {
+    name: 'consistency_verdict',
+    schema: obj({
+      ok: { type: 'boolean' },
+      violations: {
+        type: 'array',
+        items: obj({
+          claim: { type: 'string', description: 'The exact sentence from the draft, quoted verbatim.' },
+          restriction_id: { type: 'string', enum: restrictionIds },
+          conflicts_with: str,
+        }),
+      },
+    }),
+  }
+}
+
+/**
+ * Prose claim extraction (2026-07-23). The model PERCEIVES - it reports how a passage depicts
+ * people it is handed - and code alone decides whether that is a contradiction (play/claims.ts).
+ *
+ * Deliberately never asks "is this consistent?". That question produced 14 false positives in 14
+ * blocks across three paid runs, because a model handed a fact fragment cannot tell what would
+ * negate it. "Does this passage give Elias Thorne a line?" is answerable.
+ */
+const CLAIM_EXTRACTOR_SYSTEM =
+  'You read one passage from a tabletop RPG scene and report how it depicts specific named ' +
+  'people. You are NOT judging quality, correctness or consistency - only what the passage ' +
+  'SHOWS. For each person listed, choose exactly one role. ' +
+  '"speaks": they say words here - dialogue, a whisper, a shout, a reply. ' +
+  '"acts": they physically do something here and now - move, strike, hand something over, ' +
+  'flinch, lead the way. ' +
+  '"mentioned": EVERYTHING else. They are named, described, remembered, mourned, feared, ' +
+  'discussed or blamed; their corpse, their belongings or their handiwork are described; ' +
+  'someone else speaks about them; their past deeds are recalled; they are quoted from memory. ' +
+  'A dead body being described is "mentioned", never "acts". A name inside someone else\'s ' +
+  'sentence is "mentioned", never "speaks". If you are unsure, answer "mentioned". ' +
+  'Report only the people listed; ignore everyone else in the passage.'
+
+function claimSchemaFor(names: string[]) {
+  return {
+    name: 'entity_claims',
+    schema: obj({
+      claims: {
+        type: 'array',
+        items: obj({
+          name: { type: 'string', enum: names },
+          role: { type: 'string', enum: [...CLAIM_ROLES] },
+        }),
+      },
+    }),
+  }
+}
+
+/**
+ * Does this draft put words in a dead mouth, or move someone who is not here?
+ *
+ * Costs nothing in the ordinary case: only a dead or absent person NAMED in the draft can
+ * produce a violation, so `suspectEntities` skips the model call entirely in any scene where
+ * nobody relevant is gone - which in a healthy run is nearly every scene.
+ */
+export async function runClaimCheck(
+  env: AgentEnv,
+  draft: string,
+  roster: readonly ClaimEntity[],
+): Promise<{ violations: ClaimViolation[]; checked: string[] }> {
+  const suspects = suspectEntities(draft, roster)
+  if (suspects.length === 0 || env.demo) return { violations: [], checked: [] }
+  const checked = suspects.map((s) => s.name)
+  try {
+    const raw = await agentJson(
+      env, 'consistency_checker', CLAIM_EXTRACTOR_SYSTEM,
+      `People to report on: ${checked.join(', ')}\n\nPassage:\n${draft}`,
+      300, claimSchemaFor(checked),
+    )
+    // Judged against the SUSPECTS only: a living name the extractor volunteered cannot violate.
+    return { violations: claimViolations(parseEntityClaims(raw), suspects), checked }
+  } catch {
+    return { violations: [], checked: [] } // a checker outage must never silence the narrator
+  }
+}
+
+/**
+ * Theory grounding: which of the party's own lines asserts this claim, if any?
+ *
+ * Not "is this consistent?" - the question canonization used to ask, which cannot fail. This one
+ * has a closed answer set (the lines the party actually spoke) and a safe default (none).
+ */
+const GROUNDING_SYSTEM =
+  'A game engine is about to make a statement PERMANENTLY TRUE in a shared story world, but only ' +
+  'if one of the players actually proposed it. You are given the statement and a numbered list of ' +
+  'lines the players said in this scene. Reply with the index of the ONE line in which a player ' +
+  'asserts, proposes, guesses or speculates that statement - including phrasings like "I think", ' +
+  '"maybe", "what if", "I bet". Asking a QUESTION about the topic is not asserting it. A line ' +
+  'that merely mentions the same people or place is not asserting it. If no line asserts the ' +
+  'statement, use -1. When in doubt, use -1. ' +
+  // State the shape, as every other agent in this file does. Without it the model answered with
+  // the bare scalar `-1`, which is not an object, so agentJson logged agent_output_unparsed
+  // twice in one run and the gate only refused by falling through its own catch (live
+  // 2026-07-23). Refusing for the right reason and refusing because the parse died look
+  // identical in the log, which is exactly the kind of blindness worth spending a line on.
+  'Reply with ONLY JSON in this exact shape: {"line_index": <number>}'
+
+function groundingSchemaFor(menuSize: number) {
+  return {
+    name: 'theory_grounding',
+    schema: obj({
+      line_index: {
+        type: 'integer',
+        enum: [-1, ...Array.from({ length: menuSize }, (_, i) => i)],
+        description: 'Index of the player line asserting the statement, or -1 for none.',
+      },
+    }),
+  }
+}
+
+export async function runTheoryGrounding(
+  env: AgentEnv,
+  theory: string,
+  menu: readonly PlayerLine[],
+): Promise<GroundingDecision> {
+  if (menu.length === 0) return decideCanonization(menu, { lineIndex: null })
+  // Demo fixtures assert the canonization path end to end; their theory IS the player's line.
+  if (env.demo) return decideCanonization(menu, { lineIndex: menu.length - 1 })
+  try {
+    const raw = await agentJson(
+      env, 'consistency_checker', GROUNDING_SYSTEM,
+      `Statement: ${theory}\n\nPlayer lines:\n${menu.map((l) => `[${l.index}] ${l.speaker}: ${l.text}`).join('\n')}`,
+      120, groundingSchemaFor(menu.length),
+    )
+    return decideCanonization(menu, parseGrounding(raw, menu.length))
+  } catch {
+    // Refuse on outage: a missed theory is recoverable, a wrongly-granted one is not.
+    return decideCanonization(menu, { lineIndex: null })
+  }
 }
 
 /** Utterance routing inside a conversation. */
@@ -429,6 +593,14 @@ export interface NpcContext {
   hooks: string[]
   /** Open beat goals (F08): situations the scene wants resolved - the NPC steers toward them. */
   beatGoals: string[]
+  /**
+   * The concrete terms on the table, when this NPC is the one who can speak to them. The code
+   * has always known the number - `offer_staged {"gold": 75}` - and never told the speaker, so
+   * the NPC hedged ("substantial", "a hefty purse") while the party asked "what's the pay",
+   * "how much coin", "Specify an amount" across four consecutive turns (live 2026-07-23). A
+   * quest-giver who cannot quote their own price cannot be negotiated with.
+   */
+  offerTerms: { label: string; gold: number; stakes: string; accepted: boolean }[]
   /** Consistency-regen constraints ("NEVER: ..."), set on the second attempt only. */
   constraint?: string
   /** DM-chosen gist (Slice 2 review console): the reply must follow this direction. */
@@ -485,6 +657,53 @@ const NPC_SYSTEM =
   'never trail off on a bare statement. When the conversation has clearly concluded (farewells said, ' +
   'business done, the party moving on), include proposed_actions [{"type": "leave"}] so the scene can end.'
 
+/**
+ * The NPC reply, with `reveals` bound to the ids this NPC actually holds.
+ *
+ * It had no schema at all, so `reveals` was free text - and the model answered with short
+ * paraphrases of its own knowledge rather than ids: "Murkheart uses psychological torment"
+ * against our "The Murkheart uses the valley's elements to disorient and instill fear". The
+ * reveal gate correctly refused every one as an unknown ingredient, so the clue never landed,
+ * the atom was never awarded, and the objective was eventually retired for no progress.
+ *
+ * Live 2026-07-23/24: `reveal_blocked {reason: "unknown ingredient"}` appears in every paid run
+ * (1-11 per run) and was fatal in The Cartographer's Debt - 11 refusals, 0 milestones in 30
+ * turns, fail-forward on an objective the party was actively working. Matching the paraphrase
+ * back to the clue is exactly the fuzzy-meaning matching that is banned here; making the id an
+ * ENUM means free text cannot be expressed in the first place.
+ *
+ * `address_pc` and `opening.unlocked_by` get the same treatment - they are character ids from a
+ * closed set, and parseNpcOutput already discards anything else, silently.
+ */
+function npcSchemaFor(knowledgeIds: string[], pcIds: string[]) {
+  const idEnum = (values: string[]) =>
+    values.length > 0 ? { type: 'string', enum: values } : { type: 'string' }
+  return {
+    name: 'npc_reply',
+    schema: obj({
+      dialogue: { type: 'string', description: '1-3 sentences of spoken dialogue, in character.' },
+      tone: str,
+      address_pc: idEnum(pcIds),
+      reveals: {
+        type: 'array',
+        items: idEnum(knowledgeIds),
+        description: knowledgeIds.length > 0
+          ? 'Ids of knowledge to reveal now - copy an id exactly, never a description of it.'
+          : 'This NPC holds no unrevealed knowledge; leave empty.',
+      },
+      opening: obj({ unlocked_by: idEnum(pcIds), skill: str }),
+      disposition_delta: obj({ value: { type: 'integer' }, reason: str }),
+      proposed_actions: {
+        type: 'array',
+        items: obj({
+          type: { type: 'string', enum: ['join_combat', 'leave', 'give_item', 'canonize_theory'] },
+          payload: { type: 'object' },
+        }),
+      },
+    }, ['dialogue']),
+  }
+}
+
 export async function runNpcAgent(env: AgentEnv, ctx: NpcContext): Promise<NpcAgentOutput> {
   const pcIds = ctx.pcs.map((p) => p.characterId)
   if (env.demo) {
@@ -506,6 +725,13 @@ export async function runNpcAgent(env: AgentEnv, ctx: NpcContext): Promise<NpcAg
     ctx.beatGoals.length > 0
       ? `Open story situations this scene wants resolved - steer the conversation toward them when natural, never force: ${ctx.beatGoals.join(' | ')}`
       : '',
+    ctx.offerTerms.length > 0
+      ? `TERMS ON THE TABLE - these numbers are settled fact, not yours to invent or round. If ` +
+        `anyone asks what the job pays, SAY THE NUMBER; never answer with "substantial", "a ` +
+        `hefty purse" or any other hedge:\n${ctx.offerTerms.map((o) =>
+          `- ${o.label}: ${o.gold} gold${o.accepted ? ' (already agreed)' : ' (offered, not yet answered)'}` +
+          `${o.stakes ? ` - at stake: ${o.stakes}` : ''}`).join('\n')}`
+      : '',
     ctx.recentLines.length > 0
       ? `THIS SCENE SO FAR (everything here already happened - never contradict or forget it):\n${ctx.recentLines.join('\n')}`
       : '',
@@ -517,7 +743,11 @@ export async function runNpcAgent(env: AgentEnv, ctx: NpcContext): Promise<NpcAg
     ctx.constraint ? `HARD CONSTRAINTS - the previous draft violated these facts. ${ctx.constraint}` : '',
   ].filter(Boolean).join('\n')
   const attempt = async () => {
-    const parsed = parseNpcOutput(await agentJson(env, 'npc_agent', NPC_SYSTEM, user, 600), pcIds)
+    const parsed = parseNpcOutput(
+      await agentJson(env, 'npc_agent', NPC_SYSTEM, user, 600,
+        npcSchemaFor(ctx.knowledge.map((k) => k.id), pcIds)),
+      pcIds,
+    )
     if (!parsed.ok) throw new AgentCallError(`NPC output invalid: ${parsed.errors.join('; ')}`)
     return parsed.data
   }
@@ -748,7 +978,12 @@ const CONSISTENCY_SYSTEM =
   // live: "a figure diligently writes" was flagged against "Duke Eldrin is dead".
   'An UNNAMED person - "a figure", "a scribe", "someone" - is a new character, not a dead one ' +
   'returning: flag it only if the draft itself says who they are. Judge the words on the page, ' +
-  'never who you suspect they might be. When in doubt, ok: true.'
+  'never who you suspect they might be. ' +
+  // The party roster is a cast list, not a guest list. Read as the latter it makes every NPC
+  // action a "contradiction" (live 2026-07-23).
+  'A character acting who is NOT in the party is NORMAL - the party list names the PLAYER ' +
+  'characters only, and the world is full of other people. Never flag someone merely for being ' +
+  'absent from a list; flag only what the facts positively contradict. When in doubt, ok: true.'
 
 /** Deterministic pass first (F07 SS6.1); LLM pass only for non-demo (SS6.2). */
 export async function runConsistency(
@@ -757,7 +992,12 @@ export async function runConsistency(
   npcs: { id: string; name: string }[],
   npcStates: Record<string, string>,
   factSheet: string,
-  opts?: { draftIsNpcSpeech?: boolean; draftAssertsCanon?: boolean },
+  opts?: {
+    draftIsNpcSpeech?: boolean
+    draftAssertsCanon?: boolean
+    /** Canon's closed menu of contradictable facts. Absent = legacy free-text mode. */
+    restrictions?: { id: string; text: string }[]
+  },
 ): Promise<ConsistencyVerdict> {
   const violations: ConsistencyVerdict['violations'] = []
   // Naming a dead NPC is only a contradiction when the draft IS that NPC talking. A murder
@@ -797,10 +1037,25 @@ export async function runConsistency(
           })),
         }
   }
+  // Nothing restrictive in this scene means nothing CAN be contradicted - so there is no
+  // question to ask. Skips the most-called agent in the app (88 calls in one 50-turn run)
+  // whenever nobody is dead, absent, or holding a committed fact.
+  const restrictionIds = (opts?.restrictions ?? []).map((r) => r.id)
+  if (opts?.restrictions !== undefined && restrictionIds.length === 0) {
+    return { ok: true, violations: [] }
+  }
   try {
-    return parseConsistency(
-      await agentJson(env, 'consistency_checker', CONSISTENCY_SYSTEM, `Facts:\n${factSheet}\n\nDraft:\n${draft}`, 300, CONSISTENCY_SCHEMA),
+    const raw = await agentJson(
+      env, 'consistency_checker', CONSISTENCY_SYSTEM,
+      `Facts:\n${factSheet}\n\nDraft:\n${draft}`, 300,
+      restrictionIds.length > 0 ? consistencySchemaFor(restrictionIds) : CONSISTENCY_SCHEMA,
     )
+    // Both deterministic gates: the cited restriction must exist, and the quoted claim must
+    // actually be in the draft. An unverifiable violation never silences the narrator.
+    return parseConsistency(raw, {
+      allowedIds: restrictionIds.length > 0 ? restrictionIds : undefined,
+      draft: restrictionIds.length > 0 ? draft : undefined,
+    })
   } catch {
     return { ok: true, violations: [] } // checker outage must not block play; incidents log elsewhere
   }

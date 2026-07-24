@@ -1,0 +1,148 @@
+// Grid Engine (F09 SS4.3): Chebyshev distance (diagonals cost 1), BFS pathing around blocked
+// cells, Bresenham line of sight. Uniform step cost - difficult terrain arrives with the rest
+// of v1. Cells are [x, y] on the GRID_SIZE grid.
+
+import { moveCost } from '../state/move.ts'
+import { GRID_SIZE } from '../state/types.ts'
+import type { Combatant } from './types.ts'
+
+export type Cell = [number, number]
+
+export function cellKey(x: number, y: number): string {
+  return `${x},${y}`
+}
+
+export function inBounds(x: number, y: number): boolean {
+  return x >= 0 && y >= 0 && x < GRID_SIZE && y < GRID_SIZE
+}
+
+export function chebyshev(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return moveCost(a, b)
+}
+
+/** Cells no path may enter: obstacles plus every living combatant except the mover. */
+export function blockedCells(
+  obstacles: [number, number][],
+  combatants: Combatant[],
+  moverId: string | null,
+): Set<string> {
+  const blocked = new Set<string>()
+  for (const [x, y] of obstacles) blocked.add(cellKey(x, y))
+  for (const c of combatants) {
+    if (c.id === moverId || c.dead) continue
+    blocked.add(cellKey(c.x, c.y))
+  }
+  return blocked
+}
+
+// Diagonals first so the BFS obstacle fallback favors diagonal-heavy (straighter-looking)
+// detours over orthogonal stair-steps. Order is fixed either way, so paths stay deterministic.
+const DIRS: Cell[] = [
+  [-1, -1], [1, -1], [-1, 1], [1, 1],
+  [0, -1], [0, 1], [-1, 0], [1, 0],
+]
+
+/**
+ * The ideal open-terrain route: step diagonally toward the goal until aligned on one axis, then
+ * straight - a Chebyshev-minimal path with at most one bend, so previews read as a clean line.
+ * Null if any cell is blocked or off-map, so the caller falls back to BFS around obstacles.
+ */
+function directPath(from: Cell, to: Cell, blocked: Set<string>): Cell[] | null {
+  const path: Cell[] = []
+  let [x, y] = from
+  while (x !== to[0] || y !== to[1]) {
+    x += Math.sign(to[0] - x)
+    y += Math.sign(to[1] - y)
+    if (!inBounds(x, y) || blocked.has(cellKey(x, y))) return null
+    path.push([x, y])
+  }
+  return path
+}
+
+/**
+ * Shortest path (8-directional, uniform cost) from `from` to `to`, excluding the start cell.
+ * Prefers the straight direct line; falls back to deterministic BFS only when obstacles block
+ * it. Null when unreachable.
+ */
+export function findPath(from: Cell, to: Cell, blocked: Set<string>): Cell[] | null {
+  const [tx, ty] = to
+  if (!inBounds(tx, ty) || blocked.has(cellKey(tx, ty))) return null
+  if (from[0] === tx && from[1] === ty) return []
+  const direct = directPath(from, to, blocked)
+  if (direct) return direct
+  const cameFrom = new Map<string, string>()
+  const startKey = cellKey(from[0], from[1])
+  cameFrom.set(startKey, startKey)
+  const queue: Cell[] = [from]
+  for (let head = 0; head < queue.length; head++) {
+    const [cx, cy] = queue[head]
+    for (const [dx, dy] of DIRS) {
+      const nx = cx + dx
+      const ny = cy + dy
+      const key = cellKey(nx, ny)
+      if (!inBounds(nx, ny) || blocked.has(key) || cameFrom.has(key)) continue
+      cameFrom.set(key, cellKey(cx, cy))
+      if (nx === tx && ny === ty) {
+        const path: Cell[] = []
+        let cursor = key
+        while (cursor !== startKey) {
+          const [px, py] = cursor.split(',').map(Number)
+          path.unshift([px, py])
+          cursor = cameFrom.get(cursor) as string
+        }
+        return path
+      }
+      queue.push([nx, ny])
+    }
+  }
+  return null
+}
+
+/** Every cell reachable within `budget` steps, mapped to its cost (start cell excluded). */
+export function reachableCells(from: Cell, budget: number, blocked: Set<string>): Map<string, number> {
+  const costs = new Map<string, number>()
+  costs.set(cellKey(from[0], from[1]), 0)
+  const queue: Cell[] = [from]
+  for (let head = 0; head < queue.length; head++) {
+    const [cx, cy] = queue[head]
+    const cost = costs.get(cellKey(cx, cy)) as number
+    if (cost >= budget) continue
+    for (const [dx, dy] of DIRS) {
+      const nx = cx + dx
+      const ny = cy + dy
+      const key = cellKey(nx, ny)
+      if (!inBounds(nx, ny) || blocked.has(key) || costs.has(key)) continue
+      costs.set(key, cost + 1)
+      queue.push([nx, ny])
+    }
+  }
+  costs.delete(cellKey(from[0], from[1]))
+  return costs
+}
+
+/**
+ * Bresenham line between cell centers; blocked when any intermediate cell (endpoints excluded)
+ * is an obstacle. Combatants never block sight in v1.
+ */
+export function lineOfSight(from: Cell, to: Cell, obstacles: Set<string>): boolean {
+  let [x0, y0] = from
+  const [x1, y1] = to
+  const dx = Math.abs(x1 - x0)
+  const dy = -Math.abs(y1 - y0)
+  const sx = x0 < x1 ? 1 : -1
+  const sy = y0 < y1 ? 1 : -1
+  let err = dx + dy
+  for (;;) {
+    if (x0 === x1 && y0 === y1) return true
+    const e2 = 2 * err
+    if (e2 >= dy) {
+      err += dy
+      x0 += sx
+    }
+    if (e2 <= dx) {
+      err += dx
+      y0 += sy
+    }
+    if ((x0 !== x1 || y0 !== y1) && obstacles.has(cellKey(x0, y0))) return false
+  }
+}

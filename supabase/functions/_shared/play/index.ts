@@ -11,6 +11,10 @@ export {
 } from './adjudication.ts'
 export type { ConsistencyVerdict, ParsePlayResult } from './adjudication.ts'
 export {
+  CLAIM_ROLES, claimViolations, isPresent, namesEntity, parseEntityClaims, suspectEntities,
+} from './claims.ts'
+export type { ClaimEntity, ClaimRole, ClaimViolation, EntityClaim } from './claims.ts'
+export {
   applyAssist,
   ASSIST_PROMPT_WINDOW_S,
   clampDc,
@@ -36,8 +40,6 @@ export {
   spawnThreshold,
 } from './danger.ts'
 export type { DangerModifiers, EncounterTableEntry, SpawnRoll } from './danger.ts'
-export { DEFAULT_HINT_TURNS, decideHint } from './hints.ts'
-export type { HintDecisionInput, HintRung } from './hints.ts'
 export { newPuzzle, puzzleSolvedTier, recordPuzzleAttempt } from './puzzle.ts'
 export type {
   PuzzleAttemptOutcome, PuzzleAttemptResult, PuzzleProgress, PuzzleSeed, PuzzleStatus,
@@ -87,3 +89,5 @@ export type {
   SocialClassification,
   SocialMagnitude,
 } from './types.ts'
+export { decideCanonization, parseGrounding, playerLines } from './canonization.ts'
+export type { GroundingDecision, GroundingVerdict, PlayerLine } from './canonization.ts'

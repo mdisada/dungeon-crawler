@@ -1,0 +1,55 @@
+// Stale-memory annotation (2026-07-23).
+//
+// Retrieval is not a neutral pipe. The RAG literature's finding is that retrieved context can
+// itself conflict with current truth, models rarely notice, and generation follows whichever
+// side reads better ("Contradiction Detection in RAG Systems", arXiv 2504.00180: RAG pipelines
+// have no stage that detects contradictions before handing context to generation).
+//
+// Our own retrieval had exactly that hole. `retrieveMemories` injects prose like "Established
+// earlier: Elias Thorne begs you to escort him" into the narrator's and every NPC's context,
+// with no filter against live npcStates. If Elias has died since, we were FEEDING the narrator
+// the contradiction and then blaming it for writing one.
+//
+// The fix is deterministic and needs no model: a memory is a record of what was true THEN, so
+// it is never wrong - it is just out of date. So we annotate rather than suppress. Dropping the
+// line would lose real history and fail silently; appending "(since then: X has died)" keeps
+// the memory and repairs its tense.
+
+export interface MemorySubject {
+  name: string
+  /** Live state: 'alive' | 'dead' | 'absent'. */
+  state: string
+}
+
+/**
+ * Whole-word, case-insensitive proper-name match against a closed roster - entity resolution,
+ * not meaning. Sibling of play/claims.ts `namesEntity`; kept separate so the story domain does
+ * not depend on play.
+ */
+function mentions(text: string, name: string): boolean {
+  const clean = name.toLowerCase().trim()
+  if (!clean) return false
+  const escaped = clean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`).test(` ${text.toLowerCase()} `)
+}
+
+const pastTense = (state: string): string =>
+  state === 'dead' ? 'has since died' : 'has since left the scene'
+
+/**
+ * Appends a correction to any memory naming someone whose state has moved on. Returns the
+ * memories in the same order, annotated where needed and untouched otherwise.
+ */
+export function annotateStaleMemories(
+  memories: readonly string[],
+  subjects: readonly MemorySubject[],
+): string[] {
+  const moved = subjects.filter((s) => s.state === 'dead' || s.state === 'absent')
+  if (moved.length === 0) return [...memories]
+  return memories.map((memory) => {
+    const stale = moved.filter((s) => mentions(memory, s.name))
+    if (stale.length === 0) return memory
+    const notes = stale.map((s) => `${s.name} ${pastTense(s.state)}`).join('; ')
+    return `${memory} (since then: ${notes})`
+  })
+}

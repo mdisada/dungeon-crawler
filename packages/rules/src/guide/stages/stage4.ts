@@ -64,6 +64,12 @@ export interface Stage4Output {
   ingredients: IngredientDraft[]
   /** SS4.1 conformance repairs (demoted coop sets etc.) - persisted as stage-4 guide_warnings. */
   warnings: string[]
+  /**
+   * Registry entities stage 1 filed as `npc` that stage 4 declined to make into people. The
+   * caller rewrites their kind to `lore` in meta_loop, or stage 5 and everything downstream
+   * keeps inheriting the same mis-classification and re-fighting the same battle.
+   */
+  reclassifyAsLore: string[]
 }
 
 export const INGREDIENTS_PER_CHAPTER = { min: 4, max: 12, defaultMin: 6, defaultMax: 10 }
@@ -89,7 +95,9 @@ This can be played solo: do not create content that REQUIRES multiple simultaneo
   // chapter has a big cast. Court's multi-chapter stage 4 failed all four retries - truncating,
   // then malforming under the same pressure - because it was asked for a full ingredient spread
   // on top of the largest registry in the test set (live 2026-07-22).
-  const mandatoryEntities = ctx.requiredEntities.length
+  // Only entities that must become ROWS create response-length pressure; lore is one line of
+  // context to write about, not a cast member to flesh out.
+  const mandatoryEntities = ctx.requiredEntities.filter((e) => e.kind !== 'lore').length
   const ingredientMax = mandatoryEntities >= 8 ? 6 : INGREDIENTS_PER_CHAPTER.defaultMax
   const ingredientMin = Math.min(INGREDIENTS_PER_CHAPTER.min, ingredientMax)
   const system = `You are the Ingredient Generator for a tabletop RPG platform. For one chapter, produce NPCs, locations, and ingredients - the toys the DM places in the world.
@@ -101,7 +109,8 @@ is ONE short sentence. Never write two sentences where one carries the idea. Com
 required entity briefly beats describing a few of them beautifully.
 
 Rules:
-- REQUIRED ENTITIES: the chapter's registry (listed below) names the NPCs/locations the story already established. Every one of them MUST appear in your response as an npc/location row with the EXACT same name (or be reused by existing key). Missing one is a validation failure.
+- REQUIRED ENTITIES: the chapter's registry (listed below) names what the story already established. Every entry marked [npc] or [location] MUST appear in your response as a row with the EXACT same name (or be reused by existing key). Missing one is a validation failure. Entries marked [lore] are factions, forces and phenomena - they are world context to WRITE ABOUT, and you must NOT create rows for them.
+- AN NPC IS ONE PERSON. Only create an npc row for an INDIVIDUAL the party could talk to or fight: someone with a name, a voice and opinions. Never create an npc for a group ("the city watch", "Valerius's agents", "the lost expedition") or for a force, curse or plague ("the Blight", "the Murkheart"). A group cannot hold a conversation, so giving it an npc row hands it a heartbeat, a mood and a seat in dialogue it can never use - and the game then treats killing a few of its members as the death of a person. Fights against a group are built from creature counts at the encounter stage, and if the party ever needs to TALK to a faction, name ONE representative of it as an individual npc (e.g. "Iron Hand Envoy Sera") and create that person instead.
 - Ingredients are TOYS, not railroads: each one is something players can find, use, ignore, or subvert. Never a mandatory step.
 - ${ingredientMin}-${ingredientMax} ingredients for this chapter, each linked to ONE or TWO objectives by number (objective_numbers holds 1-2 entries, never more) and tagged with the pillars it serves ("combat", "social", "exploration").
 - Every scene's cast and places must exist: create the NPCs and locations the scene sketches imply. Mark the chapter's main villain (if present here) as role "boss".
@@ -298,15 +307,35 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
   // philosophy as parseCombatSeed above and stage 5's budget warnings.
   const repaired = repairCoopConformance(coopSets, ingredients, ctx.seed.minPlayers, ctx.objectives.length)
 
-  c.errors.push(
-    ...validateEntityCoverage(
-      ctx.requiredEntities,
-      [...npcs.map((n) => n.name), ...ctx.existingNpcs.map((n) => n.name)],
-      [...locations.map((l) => l.name), ...ctx.existingLocations.map((l) => l.name)],
-    ),
+  const coverage = validateEntityCoverage(
+    ctx.requiredEntities,
+    [...npcs.map((n) => n.name), ...ctx.existingNpcs.map((n) => n.name)],
+    [...locations.map((l) => l.name), ...ctx.existingLocations.map((l) => l.name)],
   )
+  c.errors.push(...coverage.errors)
+  for (const entity of coverage.reclassifyAsLore) {
+    repaired.warnings.push(
+      `Registry entity "${entity.name}" (${entity.note}) was filed as an NPC but stage 4 did ` +
+        `not make it a person - reclassified as lore (a group, force or faction, not an individual).`,
+    )
+  }
 
-  return c.result({ npcs, locations, coopSets: repaired.coopSets, ingredients, warnings: repaired.warnings })
+  // A chapter with nobody alive to talk to cannot host a social encounter, and live play has
+  // no way to author its way out - Below the Sunken Chapel shipped with exactly two NPCs, one
+  // dead and one absent, and its only social route to the objective could never open (live
+  // 2026-07-22). Hard error into the existing regeneration loop.
+  if (npcs.length > 0 && npcs.every((n) => n.initialState === 'dead' || n.initialState === 'absent')) {
+    c.errors.push(
+      '$.npcs: every NPC in this chapter is dead or absent - the party would have nobody to ' +
+        'talk to. Keep the premise, but give the chapter at least one LIVING, reachable ' +
+        'NPC the party can actually meet (a survivor, a witness, a rival investigator).',
+    )
+  }
+
+  return c.result({
+    npcs, locations, coopSets: repaired.coopSets, ingredients, warnings: repaired.warnings,
+    reclassifyAsLore: coverage.reclassifyAsLore.map((e) => e.name),
+  })
 }
 
 function normalizeEntityName(name: string): string {
@@ -321,20 +350,44 @@ export function entityNameMatches(a: string, b: string): boolean {
   return na === nb || na.includes(nb) || nb.includes(na)
 }
 
-/** F04 SS2.1 must-cover check: every registry entity must land as a row (or reuse). Hard errors. */
+/**
+ * F04 SS2.1 must-cover check: every registry PLACE must land as a row.
+ *
+ * People are different, and the difference is the whole point. Stage 1 classifies entities
+ * before anyone has thought hard about them, and it routinely files a group under `npc` -
+ * "Silver Scale Guild guards", "Valerius's Agents", "Thorne's Agents". Stage 4 is told plainly
+ * that an NPC is ONE PERSON, so it declines to make those into people. That refusal used to
+ * collide with this contract and deadlock: stage 4 would not create the row, the contract
+ * demanded it, four retries burned, generation dead (live 2026-07-23, The Tidewater Vault -
+ * "required npc Silver Scale Guild guards is missing from the response").
+ *
+ * So take the refusal as the answer. An `npc` entity stage 4 declines to materialize, after
+ * being told exactly what an NPC is, is stage 4 reporting that stage 1 mis-filed it - and the
+ * caller reclassifies it to `lore`, where groups and forces belong. The absence IS the signal;
+ * no new schema field, no second opinion, nothing to prompt for.
+ *
+ * Places stay a hard error. A location is unambiguous - there is no "this place is really a
+ * group" failure mode - so a missing one is a genuine omission worth a retry.
+ */
 export function validateEntityCoverage(
   required: EntityRef[],
   npcNames: string[],
   locationNames: string[],
-): string[] {
+): { errors: string[]; reclassifyAsLore: EntityRef[] } {
   const errors: string[] = []
+  const reclassifyAsLore: EntityRef[] = []
   for (const entity of required) {
+    // `lore` entities (factions, forces, phenomena) are named world context, NOT rows - they
+    // have no life state, disposition or staging slot because they are not individuals.
+    if (entity.kind === 'lore') continue
     const pool = entity.kind === 'npc' ? npcNames : locationNames
-    if (!pool.some((name) => entityNameMatches(name, entity.name))) {
-      errors.push(`required ${entity.kind} "${entity.name}" (${entity.note}) is missing from the response - every registry entity must become a row`)
+    if (pool.some((name) => entityNameMatches(name, entity.name))) continue
+    if (entity.kind === 'npc') reclassifyAsLore.push(entity)
+    else {
+      errors.push(`required location "${entity.name}" (${entity.note}) is missing from the response - every registry location must become a row`)
     }
   }
-  return errors
+  return { errors, reclassifyAsLore }
 }
 
 /**

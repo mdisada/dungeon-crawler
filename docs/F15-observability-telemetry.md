@@ -36,7 +36,7 @@ Surface: creator-facing "AI performance" panel per adventure + a system dashboar
 
 Per combat encounter, computed at end from combat events:
 
-```
+```text
 combat_metrics: combat_id, party_level_avg, effective_party_size (allies weighted),
                 budget_rating, difficulty_setting, rounds, duration_min,
                 party_hp_swing_pct (max party HP lost at worst moment),
@@ -57,6 +57,59 @@ Per session, from the event log: assists claimed vs offered, group checks run, b
 - **Deterministic replay:** seeded Dice Engine + append-only event log + intent log ⇒ any combat or session segment re-executable in a sandbox to reproduce bugs. `replay(adventure_id, from_checkpoint, to_event)` dev tool.
 - **Proposal inspector (dev/admin):** view any proposal with its full assembled agent context (requires storing context snapshots for a sampled % of calls — default 10%, 100% in staging) — the tool for diagnosing "why did the agent say that".
 - Trace IDs: intent_id propagated through router → agent calls → proposals → diffs → broadcasts, so one player action is one queryable trace.
+
+## 6.1 Adventure Lab — simulated playthroughs (built 2026-07-22)
+
+The pre-production counterpart to replay: instead of re-running a recorded session, the Lab
+*generates* one. It exercises the real guide pipeline and the real live-play loop end to end
+with an LLM standing in for the players, at roughly **$0.02 per run** — cheap enough that a
+behavioural regression is caught by playing the game, not by reading code.
+
+**Architecture (deliberate three-part split):**
+
+- **`/adventure-lab`** (email-gated page) only *enqueues* `lab_runs` rows and observes. It never
+  calls an adventure or play API.
+- **A local watcher** (`node tests/lab/lab-runner.mjs`) claims queued runs **one at a time** and
+  executes: throwaway users → guide generation (with retry/stall-nudge) → simulated play →
+  analysis. It holds the service key and writes files, which a browser cannot.
+- **`lab_run_events`** is the live log the page tails (incremental by id), and
+  **`lab_comments`** are the user's pinned annotations — attached to a specific log row — which
+  are read back during review so a human observation made *during* the run guides the debugging
+  afterwards.
+
+**Decoupling contract:** the page renders generic `{phase, fn, label, detail}` rows and holds no
+knowledge of the pipeline. All system knowledge lives in `tests/lab/*.mjs`. Changing the
+creation or play flow must never require a frontend change — new event kinds flow through
+untouched. (User requirement, 2026-07-22.)
+
+**The simulated player** (`tests/lab/player-agent.mjs`) reads the actual narration and replies at
+a chosen quality — `poor | mediocre | good | mixed` (mixed samples 30/40/30 per turn from a
+per-run seeded RNG, so a rerun replays the same schedule). This is what makes the Lab able to
+catch pacing bugs: a canned turn list can never fail to answer a quest offer, get lost, or
+follow a thread.
+
+**Artifacts per run:** `tests/lab/logs/<run-id>.jsonl` (every step with `fn`, timestamp,
+duration, detail; game `event_log` rows mirrored as `game.<type>`) and `<run-id>.summary.json`
+(pacing counts, incidents, silent turns, spend by agent role, full transcript). Gitignored.
+
+**Findings it produced that unit tests structurally could not** (all fixed, see
+`docs/DECISIONS.md` 2026-07-23): the permanently-unwinnable dungeon; a 35-turn unanswered quest
+offer; offer pressure firing on three consecutive turns; an offer ladder with no terminal step
+(6 presses, 0 objectives across 30 turns); and a planner emitting bare `{"flag":"x"}` that
+hard-failed whole beats. **Rescue-rung firings (`guaranteed_route`, `fail_forward`) are tracked
+as lab anomalies** — a healthy run should never reach them; a run that does indicates an
+upstream defect the ladder is masking.
+
+## 6.2 Pre-deploy boot gate
+
+`supabase functions deploy --use-api` neither typechecks nor module-loads the bundle. A
+duplicate import therefore deployed cleanly and returned `503 BOOT_ERROR` on every request
+until it was found by hand (2026-07-23).
+
+`node scripts/check-functions.mjs [name]` boots each edge function under Deno (~2s each) and
+fails on load errors — duplicate identifiers, bad named imports, top-level throws. Type errors
+are deliberately **not** fatal (the repo carries known strictness noise that the runtime
+strips; only *load* failures boot-fail). Run it before every deploy.
 
 ## 7. Incident handling
 

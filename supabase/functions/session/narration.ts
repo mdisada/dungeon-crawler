@@ -8,8 +8,9 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { dialogueGateActive, dmSettings } from '../_shared/play/index.ts'
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
-import { runConsistency, runNarrator, runNarratorOptions } from './agents.ts'
+import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions } from './agents.ts'
 import type { AgentEnv, NarrationStyle } from './agents.ts'
+import { buildCanon } from './canon.ts'
 import { retrieveMemories } from './memory.ts'
 import {
   agentContextLines, appendLinesDiff, loadPartyCharacters, newLine, partyProfileLines, typingDiff,
@@ -17,10 +18,62 @@ import {
 import { recordProposal } from './proposals.ts'
 import { assertOk, commitDiffs, loadContext, loadState, logEvent } from './util.ts'
 
-async function adventureNpcs(service: SupabaseClient, adventureId: string): Promise<{ id: string; name: string }[]> {
-  const { data, error } = await service.from('npcs').select('id, name').eq('adventure_id', adventureId)
-  assertOk(error, 'npcs load failed')
-  return (data ?? []) as { id: string; name: string }[]
+/**
+ * Rollout switch for the rebuilt prose check (2026-07-23).
+ *   'off'    - skip entirely.
+ *   'shadow' - run it, log `claim_check_shadow`, publish the draft untouched. No player impact,
+ *              and it is the only way to learn the true-catch rate: the old checker's rate was
+ *              unmeasurable because it blocked, so a false positive and a true one looked alike.
+ *   'enforce'- one constrained regeneration when a dead mouth speaks; keep the better draft.
+ *
+ * Starts at 'shadow'. The class it targets - the speaking corpse - is real and recurring, but
+ * the last thing to block prose was wrong 14 times out of 14, so this one earns its authority
+ * with data before it gets any.
+ */
+export const PROSE_CLAIM_CHECK: 'off' | 'shadow' | 'enforce' = 'shadow'
+
+/**
+ * The rebuilt check: model perceives (who does this passage SHOW speaking or acting?), code
+ * judges (are any of them dead or absent?). In 'shadow' the draft comes back untouched.
+ */
+async function claimGuard(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  draft: string,
+  canon: { npcs: { id: string; name: string }[]; npcStates: Record<string, string> },
+  regenerate: (constraint: string) => Promise<string>,
+): Promise<string> {
+  if (PROSE_CLAIM_CHECK === 'off') return draft
+  const roster = canon.npcs.map((n) => ({ ...n, state: canon.npcStates[n.id] ?? 'alive' }))
+  const { violations, checked } = await runClaimCheck(env, draft, roster)
+  // Log the CLEAN checks too. Shadow mode exists to measure a true-catch rate, and a log that
+  // only records catches cannot distinguish "ran and found nothing" from "never ran" - which is
+  // exactly the blind spot that let the old checker's 0-for-14 record go unnoticed for so long.
+  // `checked.length`, NOT `checked` - an empty array is truthy, so the original form logged a
+  // clean check on every narration including the ones where the gate never fired and no model
+  // ran. Run 02c5f711 read as 29 checks when it made 7 (22 events carried `suspects: []`),
+  // inflating the evidence base 4x - the precise blindness this log was added to remove.
+  if (checked.length > 0 && violations.length === 0) {
+    await logEvent(service, env.adventureId, sessionId, 'claim_check_clean', {
+      suspects: checked, source: 'narration',
+    }).catch(() => {})
+    return draft
+  }
+  if (violations.length === 0) return draft
+
+  await logEvent(service, env.adventureId, sessionId, 'claim_check_shadow', {
+    enforced: PROSE_CLAIM_CHECK === 'enforce',
+    violations: violations.map((v) => ({ name: v.name, role: v.role, state: v.state })) as unknown as Json,
+    draft: draft.slice(0, 400),
+  }).catch(() => {})
+  if (PROSE_CLAIM_CHECK !== 'enforce') return draft
+
+  const constraint = violations.map((v) => v.constraint).join(' ')
+  const second = await regenerate(`NEVER: ${constraint}`).catch(() => draft)
+  // Keep whichever draft is clean; a second failure keeps the prose, never a mechanical line.
+  const retry = await runClaimCheck(env, second, roster)
+  return retry.violations.length === 0 ? second : draft
 }
 
 function factSheet(state: GameState): string {
@@ -69,7 +122,8 @@ export const MECHANICAL_FALLBACK = 'The attempt is resolved; the outcome stands.
 
 /**
  * Draft -> consistency -> (regen once) -> commit as a narrator line. Returns the published
- * text. `fallback` is the minimal mechanical description used when regeneration also fails.
+ * text. A second violation logs an incident but KEEPS the prose; `fallback` is now only the
+ * demo path's stand-in for a model that isn't there.
  */
 export async function publishNarration(
   service: SupabaseClient,
@@ -80,7 +134,6 @@ export async function publishNarration(
   style: NarrationStyle = 'beat',
 ): Promise<string> {
   const state = (await loadState(service, env.adventureId)).state
-  const npcs = await adventureNpcs(service, env.adventureId)
   const npcStates = state.dm?.facts.npcStates ?? {}
   // Anyone the guide authored as already dead/absent (a murder victim) may be NAMED, examined
   // and discussed - that is the whole subject of a mystery. Only speaking or appearing alive is
@@ -101,25 +154,40 @@ export async function publishNarration(
   // The narrator must see the same facts the checker holds it to, or it invents scenes
   // the checker then rightly blocks (seen live: every idle nudge fell back to mechanical).
   const grounded = `${prompt}\n\nEstablished scene facts - stay consistent with these:\n${facts}${partyLines}${memoryLines}`
-  const checkerFacts = `${facts}\nThe draft was instructed to: ${prompt}`
+  // CANON ONLY for the checker (Phase 6). It used to receive `facts` (which carries the live
+  // transcript under "Recent lines") plus the generating prompt verbatim - so a draft that
+  // correctly followed its instruction was flagged as contradicting it, blocked, regenerated
+  // under a NEVER: constraint quoting the very thing it was asked to write, and on the second
+  // failure published the mechanical fallback. See canon.ts for the full account.
+  const canon = await buildCanon(service, env.adventureId, state)
 
   let text: string
   try {
     text = await runNarrator(env, grounded, undefined, style)
-    let verdict = await runConsistency(env, text, npcs, npcStates, checkerFacts)
+    text = await claimGuard(service, env, sessionId, text, canon, (constraint) =>
+      runNarrator(env, grounded, constraint, style))
+    let verdict = await runConsistency(env, text, canon.npcs, canon.npcStates, canon.text, { restrictions: canon.restrictions })
     if (!verdict.ok) {
       const constraint = verdict.violations.map((v) => `${v.claim} (${v.conflictsWith})`).join('; ')
       await logEvent(service, env.adventureId, sessionId, 'consistency_blocked', {
         draft: text, violations: constraint, stage: 'first',
       })
       text = env.demo ? fallback : await runNarrator(env, grounded, `NEVER: ${constraint}`, style)
-      verdict = await runConsistency(env, text, npcs, npcStates, checkerFacts)
+      verdict = await runConsistency(env, text, canon.npcs, canon.npcStates, canon.text, { restrictions: canon.restrictions })
       if (!verdict.ok) {
+        // Keep the REGENERATED PROSE, not the canned line. Every narration violation inspected
+        // across three paid escort runs (2026-07-23) was a false positive - aftermath of a
+        // survived ambush "contradicting" ambush_survived, corpse description "contradicting"
+        // the corpse - while the fallback is guaranteed-terrible writing the player actually
+        // reads. A mildly-nitpicked sentence beats "The attempt is resolved; the outcome
+        // stands." in every case, and the incident still logs so the checker's true-catch rate
+        // stays measurable. The genuinely dangerous case (a dead NPC SPEAKING) is caught
+        // deterministically upstream via draftIsNpcSpeech and never relied on this path.
         await logEvent(service, env.adventureId, sessionId, 'incident', {
           kind: 'consistency_double_failure',
           violations: verdict.violations as unknown as Json,
+          resolution: 'kept_prose',
         })
-        text = fallback
       }
     }
   } catch (err) {

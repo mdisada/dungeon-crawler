@@ -79,12 +79,25 @@ def warm_up() -> None:
         print(f"Narrator voice model failed to load, narration audio will be unavailable: {e}")
 
 
-def generate_chunk_audio(text: str) -> bytes:
+def backend_name() -> str:
+    """Exposes the picked backend for the asset worker's capabilities report."""
+    return _backend()
+
+
+def generate_chunk_audio(text: str, voice_clip_path: str | None = None) -> bytes:
     """Synthesizes one narration chunk (one or more grouped sentences, see split_into_chunks) in
     the narrator voice and returns Opus-encoded (ogg container) bytes. Blocking GPU/CPU inference
     — callers must run this via asyncio.to_thread.
+
+    voice_clip_path (Assets Lab): a reference clip to clone from, overriding the configured
+    narrator voice. Only the Chatterbox backend clones; Kokoro ignores it and uses its preset
+    voice, which is why the worker reports `cloning` in its capabilities.
     """
-    wav_buffer = _generate_chatterbox(text) if _backend() == "chatterbox" else _generate_kokoro(text)
+    wav_buffer = (
+        _generate_chatterbox(text, voice_clip_path)
+        if _backend() == "chatterbox"
+        else _generate_kokoro(text)
+    )
 
     segment = AudioSegment.from_wav(wav_buffer)
     opus_buffer = io.BytesIO()
@@ -94,8 +107,9 @@ def generate_chunk_audio(text: str) -> bytes:
     return opus_buffer.getvalue()
 
 
-def _generate_chatterbox(text: str) -> io.BytesIO:
+def _generate_chatterbox(text: str, voice_clip_path: str | None = None) -> io.BytesIO:
     model = _chatterbox_model()
+    prompt_path = voice_clip_path or narrator_voice_path
     # norm_loudness=False works around a chatterbox-tts bug on numpy>=2.0: its reference-loudness
     # normalization step multiplies a float32 array by a np.float64 gain scalar, which numpy 2's
     # stricter type promotion upcasts to float64, and that leaks into calls downstream that don't
@@ -106,7 +120,7 @@ def _generate_chatterbox(text: str) -> io.BytesIO:
     # raw (un-normalized) loudness drives voice conditioning instead of a target-LUFS-normalized
     # version — consistent across every call, not a per-sentence quality issue -- and keeps this
     # working if a future dependency bump pulls numpy back to 2.x.
-    wav = model.generate(text, audio_prompt_path=narrator_voice_path, norm_loudness=False)
+    wav = model.generate(text, audio_prompt_path=prompt_path, norm_loudness=False)
 
     wav_buffer = io.BytesIO()
     ta.save(wav_buffer, wav, model.sr, format="wav")

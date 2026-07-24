@@ -1,7 +1,9 @@
+import { ChevronRight } from 'lucide-react'
+
 import { cn } from '@/lib/utils'
 import type { DialogueState, PlayersState, SceneState } from '@rules/state'
 
-import { useLineReveal } from '../hooks/use-line-reveal'
+import { usePlay } from '../hooks/use-play-context'
 
 interface RoleplayViewProps {
   scene: SceneState
@@ -14,11 +16,19 @@ interface RoleplayViewProps {
  * (active speaker full-opacity), PC thumbnails along the bottom (the directly-addressed PC
  * highlighted, F10 SS3.7), and the name-plated text box. The Say/Do/Roll input row is the
  * play page's IntentInputRow overlay.
+ *
+ * The line is delivered one sentence at a time and the player clicks to advance, same as the
+ * narration renderer - so each advance is also where F12 starts that sentence's audio. Nothing
+ * here signals generation: the input row's "DM is thinking" indicator owns that, and only once
+ * the player has caught up.
  */
 export function RoleplayView({ scene, dialogue, players }: RoleplayViewProps) {
-  const active = dialogue.lines.find((l) => l.id === dialogue.activeLineId) ?? dialogue.lines.at(-1)
+  const { reveal } = usePlay()
+  const active = dialogue.lines.find((l) => l.id === dialogue.activeLineId) ?? null
   const speakingNpcId = active?.npcId ?? null
-  const { sentences, visibleCount, isRevealing } = useLineReveal(active ?? null)
+  const { sentences, visibleCount, isRevealing, advance } = reveal
+
+  const current = visibleCount > 0 ? sentences[visibleCount - 1] : ''
 
   const left = dialogue.speakers.filter((s) => s.side === 'left')
   const right = dialogue.speakers.filter((s) => s.side === 'right')
@@ -77,6 +87,18 @@ export function RoleplayView({ scene, dialogue, players }: RoleplayViewProps) {
         ))}
       </div>
 
+      {/* Click the scene to advance, the visual-novel convention. Mouse-only on purpose: the Next
+          button in the text box carries the label and the keyboard focus, so this one stays out
+          of the tab order and out of the accessibility tree instead of duplicating it. */}
+      <button
+        type="button"
+        aria-hidden
+        tabIndex={-1}
+        disabled={!isRevealing}
+        onClick={advance}
+        className={cn('absolute inset-0', isRevealing ? 'cursor-pointer' : 'cursor-default')}
+      />
+
       <div className="relative mx-auto mb-16 w-full max-w-4xl px-4">
         <div className="rounded-xl border border-white/10 bg-black/75 p-4 backdrop-blur">
           {active?.speaker && (
@@ -85,15 +107,20 @@ export function RoleplayView({ scene, dialogue, players }: RoleplayViewProps) {
             </span>
           )}
           <p className="min-h-12 text-base leading-relaxed text-white" aria-live="polite">
-            {active ? sentences.slice(0, visibleCount).join('') : '…'}
-            {isRevealing && <span className="inline-block w-2 animate-pulse">…</span>}
+            {current || '…'}
           </p>
-          {dialogue.typing && (
-            <p className="mt-1 flex items-center gap-1.5" role="status" aria-label="The DM is thinking">
-              <span className="size-2 animate-bounce rounded-full bg-white/70" />
-              <span className="size-2 animate-bounce rounded-full bg-white/70 [animation-delay:150ms]" />
-              <span className="size-2 animate-bounce rounded-full bg-white/70 [animation-delay:300ms]" />
-            </p>
+          {isRevealing && (
+            <div className="mt-1 flex justify-end">
+              <button
+                type="button"
+                onClick={advance}
+                aria-label="Show the next sentence"
+                className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+              >
+                Next
+                <ChevronRight className="size-4" />
+              </button>
+            </div>
           )}
         </div>
       </div>

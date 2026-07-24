@@ -28,12 +28,12 @@ Rules:
 - Scene sketches are HIDDEN DM scaffolding. Be concrete: where it happens, who is there, what is really going on, what must become true for the story to advance.
 - Sketches are situations with tension, not scripts - never assume what the party chooses to do.
 - Cover the whole chapter arc; the last scene should set up the next chapter (or the finale).
-- entities: this chapter's entity list - every REGISTRY entity that appears in this chapter (copy its exact name) plus every NEW named NPC/location your scenes introduce. If a scene names it, it MUST be in this list; the content stage is required to flesh out exactly these.
+- entities: this chapter's entity list - every REGISTRY entity that appears in this chapter (copy its exact name AND its kind) plus everything NEW your scenes name. If a scene names it, it MUST be in this list. Kinds: "npc" = an INDIVIDUAL PERSON who can be talked to or fought; "location" = a place; "lore" = a group, faction, squad, order, army, cult, or a force/curse/plague. A group or a force is NEVER an npc - it cannot hold a conversation, and the content stage must not build a person out of it.
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
 {
   "scenes": [ { "sketch": "3-5 sentence hidden scene sketch" } ],
-  "entities": [ { "kind": "npc"|"location", "name": "exact name", "note": "one-line role" } ]
+  "entities": [ { "kind": "npc"|"location"|"lore", "name": "exact name", "note": "one-line role" } ]
 }`
 
   const chapter = ctx.chapters[ctx.chapterIndex]

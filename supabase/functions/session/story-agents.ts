@@ -5,11 +5,12 @@
 
 import { callAgentText } from '../_shared/llm.ts'
 import {
-  LOOP_TEMPLATES, parseBeatPlan, parsePivot,
+  LOOP_TEMPLATES, parseBeatPlan, parseOutcomeMaps, parsePivot, templateByKey, templateGuidance,
+  templateMenu, TWIST_AXES,
 } from '../_shared/story/index.ts'
 import type { Json } from '../_shared/state/index.ts'
 import type {
-  BeatParseResult, BeatPlanContext, LoopType, PivotAssessment,
+  BeatParseResult, BeatPlanContext, LoopType, OutcomeMaps, PivotAssessment, TemplateKind, TwistAxis,
 } from '../_shared/story/index.ts'
 import { agentJson } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
@@ -61,35 +62,39 @@ export async function runLoopClassifier(env: AgentEnv, ctx: ClassifierContext): 
 const PLANNER_SYSTEM =
   'You are the Beat Planner for a tabletop RPG. Plan exactly ONE next beat. Goals are ' +
   'situations demanding a player decision, never events that happen to the party. Reply with ' +
-  'ONLY JSON: {"beat": {"name": string, "goals": [1-4 strings], "exit_conditions": predicate, ' +
+  'ONLY JSON: {"beat": {"name": string, "goals": [1-4 strings], ' +
+  '"new_local_atoms": [{"name": "<snake_case>", "kind": "flag"|"event"}], ' +
+  '"exit_conditions": predicate, ' +
   '"ingredient_requests": [{"type": "clue"|"secret"|"event"|"item"|"rumor", "purpose": string, ' +
   '"pillar_tags": ["combat"|"social"|"exploration"]}], "braided": [{"goal_pair": [i, j], ' +
   '"link": {"kind": "dc_mod"}, "skills": [skillA, skillB]}], "narration_seed": string, ' +
   '"encounter": {"kind": "skill_challenge"|"social"|"puzzle"|"combat", "label": string, "stakes": string, ' +
-  '"rationale": string, "on_success": [milestones], "on_partial": [milestones], ' +
-  '"on_failure": [milestones]}}}. ' +
+  '"rationale": string}, ' +
+  '"create_npcs": [{"name": string, "personality": string}]}}. ' +
+  // Phase 2: a social beat aimed at somebody who does not exist (or is dead) can never open.
+  'CAST: a SOCIAL encounter may only involve people on the AVAILABLE CAST list below. If the ' +
+  'scene needs someone who is not on it - a survivor, a witness, a broker - name them in ' +
+  'create_npcs (max 2, with a one-line personality) and they will be added to the world before ' +
+  'the scene opens. NEVER write a social encounter around a person who is neither on the cast ' +
+  'list nor in create_npcs: the encounter would have nobody to stage and the story would stall. ' +
   // The beat exists to move the CURRENT objective. Without this the planner writes a fine beat
   // about something else entirely and the objective sits untouched however well play goes.
-  'THE BEAT MUST ADVANCE THE CURRENT OBJECTIVE. When objective milestones are listed below, the ' +
-  'party must be able to reach at least ONE of them by playing this beat, and that milestone ' +
-  'must appear VERBATIM in the encounter on_success map, so a full success credits the objective. ' +
-  'A beat the objective could not notice is a wasted beat, however good the scene. ' +
-  'exit_conditions is how THIS beat closes locally - use ONLY atoms {"flag": ' +
-  '"<snake_case_decision_or_milestone>", "eq": true} | {"event": "exact past-tense marker"} with ' +
-  '{"any": []}/{"all": []}, NEVER "fact" atoms (live play cannot write them). Make it an "any" of ' +
-  '2-4 of the beat\'s OWN success/setback flags (NOT the objective milestone) so multiple player ' +
-  'approaches exit the beat and it never stalls waiting on the objective\'s big step. ' +
+  'THE BEAT MUST ADVANCE THE CURRENT OBJECTIVE: the party must be able to reach at least ONE ' +
+  'of the listed objective milestones by playing this beat. ' +
+  'ATOMS ARE DECLARED, NEVER INVENTED IN PLACE: every local success/setback atom this beat ' +
+  'introduces MUST appear in new_local_atoms (2-4 of them, snake_case flags or short past-tense ' +
+  'event markers). exit_conditions is how THIS beat closes locally - use ONLY atoms from ' +
+  'new_local_atoms or the objective milestones, as {"flag": "<name>", "eq": true} | {"event": ' +
+  '"<name>"} with {"any": []}/{"all": []}, NEVER "fact" atoms (live play cannot write them). ' +
+  'Make it an "any" of 2-4 of the beat\'s OWN success/setback atoms (NOT the objective ' +
+  'milestone) so multiple player approaches exit the beat and it never stalls. Declare BOTH a ' +
+  'success atom AND a consequence/setback atom - a failed encounter must still move the story ' +
+  '(at a cost), never re-offer the same wall. ' +
   'Braided pairs (two goals for different PCs whose outcomes modify each other) only when ' +
   'guidance asks for cooperation. The narration_seed must end at a concrete decision point facing the players. ' +
   'ENCOUNTER: every beat carries exactly one typed encounter - the ONLY way this beat can ' +
-  'resolve. Its outcome maps translate result tiers into milestones, and every entry MUST be ' +
-  'copied EXACTLY from the objective milestones provided or from the atoms of your own ' +
-  'exit_conditions (a full/partial success should exit the beat). Never invent milestone text. ' +
-  'FAIL FORWARD: author exit_conditions as an "any" of BOTH a success atom AND a ' +
-  'consequence/setback atom, and map on_failure to that setback atom - a failed encounter ' +
-  'must still move the story (at a cost), never re-offer the same wall. Objective milestones ' +
-  'must be copied CHARACTER-FOR-CHARACTER (keep spaces - never snake_case them) and go in ' +
-  'on_success; your own local success/setback atoms carry on_partial/on_failure and exit_conditions.'
+  'resolve. Give its kind, label, stakes and rationale only; outcome-to-milestone mapping ' +
+  'happens in a separate step against the atoms you declared.'
 
 export interface PlannerContext {
   loop: { type: LoopType; completedBeatNames: string[] }
@@ -100,6 +105,8 @@ export interface PlannerContext {
   varietyGuidance: string[]
   /** Retrieved memory fragments (Slice 7) - what earlier sessions established. */
   establishedEarlier?: string[]
+  /** Names of NPCs that can actually be staged right now (Phase 2). */
+  livingCast?: string[]
   plan: BeatPlanContext
 }
 
@@ -115,6 +122,7 @@ function cannedBeatPlan(ctx: PlannerContext): unknown {
         `[demo] a situation forcing a choice during ${name}`,
         `[demo] a second thread the party can pull during ${name}`,
       ],
+      new_local_atoms: [{ name: `beat ${name} resolved`, kind: 'event' }],
       exit_conditions: { event: `beat ${name} resolved` },
       ingredient_requests: [{ type: 'clue', purpose: `[demo] something pointing past ${name}`, pillar_tags: ['exploration'] }],
       braided: wantsCoop && ctx.plan.partySize > 1 && skills.length === 2
@@ -126,23 +134,18 @@ function cannedBeatPlan(ctx: PlannerContext): unknown {
         label: `[demo] the ${name} challenge`,
         stakes: `[demo] the ${name} beat hangs on it`,
         rationale: 'demo',
-        on_success: [`beat ${name} resolved`],
-        on_partial: [`beat ${name} resolved`],
-        on_failure: [],
       },
+      create_npcs: [],
     },
   }
 }
 
 /**
- * No json_schema here, deliberately. Half the outcome-map vocabulary is the atoms of this very
- * response's exit_conditions (see parseEncounterSpec), which cannot be enumerated in a schema
- * built before the call. An enum of only the objective milestones would forbid the fail-forward
- * mapping the prompt asks for - on_failure pointing at a setback atom that is never an objective
- * milestone - and would force on_success to claim an objective milestone even when none fits,
- * turning a dropped entry into false progression. The parser drops off-vocabulary entries, so
- * the failure this would prevent is already soft. Closing it properly means splitting into two
- * calls (plan the beat, then map outcomes against the atoms it just wrote).
+ * Call 1 of the two-call split (overhaul Phase 1): plan the beat + DECLARE its local atoms.
+ * Outcome maps moved to runBeatOutcomeMapper (call 2), whose schema enum includes the atoms
+ * this call declared - the circularity that used to force free-text generation here is gone.
+ * Still no json_schema on THIS call: exit_conditions is a recursive predicate the schema
+ * language cannot express tightly, and the parser's declared-atoms check is the real gate.
  *
  * `priorErrors` turns a retry into a REPAIR. A blind re-roll of the identical prompt is the
  * documented no-op ("the retry loop that looks like progress and does nothing"), and it is what
@@ -161,17 +164,18 @@ export async function runBeatPlanner(
     : [
         'Your previous plan was REJECTED by the validator:',
         ...priorErrors!.slice(0, 8),
-        'Fix exactly these problems. Outcome-map entries must be copied character-for-character ' +
-          'from the milestone list above - if none fits a tier, leave that tier empty.',
+        'Fix exactly these problems. Declare EVERY local atom your exit_conditions reference in ' +
+          'new_local_atoms (max 4), or use the objective milestones verbatim.',
       ].join('\n')
   const raw = env.demo
     ? cannedBeatPlan(ctx)
     : await agentJson(env, 'beat_planner', PLANNER_SYSTEM, [
         `Loop: ${ctx.loop.type}; template ${LOOP_TEMPLATES[ctx.loop.type].beats.join(' -> ')}; completed beats: ${ctx.loop.completedBeatNames.join(', ') || 'none'}`,
         ctx.objective ? `Current objective: ${ctx.objective.title} (DM notes: ${ctx.objective.hiddenDescription})` : 'No active objective.',
-        `Objective milestones the outcome maps may copy (exact text): ${(ctx.plan.milestones ?? []).join(' | ') || 'none - map onto your own exit_conditions atoms'}`,
+        `Objective milestones this beat must make reachable (exact text): ${(ctx.plan.milestones ?? []).join(' | ') || 'none'}`,
         `Scene: ${ctx.sceneSummary}`,
         `Party: ${ctx.partySummary}`,
+        `AVAILABLE CAST (alive and present - a social encounter may only involve these, or people you add via create_npcs): ${(ctx.livingCast ?? []).join(' | ') || 'NOBODY - a social encounter REQUIRES create_npcs'}`,
         `Undiscovered ingredient pool (reuse these before requesting new ones): ${ctx.poolIngredients.map((p) => `${p.type}: ${p.reveals}`).join(' | ') || 'empty'}`,
         (ctx.establishedEarlier ?? []).length > 0
           ? `Established earlier (plan past these, never contradict them):\n${ctx.establishedEarlier!.map((m) => `- ${m}`).join('\n')}`
@@ -179,6 +183,69 @@ export async function runBeatPlanner(
         ctx.varietyGuidance.length > 0 ? `Variety guidance:\n${ctx.varietyGuidance.join('\n')}` : '',
       ].filter(Boolean).join('\n'), 900)
   return parseBeatPlan(raw, ctx.plan)
+}
+
+const MAPPER_SYSTEM =
+  'You map one encounter\'s result tiers onto story milestones for a tabletop RPG engine. ' +
+  'Reply with ONLY JSON: {"on_success": [atoms], "on_partial": [atoms], "on_failure": [atoms]}. ' +
+  'Choose ONLY from the atom menu provided - the engine can credit nothing else. ' +
+  'on_success MUST include at least one OBJECTIVE atom (a full success credits the objective) ' +
+  'and should also include the beat\'s own success atom so the beat exits. on_partial maps to ' +
+  'local atoms (progress at a cost). on_failure maps to a local SETBACK atom when one exists - ' +
+  'a failed encounter still moves the story - and never to an objective atom.'
+
+export interface OutcomeMapperContext {
+  beatName: string
+  goals: string[]
+  encounter: { kind: string; label: string; stakes: string }
+  /** Current objective's authored atoms - at least one must land in on_success. */
+  spineAtoms: string[]
+  /** The beat's registered local atom labels (post-canonicalization). */
+  localAtoms: string[]
+}
+
+/**
+ * Call 2 of the two-call split: tier -> milestone mapping over a CLOSED menu. The schema enum
+ * makes off-menu atoms unrepresentable; parseOutcomeMaps is the belt to that suspender. The
+ * caller applies the deterministic spine fallback when on_success comes back empty - this
+ * function never throws into the beat-open path.
+ */
+export async function runBeatOutcomeMapper(env: AgentEnv, ctx: OutcomeMapperContext): Promise<OutcomeMaps> {
+  const menu = [...new Set([...ctx.spineAtoms, ...ctx.localAtoms])]
+  if (menu.length === 0) return { onSuccess: [], onPartial: [], onFailure: [], dropped: [] }
+  if (env.demo) {
+    return parseOutcomeMaps({
+      on_success: [...ctx.spineAtoms.slice(0, 1), ...ctx.localAtoms.slice(0, 1)],
+      on_partial: ctx.localAtoms.slice(0, 1),
+      on_failure: ctx.localAtoms.slice(1, 2),
+    }, menu)
+  }
+  const schema = {
+    name: 'beat_outcome_maps',
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['on_success', 'on_partial', 'on_failure'],
+      properties: {
+        on_success: { type: 'array', items: { type: 'string', enum: menu }, minItems: 1, maxItems: 3 },
+        on_partial: { type: 'array', items: { type: 'string', enum: menu }, maxItems: 2 },
+        on_failure: { type: 'array', items: { type: 'string', enum: menu }, maxItems: 2 },
+      },
+    },
+  }
+  try {
+    const raw = await agentJson(env, 'beat_planner', MAPPER_SYSTEM, [
+      `Beat: ${ctx.beatName}`,
+      `Goals: ${ctx.goals.join(' | ')}`,
+      `Encounter: ${ctx.encounter.kind} "${ctx.encounter.label}"${ctx.encounter.stakes ? ` - at stake: ${ctx.encounter.stakes}` : ''}`,
+      `OBJECTIVE atoms (on_success needs >=1 of these): ${ctx.spineAtoms.join(' | ') || 'none'}`,
+      `Beat-local atoms: ${ctx.localAtoms.join(' | ') || 'none'}`,
+    ].join('\n'), 300, schema)
+    return parseOutcomeMaps(raw, menu)
+  } catch {
+    // Mapper outage must never kill a beat open - empty maps trigger the caller's fallback.
+    return { onSuccess: [], onPartial: [], onFailure: [], dropped: ['mapper call failed'] }
+  }
 }
 
 const DESIGNER_SYSTEM =
@@ -209,6 +276,7 @@ function designerSchema(
   kind: string,
   npcNames: string[],
   partySkills: string[],
+  templateKeys: string[] = [],
 ): { name: string; schema: Record<string, unknown> } | undefined {
   const wrap = (params: Record<string, unknown>, required: string[]) => ({
     name: `encounter_params_${kind}`,
@@ -217,7 +285,22 @@ function designerSchema(
       additionalProperties: false,
       required: ['params'],
       properties: {
-        params: { type: 'object', additionalProperties: false, required, properties: params },
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: templateKeys.length > 0 ? [...required, 'template', 'twist'] : required,
+          properties: {
+            ...params,
+            // Phase 4 anti-generic: the shape is CHOSEN from a curated menu, never invented,
+            // and the twist axis forces each instance to differ from the last one.
+            ...(templateKeys.length > 0
+              ? {
+                  template: { type: 'string', enum: templateKeys },
+                  twist: { type: 'string', enum: [...TWIST_AXES] },
+                }
+              : {}),
+          },
+        },
       },
     },
   })
@@ -263,7 +346,10 @@ export async function runEncounterDesigner(
   spec: { kind: string; label: string; stakes: string; rationale: string },
   party: { size: number; skills: string[]; profiles?: string[] },
   npcNames: string[] = [],
+  /** Template keys used by recent beats - dropped from the menu so shapes do not repeat. */
+  recentTemplates: string[] = [],
 ): Promise<Json> {
+  const templateKeys = templateMenu(spec.kind as TemplateKind, recentTemplates)
   const fallback: Json = spec.kind === 'skill_challenge'
     ? {
         needed_successes: Math.min(3, party.size + 1),
@@ -305,9 +391,25 @@ export async function runEncounterDesigner(
         ? `Who the party members are (design around their traits):\n${party.profiles!.map((p) => `- ${p}`).join('\n')}`
         : '',
       spec.kind === 'social' ? `Named NPCs in the world: ${npcNames.join('; ') || 'none listed'}` : '',
-    ].filter(Boolean).join('\n'), 450, designerSchema(spec.kind, npcNames, party.skills))
+      templateKeys.length > 0
+        ? `Pick the SHAPE from this menu (template) and one twist axis (twist):\n${
+            templateKeys.map((k) => `- ${k}: ${templateByKey(k)?.shape ?? ''}`).join('\n')
+          }\nTwist axes: timer (something runs out) | terrain (the place fights them) | ` +
+          'moral_choice (full success costs something) | secondary_objective (something else is ' +
+          'worth grabbing, and reaching for it risks the main goal). Design the params to SERVE ' +
+          'the shape and the twist you picked.'
+        : '',
+    ].filter(Boolean).join('\n'), 450, designerSchema(spec.kind, npcNames, party.skills, templateKeys))
     const params = (typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>).params : null)
-    return (typeof params === 'object' && params !== null ? params : fallback) as Json
+    if (typeof params !== 'object' || params === null) return fallback
+    // Carry the guidance forward so narration can skin the chosen shape rather than re-derive it.
+    const p = params as Record<string, Json>
+    const template = typeof p.template === 'string' ? templateByKey(p.template) : null
+    const twist = typeof p.twist === 'string' && (TWIST_AXES as readonly string[]).includes(p.twist)
+      ? (p.twist as TwistAxis)
+      : null
+    if (template && twist) p.template_guidance = templateGuidance(template, twist)
+    return p as Json
   } catch {
     return fallback // a designer outage degrades to sane defaults, never a blocked beat
   }
@@ -584,7 +686,13 @@ const ARCHIVIST_SYSTEM =
   'Rules: milestones MUST be copied verbatim from the authored list - never invent one, and ' +
   'return an empty array if nothing on that list actually happened. Only report an npc_state ' +
   'the scene plainly established - and use "present" for anyone who has now ARRIVED or returned, ' +
-  'which is what allows the game to bring them on stage. Only report a contradiction you can point at. When in doubt, ' +
+  'which is what allows the game to bring them on stage. ' +
+  // A false "dead" removes an NPC from staging and blocks their dialogue for the rest of the
+  // session, so the claim has to be provable from the text, not inferred from mood.
+  'EVERY npc_state needs an "evidence" field quoting the transcript line that establishes it, ' +
+  'copied VERBATIM. If you cannot quote a line that plainly shows it, do not report the state ' +
+  'at all - inference, implication and atmosphere are not evidence. ' +
+  'Only report a contradiction you can point at. When in doubt, ' +
   'return empty arrays - a missed record is recoverable, a false one corrupts the story.'
 
 export interface ArchivistContext {
@@ -613,7 +721,7 @@ export interface ArchivistContext {
 export interface ArchivistOutput {
   milestones: string[]
   digest: string
-  npcStates: { name: string; state: 'dead' | 'absent' | 'alive' }[]
+  npcStates: { name: string; state: 'dead' | 'absent' | 'alive'; evidence: string }[]
   contributions: { name: string; did: string }[]
   contradictions: string[]
   dials: DialMove[]
@@ -664,10 +772,15 @@ function archivistSchema(ctx: ArchivistContext): { name: string; schema: Record<
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['name', 'state'],
+            required: ['name', 'state', 'evidence'],
             properties: {
               name: { type: 'string', enum: npcNames },
               state: { type: 'string', enum: ['dead', 'absent', 'present'] },
+              // Phase 6: a dead/absent verdict removes an NPC from staging and blocks their
+              // dialogue for the rest of the session, so it must be EVIDENCED - the same
+              // verbatim-quote discipline the recognition judge uses. Restorative 'present'
+              // needs no proof (it can only ever widen what is possible).
+              evidence: { type: 'string' },
             },
           },
         },
@@ -744,8 +857,9 @@ export async function runArchivist(env: AgentEnv, ctx: ArchivistContext): Promis
           : raw === 'present' || raw === 'alive'
             ? 'alive' as const
             : null
+        const evidence = typeof row.evidence === 'string' ? row.evidence.trim() : ''
         // An unknown name means the model invented someone - drop it rather than guess.
-        return name && state && known.has(name.toLowerCase()) ? [{ name, state }] : []
+        return name && state && known.has(name.toLowerCase()) ? [{ name, state, evidence }] : []
       }),
       contributions: (Array.isArray(obj.contributions) ? obj.contributions : []).flatMap((c) => {
         if (typeof c !== 'object' || c === null) return []

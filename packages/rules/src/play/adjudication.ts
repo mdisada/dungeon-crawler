@@ -167,14 +167,49 @@ export interface ConsistencyVerdict {
   violations: { claim: string; conflictsWith: string }[]
 }
 
-export function parseConsistency(raw: unknown): ConsistencyVerdict {
+/** Normalized containment - the model quotes with different spacing/casing than the draft. */
+function quotesFrom(claim: string, draft: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  const c = norm(claim)
+  return c.length >= 12 && norm(draft).includes(c)
+}
+
+/**
+ * Blocking a draft is expensive - two regenerations, then a canned mechanical line the player
+ * reads instead of prose - so a violation has to EARN it. Two deterministic gates, both
+ * optional so legacy/demo callers behave as before:
+ *
+ * - `allowedIds`: the violation must cite a real restriction from canon (dead/absent NPC,
+ *   committed fact). `conflicts_with` used to be free text, so the model could invent grounds
+ *   and code accepted them - live 2026-07-23 it cited "Party: Bram, Kestrel, Dain" to block
+ *   every NPC action, costing 10 blocks and 3 mechanical fallbacks in one run. A restriction
+ *   that does not exist is now unrepresentable.
+ * - `draft`: the quoted `claim` must actually appear in the draft. A paraphrase cannot be
+ *   verified, and an unverifiable claim is not grounds to silence the narrator (same
+ *   verbatim-evidence discipline as the recognition judge and the Archivist).
+ */
+export function parseConsistency(
+  raw: unknown,
+  opts?: { allowedIds?: readonly string[]; draft?: string },
+): ConsistencyVerdict {
   if (!isObject(raw)) return { ok: true, violations: [] }
-  const violations = Array.isArray(raw.violations)
+  const parsed = Array.isArray(raw.violations)
     ? raw.violations.filter(isObject).map((v) => ({
         claim: asString(v.claim),
         conflictsWith: asString(v.conflicts_with),
+        restrictionId: asString(v.restriction_id),
       }))
     : []
+  const gated = opts?.allowedIds !== undefined || opts?.draft !== undefined
+  const violations = parsed.filter((v) => {
+    if (opts?.allowedIds && !opts.allowedIds.includes(v.restrictionId)) return false
+    if (opts?.draft !== undefined && !quotesFrom(v.claim, opts.draft)) return false
+    return true
+  }).map((v) => ({ claim: v.claim, conflictsWith: v.conflictsWith }))
+  // With gates on, the VERIFIED violations are the sole authority: a bare `ok: false` carrying
+  // no citable, quotable evidence is an opinion, and an opinion must not cost the player real
+  // prose. Ungated callers keep the original semantics exactly.
+  if (gated) return { ok: violations.length === 0, violations }
   return { ok: raw.ok !== false && violations.length === 0, violations }
 }
 

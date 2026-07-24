@@ -5,11 +5,11 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import {
-  classifyIntent, dmSettings, liveRng, promptDeadline, rollCheck,
+  classifyIntent, dmSettings, liveRng, promptDeadline, promptExpired, rollCheck,
   ASSIST_PROMPT_WINDOW_S, GROUP_PROMPT_WINDOW_S, SOLO_PROMPT_WINDOW_S,
 } from '../_shared/play/index.ts'
 import type { CheckSpec, IntentRoute, PendingPrompt } from '../_shared/play/index.ts'
-import type { Json, PendingPromptState } from '../_shared/state/index.ts'
+import type { GameState, Json, PendingPromptState } from '../_shared/state/index.ts'
 import { runAdjudicator } from './agents.ts'
 import type { AgentEnv, SceneEffects } from './agents.ts'
 import { narrationBeat } from './narration.ts'
@@ -18,7 +18,7 @@ import { endEncounter, startSocial } from './social-staging.ts'
 import { maybeSpawnEncounter } from './danger.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { handleCutsceneIntent } from './entry.ts'
-import { maybeAutoHint } from './hints.ts'
+import { runProgressDirector } from './director.ts'
 import {
   handleChallengeIntent, handleEncounterTalk, openEncounterCommand, spawnInstantiator,
   specFromCommandBody,
@@ -30,10 +30,15 @@ import {
   loadPartyCharacters, loadPlayContext, newLine, partySkillList, pendingDiffs, skillModifierFor,
   typingDiff,
 } from './orchestrate.ts'
-import { classifyAndHandle, loadLoops, noteIntentForClassifier, planAndOpenBeat } from './beats.ts'
-import { activeLoop, listMilestoneAtoms } from '../_shared/story/index.ts'
+import { classifyAndHandle, noteIntentForClassifier, planAndOpenBeat } from './beats.ts'
+import {
+  dueDeadlines, markMissed, parseDeadlineRecords, resolveAtomText,
+} from '../_shared/story/index.ts'
+import { milestoneVocabulary } from './milestones.ts'
+import { applyNpcState } from './npc-state.ts'
 import type { CharacterRow, PlayContext } from './orchestrate.ts'
 import { evaluateStoryProgress } from './progress.ts'
+import { resolvePending } from './prompts.ts'
 import { expireStaleProposals, recordProposal } from './proposals.ts'
 import { applySceneEffects } from './scene-director.ts'
 import { completeQuest, journalPatch, maybeHandleOfferResponse, stageOfferByContractId } from './story.ts'
@@ -42,6 +47,49 @@ import type { DoCheckStash, SayUtterance } from './stashes.ts'
 import { commitDiffs, loadState, logEvent } from './util.ts'
 
 const mustPickCharacter = { status: 403, body: { error: 'Pick a character before acting' } }
+
+/**
+ * A deadline the party agreed to and then blew through. Deliberately a CONSEQUENCE, not a loss:
+ * the objective is not failed here. The Progress Director owns retiring objectives and it
+ * retires them for being STUCK, which is a different thing from being LATE - a party that is
+ * late but still trying should meet a world that has moved on, not a story that stopped.
+ *
+ * Fires once per deadline (markMissed), so a long game does not re-narrate the same broken
+ * promise every dawn.
+ */
+async function spendDeadlines(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  state: GameState,
+): Promise<void> {
+  try {
+    const records = parseDeadlineRecords(state.dm?.story?.deadlines as Json)
+    const due = dueDeadlines(records, state.scene.day)
+    if (due.length === 0) return
+    await commitDiffs(service, env.adventureId, () => [{
+      domain: 'dm',
+      patch: { story: { deadlines: markMissed(records, due.map((d) => d.contractId)) as unknown as Json } },
+    }])
+    for (const missed of due) {
+      await logEvent(service, env.adventureId, sessionId, 'deadline_missed', {
+        contract_id: missed.contractId, label: missed.label, due_day: missed.dueDay,
+        day: state.scene.day,
+      })
+    }
+    await narrationBeat(
+      service, env, sessionId,
+      `Time has run out on what the party promised: ${due.map((d) => d.label).join('; ')}. ` +
+        `The deadline was day ${due[0].dueDay}; it is now day ${state.scene.day}. Narrate the ` +
+        `cost of being late - who was counting on them, what has already happened without them, ` +
+        `what the delay has cost. The party can still act; the world simply did not wait.`,
+      'The clock runs out',
+    )
+  } catch (err) {
+    // Pacing colour must never cost a player their day-advance.
+    console.error('deadline pass failed', err)
+  }
+}
 
 export async function playerIntent(
   service: SupabaseClient,
@@ -69,6 +117,22 @@ export async function playerIntent(
   if (!character) return mustPickCharacter
 
   if (row.state.dialogue.pending || row.state.dialogue.typing) {
+    // An expired check sweeps itself on the next intent, whoever sends it. Every piece of this
+    // already existed - prompts carry 15-20s deadlines, and resolvePending is a complete
+    // sweeper (idle players auto-roll flat; an unclaimed enable-assist fails forward) - but the
+    // only caller was a UI button, so a table whose players never pressed it fell through to
+    // the 120s idle rule below and every intent 409'd until then. Live 2026-07-23: an assist
+    // prompt nobody could answer rejected twelve consecutive turns with "Resolve the current
+    // check first". The player's line is NOT processed on top of the sweep - the world just
+    // moved (auto-rolls, possibly a fail-forward narration), so their input may no longer make
+    // sense; they resend against the resolved scene.
+    const pending = row.state.dialogue.pending
+    if (pending && promptExpired(pending.deadline, new Date())) {
+      const swept = await resolvePending(service, adventureId, userId, pending.id)
+      if (swept.status === 200) {
+        return { status: 409, body: { error: 'The moment resolved itself - go again', swept: true } }
+      }
+    }
     // Self-heal a dead pipeline: a worker killed mid-call (WORKER_RESOURCE_LIMIT, seen live)
     // never reaches its catch block, so typing:true - or a pending prompt orphaned after its
     // roll - would lock the table forever. If nothing has been logged for 2 minutes, the DM
@@ -141,6 +205,16 @@ export async function playerIntent(
   await logEvent(service, adventureId, play.sessionId, 'intent_submitted', {
     kind: pillarKind, raw_kind: kind, route, character_id: character.id, text: text.slice(0, 200),
   })
+  // Watermark for the director: everything logged after this point belongs to THIS turn, so
+  // "did the spine move?" is measured against the turn rather than a rolling event window.
+  const { data: watermark } = await service
+    .from('event_log')
+    .select('id')
+    .eq('adventure_id', adventureId)
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const directorSinceEventId = Number((watermark as { id?: number } | null)?.id ?? 0)
 
   let result: { status: number; body: Record<string, unknown> }
   switch (route) {
@@ -232,12 +306,15 @@ export async function playerIntent(
   // classifier pivot narrates after the action, never interleaved with it.
   if (result.status === 200) {
     const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
-    // Pacing: a stalled table gets the ladder without waiting for a client sweep. Best-effort
-    // and self-guarding (decideHint holds unless the streak earned the next rung).
-    try {
-      await maybeAutoHint(service, env, play.sessionId)
-    } catch (err) {
-      console.error('auto hint pass failed', err)
+    // THE per-turn pacing pass (Phase 3). This hook is the only place every turn passes
+    // through - evaluateStoryProgress fires only on encounter resolutions, fact writes and
+    // scene effects, so a turn that folded into narration used to reach no detector at all.
+    // Self-guarding (decideDirector holds unless the streak earned a rung) and never throws.
+    if (env.mode === 'full_ai') {
+      await runProgressDirector(service, env, play.sessionId, {
+        sinceEventId: directorSinceEventId,
+        countsAsTurn: kind !== 'dm_command',
+      })
     }
     try {
       const classified = await noteIntentForClassifier(service, env, play.sessionId, pillarKind)
@@ -299,37 +376,25 @@ async function adjudicate(
   let adjudication
   try {
     const state = (await loadState(service, adventureId)).state
-    const currentObjective = state.objectives.list.find((o) => o.id === state.objectives.currentId)
-    const { data: objectiveRow } = currentObjective
-      ? await service
-          .from('objectives')
-          .select('title, hidden_description, completion_predicates')
-          .eq('id', currentObjective.id)
-          .maybeSingle()
-      : { data: null }
-    const loop = activeLoop(await loadLoops(service, adventureId))
-    const { data: beatRow } = loop?.currentBeatId
-      ? await service.from('beats').select('exit_conditions').eq('id', loop.currentBeatId).maybeSingle()
-      : { data: null }
-    const objectiveAtoms = listMilestoneAtoms(objectiveRow?.completion_predicates ?? null)
-    const beatAtoms = listMilestoneAtoms(beatRow?.exit_conditions ?? null)
+    // ONE vocabulary window for every producer and consumer (overhaul Phase 1). This used to
+    // hand-build a NARROWER set (current objective + open beat only) than applyMilestones
+    // would accept - the Adjudicator was shown fewer words than the gate honours, so lookahead
+    // and past-beat atoms it could legitimately claim were never offered to it.
+    const vocab = await milestoneVocabulary(service, adventureId)
     const profiles = await characterProfiles(service, party)
     adjudication = await runAdjudicator(env, {
       intentText: text,
       actorSummary: profiles[character.id] ?? `${character.name}, level ${character.level} ${character.class_key ?? 'adventurer'}`,
       sceneSummary: `${state.scene.locationName || 'unknown place'} (${state.scene.mode})`,
-      objective: objectiveRow
-        ? { title: objectiveRow.title as string, hiddenDescription: objectiveRow.hidden_description as string }
+      objective: vocab.objective
+        ? { title: vocab.objective.title, hiddenDescription: vocab.objective.hiddenDescription }
         : null,
       partySkills,
       partySize: party.length,
       recentEvents: agentContextLines(state, 5),
       knownLocations: ((locationRows.data ?? []) as { name: string }[]).map((l) => l.name),
       knownNpcs: ((npcRows.data ?? []) as { name: string }[]).map((n) => n.name),
-      milestones: [...new Set([
-        ...objectiveAtoms.flags, ...objectiveAtoms.events, ...objectiveAtoms.facts,
-        ...beatAtoms.flags, ...beatAtoms.events, ...beatAtoms.facts,
-      ])],
+      milestones: [...new Set([...vocab.flags, ...vocab.events, ...vocab.facts])],
     })
   } catch (err) {
     await commitDiffs(service, adventureId, () => [typingDiff(false)])
@@ -498,16 +563,40 @@ async function dmCommand(
   }
   // F08 story overrides: world facts/flags/marker events feed the predicate evaluator; every
   // write triggers a story-progress pass (objectives, beat exits, ending scores).
+  // set_flag/mark_event resolve through the atom authority (Phase 1): a typo'd or invented
+  // name used to write dead state that could never satisfy a predicate - now it 400s with
+  // suggestions. `force: true` keeps the human escape hatch, loudly logged.
   if (command === 'set_flag') {
     const flag = String(body.flag ?? '')
     if (!flag) return { status: 400, body: { error: 'flag required' } }
     const value = (body.value ?? true) as Json
+    let resolved = flag
+    if (body.force !== true) {
+      const vocab = await milestoneVocabulary(service, adventureId)
+      // Flags only: resolving a FACT atom here would "accept" the command yet write the flags
+      // namespace, which a {fact:...} predicate never reads - set_fact is the fact override.
+      const resolution = resolveAtomText(flag, vocab.flags)
+      if (!resolution.ok) {
+        const isFact = resolveAtomText(flag, vocab.facts).ok
+        return {
+          status: 400,
+          body: {
+            error: `"${flag}" is not an authored flag`,
+            suggestions: resolution.suggestions,
+            hint: isFact ? 'this atom is a FACT - use set_fact' : 'pass force: true to write it anyway',
+          },
+        }
+      }
+      resolved = resolution.text
+    } else {
+      await logEvent(service, adventureId, sessionId, 'atom_forced', { command, atom: flag })
+    }
     await commitDiffs(service, adventureId, () => [
-      { domain: 'dm', patch: { facts: { flags: { [flag]: value } } } },
+      { domain: 'dm', patch: { facts: { flags: { [resolved]: value } } } },
     ])
-    await logEvent(service, adventureId, sessionId, 'dm_override', { command, flag, value })
+    await logEvent(service, adventureId, sessionId, 'dm_override', { command, flag: resolved, value })
     await evaluateStoryProgress(service, env, sessionId)
-    return { status: 200, body: { ok: true } }
+    return { status: 200, body: { ok: true, flag: resolved } }
   }
   if (command === 'set_fact') {
     const fact = String(body.fact ?? '')
@@ -523,9 +612,23 @@ async function dmCommand(
   if (command === 'mark_event') {
     const tag = String(body.tag ?? '')
     if (!tag) return { status: 400, body: { error: 'tag required' } }
-    await logEvent(service, adventureId, sessionId, 'story_event', { tag })
+    let resolved = tag
+    if (body.force !== true) {
+      const vocab = await milestoneVocabulary(service, adventureId)
+      const resolution = resolveAtomText(tag, vocab.events)
+      if (!resolution.ok) {
+        return {
+          status: 400,
+          body: { error: `"${tag}" is not an authored event marker`, suggestions: resolution.suggestions, hint: 'pass force: true to write it anyway' },
+        }
+      }
+      resolved = resolution.text
+    } else {
+      await logEvent(service, adventureId, sessionId, 'atom_forced', { command, atom: tag })
+    }
+    await logEvent(service, adventureId, sessionId, 'story_event', { tag: resolved })
     await evaluateStoryProgress(service, env, sessionId)
-    return { status: 200, body: { ok: true } }
+    return { status: 200, body: { ok: true, tag: resolved } }
   }
   // Encounter-states: hand-seed a typed encounter (testing surface + DM override).
   if (command === 'open_encounter') {
@@ -588,6 +691,7 @@ async function dmCommand(
       { domain: 'scene', patch: { day: s.scene.day + 1 } },
     ])
     await logEvent(service, adventureId, sessionId, 'day_advanced', { day: after.state.scene.day })
+    await spendDeadlines(service, env, sessionId, after.state)
     await antagonistTurn(service, env, sessionId, 'world_clock')
     await evaluateStoryProgress(service, env, sessionId)
     // Transition point (Slice 6): passing time invites the world in.
@@ -595,7 +699,7 @@ async function dmCommand(
     return { status: 200, body: { ok: true, day: after.state.scene.day } }
   }
   if (command === 'set_auto') {
-    const patch: Record<string, boolean | number> = {}
+    const patch: Record<string, boolean | number | Json> = {}
     if (typeof body.auto_dialogue === 'boolean') patch.autoDialogue = body.auto_dialogue
     if (typeof body.auto_checks === 'boolean') patch.autoChecks = body.auto_checks
     if (typeof body.nudge_minutes === 'number' && body.nudge_minutes >= 1) {
@@ -604,8 +708,22 @@ async function dmCommand(
     if (typeof body.hint_turns === 'number' && body.hint_turns >= 1) {
       patch.hintTurns = Math.min(20, Math.round(body.hint_turns))
     }
+    // Progress Director thresholds (Phase 3/4). DM-tunable per MAIN-SPEC - a table that wants
+    // to be left alone raises them, and a test run lowers them to reach the rescue rungs
+    // without playing 15 stalled turns. Each field is independently optional.
+    if (typeof body.director_thresholds === 'object' && body.director_thresholds !== null) {
+      const raw = body.director_thresholds as Record<string, unknown>
+      const clamp = (v: unknown) =>
+        typeof v === 'number' && v >= 1 ? Math.min(60, Math.round(v)) : undefined
+      const thresholds: Record<string, number> = {}
+      for (const key of ['nudge', 'reveal', 'replanBeat', 'guaranteedRoute', 'failForward', 'offerPressure']) {
+        const value = clamp(raw[key])
+        if (value !== undefined) thresholds[key] = value
+      }
+      if (Object.keys(thresholds).length > 0) patch.directorThresholds = thresholds as unknown as Json
+    }
     if (Object.keys(patch).length === 0) {
-      return { status: 400, body: { error: 'auto_dialogue, auto_checks, nudge_minutes, or hint_turns required' } }
+      return { status: 400, body: { error: 'auto_dialogue, auto_checks, nudge_minutes, hint_turns, or director_thresholds required' } }
     }
     // Always write the full settings object so partial pre-Slice-2 states heal to a complete shape.
     const after = await commitDiffs(service, adventureId, (s) => [
@@ -620,9 +738,19 @@ async function dmCommand(
     if (!npcId || !['dead', 'alive', 'absent'].includes(state)) {
       return { status: 400, body: { error: 'npc_id and state (dead|alive|absent) required' } }
     }
-    await commitDiffs(service, adventureId, () => [
-      { domain: 'dm', patch: { facts: { npcStates: { [npcId]: state } } } },
-    ])
+    const { data: npcRow } = await service
+      .from('npcs')
+      .select('id, name')
+      .eq('id', npcId)
+      .maybeSingle()
+    if (!npcRow) return { status: 404, body: { error: 'No such NPC' } }
+    // Same single writer as the ledger: a DM-declared death also leaves the body in the world.
+    await applyNpcState(
+      service, env, sessionId,
+      { id: npcRow.id as string, name: npcRow.name as string },
+      state as 'dead' | 'alive' | 'absent',
+      'dm_override',
+    )
     await logEvent(service, adventureId, sessionId, 'dm_override', { command, npc_id: npcId, state })
     await evaluateStoryProgress(service, env, sessionId)
     return { status: 200, body: { ok: true } }

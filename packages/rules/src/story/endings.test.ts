@@ -118,3 +118,47 @@ describe('parseEndingSignals (closed vocabulary)', () => {
     expect(signals).toHaveLength(3)
   })
 })
+
+describe('alive means present and not dead (2026-07-24)', () => {
+  // The live failure: a triumph ending penalized "villain alive" and a defeat ending rewarded
+  // it; the villain ended ABSENT (defeated, left the scene), the alive signals fired on both,
+  // and the DEFEAT ending won over the victory despite every objective completing.
+  const villainEndings: EndingCandidate[] = [
+    { id: 'justice', index: 0, signals: [
+      { when: { objective_id: 'obj-1', outcome: 'completed' }, weight: 5 },
+      { when: { npc_id: 'boss', state: 'alive' }, weight: -3 },
+    ] },
+    { id: 'tragedy', index: 1, signals: [
+      { when: { objective_id: 'obj-1', outcome: 'failed' }, weight: 5 },
+      { when: { npc_id: 'boss', state: 'alive' }, weight: 3 },
+    ] },
+  ]
+
+  it('an ABSENT boss is not alive - the victory wins', () => {
+    const { leadingId } = scoreEndings(villainEndings, world({
+      objectiveOutcomes: { 'obj-1': 'completed' }, npcStates: { boss: 'absent' },
+    }))
+    expect(leadingId).toBe('justice')
+  })
+
+  it('a DEAD boss is not alive either', () => {
+    const s = scoreEndings(villainEndings, world({
+      objectiveOutcomes: { 'obj-1': 'completed' }, npcStates: { boss: 'dead' },
+    }))
+    expect(s.scores.justice).toBe(5)
+    expect(s.scores.tragedy).toBe(0)
+  })
+
+  it('a boss who is genuinely alive DOES fire the signal', () => {
+    const s = scoreEndings(villainEndings, world({
+      objectiveOutcomes: { 'obj-1': 'completed' }, npcStates: { boss: 'alive' },
+    }))
+    expect(s.scores.justice).toBe(2) // 5 - 3
+    expect(s.scores.tragedy).toBe(3)
+  })
+
+  it('an unrecorded npc counts as alive (the engine-wide default)', () => {
+    const s = scoreEndings(villainEndings, world({ objectiveOutcomes: { 'obj-1': 'completed' } }))
+    expect(s.scores.justice).toBe(2) // alive signal fires on undefined -> -3
+  })
+})

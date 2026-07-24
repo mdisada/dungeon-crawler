@@ -1,0 +1,24 @@
+{
+  // Project markdownlint config. Docs here are long-form prose and design
+  // specs, so line-wrapping and a few heading-strictness rules are disabled;
+  // everything else enforces consistent formatting.
+  "config": {
+    "default": true,
+    "MD013": false, // line-length: docs are prose, not hard-wrapped
+    "MD024": { "siblings_only": true }, // repeated headings are fine across sections
+    "MD026": false, // headings may end in ':' or '?'
+    "MD033": false, // inline HTML is used intentionally in some docs
+    "MD041": false, // docs may open with a badge/blockquote before the H1
+    "MD036": false // emphasis-as-heading appears in quoted content
+  },
+  "ignores": [
+    "node_modules",
+    "**/node_modules",
+    "**/.venv",
+    "**/site-packages",
+    "**/dist",
+    "**/build",
+    "**/.next",
+    "**/coverage"
+  ]
+}

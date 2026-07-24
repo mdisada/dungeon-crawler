@@ -10,7 +10,7 @@
 
 ### 1.1 The loop per feature
 
-```
+```text
 BUILD → AI-TEST → CHECKPOINT (user tests + design review + human tasks) → GATE → next
 ```
 
@@ -28,7 +28,7 @@ lists, real `- [ ]` task-list checkboxes) so the checkboxes are genuinely checka
 markdown viewer (GitHub, VS Code preview, etc.) — a fenced block turns them into inert text,
 which defeats the point.
 
-```
+```text
 === CHECKPOINT: F0X — <name> ===
 BUILT: <what was implemented, deviations from spec flagged>
 AI TESTS: <suites run, pass/fail counts, coverage of acceptance criteria>

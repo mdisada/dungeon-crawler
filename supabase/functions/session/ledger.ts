@@ -18,6 +18,7 @@ import type { Json } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { applyDialNudges } from './dials.ts'
 import { writeMemoryFragment } from './memory.ts'
+import { applyNpcState } from './npc-state.ts'
 import { applyMilestones, milestoneVocabulary } from './milestones.ts'
 import { recordProposal } from './proposals.ts'
 import { runArchivist } from './story-agents.ts'
@@ -62,9 +63,9 @@ export async function recordSceneLedger(
 
     const { data: npcRows } = await service
       .from('npcs')
-      .select('id, name')
+      .select('id, name, initial_state')
       .eq('adventure_id', env.adventureId)
-    const npcs = (npcRows ?? []) as { id: string; name: string }[]
+    const npcs = (npcRows ?? []) as { id: string; name: string; initial_state: string | null }[]
     const { data: adventureRow } = await service
       .from('adventures')
       .select('story_dials')
@@ -100,15 +101,51 @@ export async function recordSceneLedger(
       : await applyMilestones(service, env, sessionId, ledger.milestones, 'scene_ledger')
 
     if (!gated) {
+      // Verbatim-evidence gate (Phase 6). A dead/absent verdict is destructive: it removes an
+      // NPC from staging and blocks their dialogue for the rest of the session, and a false
+      // one is unrecoverable in play. So the Archivist must QUOTE the transcript line that
+      // establishes it, and the quote has to actually be there. 'present' is restorative - it
+      // can only widen what is possible - so it commits without proof, which is also what
+      // keeps an arrived NPC from being locked out (live 2026-07-21).
+      const haystack = transcript.join('\n').toLowerCase()
+      const liveStates = state.dm?.facts.npcStates ?? {}
       for (const change of ledger.npcStates) {
         const npc = npcs.find((n) => n.name.toLowerCase() === change.name.toLowerCase())
         if (!npc) continue
-        await commitDiffs(service, env.adventureId, () => [
-          { domain: 'dm', patch: { facts: { npcStates: { [npc.id]: change.state } } } },
-        ])
-        await logEvent(service, env.adventureId, sessionId, 'npc_state_recorded', {
-          npc_id: npc.id, name: npc.name, state: change.state, source: 'scene_ledger',
-        })
+        // 'alive' is restorative for someone ABSENT - they walked in, and nothing is lost by
+        // believing it. For someone DEAD it is a resurrection: the single strongest claim the
+        // Archivist can make, and until now the only transition that committed unchallenged.
+        // Live 2026-07-23: a row flipped back to alive with no evidence field at all, which
+        // re-armed the death transition and buried the same man twice in two rooms. Death is
+        // irreversible unless the fiction actually says otherwise - so make it quote the line.
+        const resurrection = change.state === 'alive' &&
+          (liveStates[npc.id] ?? npc.initial_state ?? 'alive') === 'dead'
+        if (change.state !== 'alive' || resurrection) {
+          const quote = change.evidence.trim().toLowerCase()
+          // Substring, not equality: the model quotes a fragment of a longer line.
+          const proven = quote.length >= 12 && haystack.includes(quote)
+          if (!proven) {
+            await logEvent(service, env.adventureId, sessionId, 'incident', {
+              kind: 'npc_state_unverified', npc_id: npc.id, name: npc.name,
+              state: change.state, evidence: change.evidence.slice(0, 200),
+            })
+            await recordProposal(service, {
+              adventureId: env.adventureId,
+              sessionId,
+              type: 'npc_state',
+              payload: { npc_id: npc.id, name: npc.name, state: change.state, evidence: change.evidence },
+              mode: 'human',
+              summary: `Unverified: mark ${npc.name} ${change.state}`,
+            })
+            continue
+          }
+        }
+        // Single writer for NPC state (npc-state.ts): a death also puts the BODY in the world
+        // as a prop, so nothing downstream has to reason about a person-shaped dead thing.
+        await applyNpcState(
+          service, env, sessionId, npc, change.state, 'scene_ledger',
+          change.state !== 'alive' ? change.evidence : undefined,
+        )
       }
     }
 

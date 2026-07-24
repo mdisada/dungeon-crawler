@@ -53,6 +53,11 @@ class JobQueue:
             finally:
                 self._queue.task_done()
 
+    def qsize(self) -> int:
+        """How many jobs are waiting (not counting any currently running). Reported to the Assets
+        Lab so a queue wait isn't mistaken for generation time."""
+        return self._queue.qsize()
+
     def start(self) -> None:
         """Spawn the worker tasks. Call once, from inside the running event loop."""
         self._workers = [

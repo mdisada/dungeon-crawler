@@ -3,10 +3,11 @@ import { expectedPartyLevel, expectedPartySize } from '../_shared/guide/budget.t
 import { deriveNpcStatBlock } from '../_shared/guide/npc-stats.ts'
 import { buildStage4Prompt, parseStage4 } from '../_shared/guide/stages/stage4.ts'
 import { buildStage5Prompt, parseStage5 } from '../_shared/guide/stages/stage5.ts'
-import type { EntityRef } from '../_shared/guide/types.ts'
+import { minimalSatisfyingAtoms } from '../_shared/guide/guaranteed-route.ts'
+import type { EntityRef, Json } from '../_shared/guide/types.ts'
 import { enqueueJob, type StageEnv } from './stage-env.ts'
 import { chapterSketch, loadChapterScenes } from './stages-story.ts'
-import { assertOk, difficultyOf, slugKeys, toSeed } from './util.ts'
+import { assertOk, difficultyOf, logPipelineEvent, slugKeys, toSeed } from './util.ts'
 
 async function loadChapter(env: StageEnv, chapterId: string) {
   const { data, error } = await env.db
@@ -21,7 +22,7 @@ async function loadChapter(env: StageEnv, chapterId: string) {
 async function loadChapterObjectives(env: StageEnv, chapterId: string) {
   const { data, error } = await env.db
     .from('objectives')
-    .select('id, index, title, hidden_description')
+    .select('id, index, title, hidden_description, completion_predicates')
     .eq('chapter_id', chapterId)
     .order('index')
     .order('created_at')
@@ -30,7 +31,9 @@ async function loadChapterObjectives(env: StageEnv, chapterId: string) {
     id: o.id as string,
     title: o.title as string,
     hiddenDescription: o.hidden_description as string,
-    completionPredicates: null,
+    // Real predicates, not the null placeholder this used to carry: stage 5 derives each
+    // encounter's award atoms from the objective it serves (Phase 5).
+    completionPredicates: o.completion_predicates as unknown,
   }))
 }
 
@@ -95,6 +98,26 @@ export async function runStage4(env: StageEnv, chapterId: string): Promise<void>
     })),
   }
   const output = await env.generate('ingredient_generator', buildStage4Prompt(ctx), (raw) => parseStage4(raw, ctx))
+
+  // Stage 1 files groups under `npc` ("Silver Scale Guild guards"); stage 4, told an NPC is one
+  // person, declines to make them people. Persist that correction to the registry so stage 5,
+  // stage 8, the coverage contract and canon all stop treating a faction as somebody who can be
+  // met - and so a regeneration does not fight the same battle over again. This is the entity
+  // classification being repaired by the stage best placed to judge it.
+  if (output.reclassifyAsLore.length > 0) {
+    const meta = env.adventure.meta_loop as { entities?: { kind: string; name: string; note: string }[] }
+    const wanted = new Set(output.reclassifyAsLore.map((n) => n.toLowerCase().trim()))
+    const entities = (meta.entities ?? []).map((e) =>
+      wanted.has(e.name.toLowerCase().trim()) ? { ...e, kind: 'lore' } : e)
+    const { error } = await env.db
+      .from('adventures')
+      .update({ meta_loop: { ...meta, entities } })
+      .eq('id', env.adventure.id)
+    assertOk(error, 'entity reclassification failed')
+    await logPipelineEvent(env.db, env.adventure.id, 'entity_reclassified', {
+      chapter_id: chapterId, names: output.reclassifyAsLore, from: 'npc', to: 'lore',
+    })
+  }
 
   // Replace this chapter's previously generated (untouched) content.
   for (const table of ['ingredients', 'coop_sets', 'npcs', 'locations']) {
@@ -267,6 +290,13 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
         spec: e.spec,
         budget: e.budget ?? {},
         location_id: e.locationKey ? locationKeys.byKey.get(e.locationKey)?.id : null,
+        // Award surface (Phase 5), DERIVED not authored: the designer already declares which
+        // objective this encounter serves, and the objective's predicate already determines
+        // what completing it requires - so the atoms follow deterministically. Code owns
+        // identity (MAIN-SPEC §1.1(2a)); asking a model to re-pick them would only add drift.
+        outcome_atoms: minimalSatisfyingAtoms(
+          objectives[e.objectiveIndex]?.completionPredicates ?? null,
+        ) as unknown as Json,
       })),
     )
     .select('id')

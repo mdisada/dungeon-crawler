@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { useSession } from '@/features/auth'
-import { listVoiceProfiles, previewVoice, uploadVoiceProfile } from '../api/voices'
-import type { VoiceProfile } from '../types'
+import { previewVoice, useVoiceProfiles } from '@/features/tts'
 
 interface VoicePickerProps {
   label: string
@@ -11,58 +10,41 @@ interface VoicePickerProps {
   onSelect: (voiceProfileId: string | null) => Promise<void>
 }
 
-// F04 SS5.1/SS5.2: pick from the user's voice_profiles collection or upload a 3-30s clip; the
-// preview button synthesizes a fixed sample line (falling back to the raw clip until F12 wires
-// real cloning).
+// F04 SS5.1/SS5.2: pick from the user's voice_profiles collection or upload a clip; the preview
+// button synthesizes a fixed sample line. Clip storage and synthesis both live in features/tts
+// now, so this component only picks and assigns.
 export function VoicePicker({ label, selectedVoiceId, onSelect }: VoicePickerProps) {
   const { session } = useSession()
-  const [profiles, setProfiles] = useState<VoiceProfile[]>([])
+  const userId = session?.user.id ?? null
+  const { profiles, error, upload } = useVoiceProfiles(userId)
   const [status, setStatus] = useState<string | null>(null)
   const [isBusy, setIsBusy] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    listVoiceProfiles()
-      .then((rows) => {
-        if (!cancelled) setProfiles(rows)
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
   async function handleUpload(file: File) {
-    const userId = session?.user.id
-    if (!userId) return
     setIsBusy(true)
     setStatus(null)
-    try {
-      const name = file.name.replace(/\.[^.]+$/, '')
-      const profile = await uploadVoiceProfile(userId, name, file)
-      setProfiles((prev) => [profile, ...prev])
+    const name = file.name.replace(/\.[^.]+$/, '')
+    const profile = await upload(name, file)
+    if (profile) {
       await onSelect(profile.id)
       setStatus(`Uploaded "${name}"`)
-    } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Upload failed')
-    } finally {
-      setIsBusy(false)
     }
+    setIsBusy(false)
   }
 
   async function handlePreview() {
     const profile = profiles.find((p) => p.id === selectedVoiceId)
-    if (!profile) return
+    if (!profile || !userId) return
     setIsBusy(true)
     setStatus(null)
     try {
-      const { url, cloned } = await previewVoice(profile)
+      const { url, cloned, reason } = await previewVoice(userId, profile)
       audioRef.current?.pause()
       audioRef.current = new Audio(url)
       await audioRef.current.play()
-      if (!cloned) setStatus('Cloned preview unavailable - playing your uploaded clip.')
+      if (!cloned) setStatus(`Playing your uploaded clip - synthesis failed: ${reason ?? 'unknown'}`)
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'Preview failed')
     } finally {
@@ -94,7 +76,7 @@ export function VoicePicker({ label, selectedVoiceId, onSelect }: VoicePickerPro
       </label>
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" disabled={isBusy} onClick={() => fileInputRef.current?.click()}>
-          Upload clip (3-30s)
+          Upload clip (3s+, cropped to 15s)
         </Button>
         <Button variant="outline" size="sm" disabled={isBusy || !selectedVoiceId} onClick={() => void handlePreview()}>
           Preview
@@ -112,7 +94,7 @@ export function VoicePicker({ label, selectedVoiceId, onSelect }: VoicePickerPro
           }}
         />
       </div>
-      {status && <p className="text-xs text-muted-foreground">{status}</p>}
+      {(status ?? error) && <p className="text-xs text-muted-foreground">{status ?? error}</p>}
     </div>
   )
 }

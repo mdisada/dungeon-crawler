@@ -9,7 +9,7 @@ Turn-based tactical combat on the grid map, fully deterministic, SRD-data-driven
 
 ## 2. Combat state
 
-```
+```text
 combat_encounters: id, adventure_id, session_id, encounter_id?, status,
                    round int, difficulty jsonb (active modifier set),
                    started_at, ended_at, outcome?
@@ -35,9 +35,15 @@ Ephemeral working state in the Adventure Manager; checkpointed per round.
 
 ## 4. Engines detail
 
+All engines are pure, deterministic TypeScript in `packages/rules/src/combat/` (seeded RNG via `@rules/play` `seededRng`; no I/O, no wall-clock, no unseeded random). Resolution is exposed as a pausable event stream with explicit roll points, so a driver can auto-roll (server, batch sims) or stop before each die (Combat Lab step-through mode). When combat moves server-side, `scripts/sync-guide-shared.mjs` copies it like the other domains (add `combat` to its list then — not needed for the Lab, which runs the engine in the client).
+
 ### 4.1 Actions supported (v1)
 
-Move (Grid Engine path/cost, difficult terrain ×2), melee/ranged attack, cast spell (SRD spell data: attack-roll and save-based, single-target and AoE templates), dodge, dash, disengage, help, use item (healing potions etc.), grapple/shove (contested checks), death saves, opportunity attacks. **Deferred:** mounted combat, readied actions (v1.1), stealth-in-combat.
+**Phase 1 (Combat Lab slice — build first):** initiative (DEX tiebreak), turn order + action economy, move (Grid Engine path/cost, difficult terrain ×2), melee/ranged attack (full roll breakdowns, crits), dodge, dash, disengage, opportunity attacks, HP to zero (NPCs die; PCs fall unconscious — death saves come later). Conditions: prone + unconscious only.
+
+**Rest of v1:** cast spell (SRD spell data: attack-roll and save-based, single-target and AoE templates), help, use item (healing potions etc.), grapple/shove (contested checks), death saves, full condition set (§4.2), concentration, reaction windows beyond opportunity attacks, boss phases (§5.2), combos/Momentum (§6.4), Tactician (§6.2).
+
+**Deferred:** mounted combat, readied actions (v1.1), stealth-in-combat.
 
 ### 4.2 Conditions (v1 SRD subset)
 
@@ -46,6 +52,8 @@ blinded, charmed, frightened, grappled, incapacitated, invisible, paralyzed, poi
 ### 4.3 Grid Engine
 
 Chebyshev distance (5 ft diagonals, standard simplified), obstacle-blocked movement + line of sight (Bresenham vs obstacle tiles), cover from obstacles (half/three-quarters as +2/+5 AC — computed, DM-overridable), AoE templates (sphere/cone/line/cube) rasterized to tiles with target lists.
+
+**Grid toggle (decided 2026-07-22):** grid ON (32×32 over 1024×1024, `GRID_SIZE` in `@rules/state`) is the only rules-enforced mode. Grid OFF is a free-placement sandbox — tokens move anywhere, a measure tool converts px→feet, no legality enforcement. The engine stays purely tile-based; no continuous-space rules.
 
 ## 5. Difficulty system
 
@@ -86,7 +94,7 @@ Checked after every damage application; firing applies changes via the Scaler me
 
 ### 6.2 NPC Tactician Agent (bosses + named NPCs)
 
-```
+```text
 Input:  { self (stat block + tactics_profile + current state),
           battlefield (positions, allegiances, visible HP states, terrain),
           legal_actions (enumerated by the engines — the agent CHOOSES, never invents),
@@ -106,7 +114,7 @@ Output: { action: {type, target?, path?, ability_ref?}, intent_note: string }
 
 The Combat Resolution Engine detects when a resolution **consumes an ally's setup** from within the last round. v1 combo pattern table (data, extensible):
 
-```
+```text
 prone (from ally shove/trip)        → melee attack w/ advantage taken
 grappled/restrained (from ally)     → any attack against the target
 frightened (from ally)              → Intimidation-adjacent follow-up / attack
@@ -148,7 +156,28 @@ Every resolution appends structured events (roll breakdowns: `d20(14)+7=21 vs AC
 - [ ] Protect-the-objective encounter ends on its predicate, not on enemy elimination (fixture).
 - [ ] Budget Engine multiplayer assumption verified: same encounter rates higher for min_players=1 than min_players=3 party of equal strength.
 
-## 9. Open questions
+## 9. Combat Lab (temporary test harness — decided 2026-07-22)
+
+Standalone page for building and evaluating the engine in isolation. Hard constraint: zero diffs to the story loop (`features/play`, session edge functions).
+
+- **Route/gating:** `/combat-lab`, feature folder `combat-lab`, gated by a Lab-local allowlist (`combat-lab/debug.ts`: `mig.isada@gmail.com` + `madisada@gmail.com`). Deliberately not the play feature's `isDebugUser` — editing that file would break the zero-play-diffs constraint below, and Lab access must not widen the play Debug tab.
+- **Renderer:** copy/adapt `battle-map.tsx` + `use-map-viewport.ts` from `features/play` into the lab feature; no imports from the play feature. Duplication accepted until F9 proper replaces the play-side renderer.
+- **Maps:** new private `battle-maps` storage bucket (`battle-maps/{user_id}/...`, signed URLs) + `battle_maps` table (`id, user_id, name, path, obstacles jsonb, created_at`, owner RLS). 1024×1024 uploads persist to the bucket. Obstacles are painted on the grid in an edit mode and saved per map (shape matches `CombatState.obstacles`). May grow into the F4/F6 map registry.
+- **Combatants:** PCs from the user's `characters` rows (AC via `armorClass()`, attacks derived from equipped weapon + ability mod + proficiency); enemies from adventure `npcs.stat_block` and a built-in SRD fixture set (goblin, skeleton, wolf, ogre, ...) shipped in the rules package — fixtures double as golden-test data. Placement: drag from tray + auto-place button (party left, enemies right).
+- **Control/sim:** user may control any token; any combatant flaggable `auto` → minion heuristic (§6.3) takes its turns; auto-run-to-completion for batch simulations. Zero LLM calls in the Lab.
+- **Modes:** the engine is mode-agnostic; the mode split (full-ai vs ai-assist) lives in who drives it. The Lab's manual controls are a preview of the **ai-assist DM console** — control any token, change difficulty mid-fight, edit stats live, add/remove combatants — while the `auto` flag previews **full-ai** NPC control. Production keeps the split per §5.1/§6.2: assist = DM slider mid-encounter + Tactician proposals (8s auto-apply); full-ai = difficulty fixed at adventure creation, Tactician/heuristic act directly.
+- **Sidebar params:** RNG seed (set/randomize), difficulty scaler (§5.1 presets + sliders), live token stat editing (HP/AC/speed/attack/damage mid-fight), step-through roll mode (pause at each roll point).
+- **Logging:** every resolution appends structured events (§7) to a live panel; JSON export bundles events + seed + full setup so any run replays identically.
+- **State:** client-local per browser; the `combat_encounters`/`combatants` tables (§2) are not used by the Lab. A shared live session (host-authoritative via Realtime, one fight visible to both accounts) is an agreed follow-up slice once the engine is proven — access for both accounts now, sync later.
+
+Lab acceptance:
+
+- [ ] Same seed + same exported setup replays to an identical event log.
+- [ ] Grid OFF never invokes rules enforcement; grid ON never allows an illegal move.
+- [ ] Story loop code has zero diffs from Lab work.
+
+## 10. Open questions
 
 - Flanking (optional rule) — off by default, toggle later.
 - Fog of war / vision — out of scope v1 (all tokens visible).
+- Lab nice-to-haves (explicitly not prioritized): status-triggered combat dialogue, dice-roll animation/video, skill VFX.

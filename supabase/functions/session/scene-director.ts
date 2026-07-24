@@ -120,7 +120,10 @@ export async function applySceneEffects(
     await logEvent(service, env.adventureId, sessionId, 'encounter_resolved', {
       kind: 'combat', label, victory: true, placeholder: true,
     })
-    await logEvent(service, env.adventureId, sessionId, 'story_event', {
+    // narrative_marker, not story_event (Phase 1): the free-text tag never matched an authored
+    // {event} atom except by string luck, and a lucky match would be UNAUTHORED progression.
+    // Progression from combat flows through the beat's outcome map; this is transcript color.
+    await logEvent(service, env.adventureId, sessionId, 'narrative_marker', {
       tag: `combat victory: ${label}`, source: 'encounter_placeholder',
     })
     applied.combatWon = label
@@ -131,9 +134,17 @@ export async function applySceneEffects(
   }
 
   if (effects.markEvent) {
-    await logEvent(service, env.adventureId, sessionId, 'story_event', {
-      tag: effects.markEvent, source: 'adjudicator',
-    })
+    // The adjudicator's mark_event was the last schema-open door into the {event} namespace:
+    // a free string logged as story_event could satisfy an authored event atom by exact-string
+    // coincidence - progression by luck, invisible to every menu. Route it through the same
+    // gate as milestones: resolves to an authored atom -> credited properly (validated,
+    // idempotent, logged); doesn't -> narrative_marker, which evaluation never reads.
+    const credited = await applyMilestones(service, env, sessionId, [effects.markEvent], 'adjudicator_mark_event')
+    if (credited.length === 0) {
+      await logEvent(service, env.adventureId, sessionId, 'narrative_marker', {
+        tag: effects.markEvent, source: 'adjudicator',
+      })
+    }
   }
 
   if (effects.loud) {

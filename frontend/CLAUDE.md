@@ -4,7 +4,7 @@ React 19 + Vite + TypeScript SPA, using Supabase as the backend-as-a-service. Or
 
 ## Structure
 
-```
+```text
 src/
   app/          Root App component + its styles (app.tsx, app.css). No routing yet.
   components/   Shared UI components used by 2+ features. Empty until that's needed —

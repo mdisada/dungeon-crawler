@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseBeatPlan } from './beats.ts'
+import { parseBeatPlan, parseOutcomeMaps } from './beats.ts'
 
 const ctx = { partySize: 2, partySkills: ['athletics', 'stealth', 'persuasion'], milestones: ['guide_saved'] }
 
@@ -8,6 +8,10 @@ const validBeat = {
   beat: {
     name: 'the_hunt',
     goals: ['Track the beast to its lair before nightfall', 'Keep the wounded guide alive'],
+    new_local_atoms: [
+      { name: 'beast_found', kind: 'flag' },
+      { name: 'party entered the lair', kind: 'event' },
+    ],
     exit_conditions: { any: [{ flag: 'beast_found', eq: true }, { event: 'party entered the lair' }] },
     ingredient_requests: [{ type: 'clue', purpose: 'tracks that reveal the beast is wounded', pillar_tags: ['exploration'] }],
     braided: [{ goal_pair: [0, 1], link: { kind: 'dc_mod' }, skills: ['athletics', 'stealth'] }],
@@ -17,25 +21,79 @@ const validBeat = {
       label: 'The chase through the treeline',
       stakes: 'Lose the trail and the guide bleeds out',
       rationale: 'physical pursuit',
-      on_success: ['beast_found'],
-      on_partial: ['party entered the lair'],
-      on_failure: [],
     },
   },
 }
 
 const clone = () => JSON.parse(JSON.stringify(validBeat)) as typeof validBeat
 
-describe('parseBeatPlan', () => {
-  it('parses a full beat with predicate exits, a braided pair, and an encounter spec', () => {
+describe('parseBeatPlan (call 1: plan + declared atoms + encounter shell)', () => {
+  it('parses a full beat with declared atoms, predicate exits, a braided pair, and a shell', () => {
     const result = parseBeatPlan(validBeat, ctx)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.plan.goals).toHaveLength(2)
     expect(result.plan.braided).toHaveLength(1)
+    expect(result.plan.localAtoms).toEqual([
+      { name: 'beast_found', kind: 'flag' },
+      { name: 'party entered the lair', kind: 'event' },
+    ])
     expect(result.plan.encounter?.kind).toBe('skill_challenge')
-    expect(result.plan.encounter?.onSuccess).toEqual(['beast_found'])
+    // Outcome maps belong to call 2 - the shell always starts empty.
+    expect(result.plan.encounter?.onSuccess).toEqual([])
     expect(result.dropped).toEqual([])
+  })
+
+  it('rejects exit atoms that are neither declared nor objective milestones', () => {
+    const bad = clone()
+    bad.beat.new_local_atoms = []
+    const result = parseBeatPlan(bad, ctx)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.some((e) => e.includes('declare'))).toBe(true)
+  })
+
+  it('accepts exits on objective milestones without declaration', () => {
+    const objectiveOnly = clone()
+    objectiveOnly.beat.new_local_atoms = []
+    objectiveOnly.beat.exit_conditions = { flag: 'guide_saved', eq: true } as never
+    const result = parseBeatPlan(objectiveOnly, ctx)
+    expect(result.ok).toBe(true)
+  })
+
+  it('matches declarations canonically - case/punctuation variants pass', () => {
+    const variant = clone()
+    variant.beat.new_local_atoms = [
+      { name: 'Beast Found!', kind: 'flag' },
+      { name: 'party entered the lair', kind: 'event' },
+    ]
+    const result = parseBeatPlan(variant, ctx)
+    expect(result.ok).toBe(true)
+  })
+
+  it('coerces a bare flag atom to eq:true instead of killing the beat', () => {
+    // Live 2026-07-23: two beat_planner_failures in one run, both "a flag atom needs eq" -
+    // and a failed plan degrades to a null-encounter beat the party cannot play.
+    const bare = clone()
+    bare.beat.exit_conditions = { any: [{ flag: 'beast_found' }, { event: 'party entered the lair' }] } as never
+    const result = parseBeatPlan(bare, ctx)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.plan.exitConditions).toEqual({
+      any: [{ flag: 'beast_found', eq: true }, { event: 'party entered the lair' }],
+    })
+  })
+
+  it('never flips a deliberate eq:false', () => {
+    const explicit = clone()
+    explicit.beat.new_local_atoms = [{ name: 'alarm_raised', kind: 'flag' }, { name: 'beast_found', kind: 'flag' }]
+    explicit.beat.exit_conditions = { any: [{ flag: 'alarm_raised', eq: false }, { flag: 'beast_found' }] } as never
+    const result = parseBeatPlan(explicit, ctx)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.plan.exitConditions).toEqual({
+      any: [{ flag: 'alarm_raised', eq: false }, { flag: 'beast_found', eq: true }],
+    })
   })
 
   it('rejects invalid exit predicates (same atoms as F04)', () => {
@@ -72,38 +130,11 @@ describe('parseBeatPlan', () => {
     expect(result.plan.braided).toEqual([])
   })
 
-  it('requires name, goals, narration seed, and an encounter spec', () => {
+  it('requires name, goals, narration seed, and an encounter shell', () => {
     const result = parseBeatPlan({ beat: { goals: [] } }, ctx)
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.errors.length).toBeGreaterThanOrEqual(4)
-  })
-
-  it('accepts outcome maps drawn from the objective vocabulary too', () => {
-    const withObjective = clone()
-    withObjective.beat.encounter.on_success = ['guide_saved']
-    const result = parseBeatPlan(withObjective, ctx)
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.plan.encounter?.onSuccess).toEqual(['guide_saved'])
-  })
-
-  it('never lets an inexact atom become a real outcome map', () => {
-    const bad = clone()
-    bad.beat.encounter.on_success = ['Beast_Found']
-    const result = parseBeatPlan(bad, ctx)
-    // Dropped, not honoured - and with nothing left in on_success the beat cannot move the
-    // spine, so this specific case is still fatal.
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.errors.some((e) => e.includes('on_success'))).toBe(true)
-  })
-
-  it('rejects a spec whose on_success maps nothing despite available vocabulary', () => {
-    const bad = clone()
-    bad.beat.encounter.on_success = []
-    const result = parseBeatPlan(bad, ctx)
-    expect(result.ok).toBe(false)
   })
 
   it('rejects unknown encounter kinds', () => {
@@ -113,59 +144,61 @@ describe('parseBeatPlan', () => {
     expect(result.ok).toBe(false)
   })
 
-  it('allows empty outcome maps when there is no vocabulary at all', () => {
-    const sparse = {
-      beat: {
-        name: 'drift',
-        goals: ['Decide where to go next'],
-        narration_seed: 'The road forks.',
-        encounter: { kind: 'combat', label: 'Roadside ambush', stakes: '', on_success: [], on_partial: [], on_failure: [] },
-      },
-    }
-    const result = parseBeatPlan(sparse, { partySize: 2, partySkills: [] })
+  it('drops malformed atom declarations instead of failing', () => {
+    const messy = clone()
+    ;(messy.beat.new_local_atoms as unknown[]) = [
+      { name: 'beast_found', kind: 'flag' },
+      { name: 'party entered the lair', kind: 'event' },
+      { name: '', kind: 'flag' },
+      { kind: 'flag' },
+      { name: 'x', kind: 'banner' },
+    ]
+    const result = parseBeatPlan(messy, ctx)
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.plan.encounter?.onSuccess).toEqual([])
+    expect(result.plan.localAtoms).toHaveLength(2)
   })
 })
 
-describe('outcome maps degrade instead of killing the beat', () => {
-  // Live 2026-07-21: the planner wrote "The cult silenced Elara before she could reveal the
-  // truth" into on_failure. Hard-failing there left the loop with no active beat, which
-  // starved the scene ledger of vocabulary and stalled progression entirely.
-  const ctx = { partySize: 1, partySkills: ['investigation'], milestones: ['study_secured'] }
-  const plan = (encounter: Record<string, unknown>) => ({
-    beat: {
-      name: 'The Locked Study',
-      goals: ['find the way in'],
-      exit_conditions: { flag: 'study_secured', eq: true },
-      narration_seed: 'The study door is bolted from inside.',
-      encounter,
-    },
+describe('parseOutcomeMaps (call 2: closed-menu tier mapping)', () => {
+  const menu = ['guide_saved', 'beast_found', 'party entered the lair']
+
+  it('keeps exact menu atoms and preserves order without duplicates', () => {
+    const maps = parseOutcomeMaps({
+      on_success: ['guide_saved', 'guide_saved', 'beast_found'],
+      on_partial: ['party entered the lair'],
+      on_failure: [],
+    }, menu)
+    expect(maps.onSuccess).toEqual(['guide_saved', 'beast_found'])
+    expect(maps.onPartial).toEqual(['party entered the lair'])
+    expect(maps.onFailure).toEqual([])
+    expect(maps.dropped).toEqual([])
   })
 
-  it('drops an invented milestone but keeps the beat', () => {
-    const result = parseBeatPlan(plan({
-      kind: 'skill_challenge',
-      label: 'Force the study',
-      on_success: ['study_secured'],
+  it('canonically repairs case/punctuation variants to menu atoms', () => {
+    const maps = parseOutcomeMaps({ on_success: ['Beast_Found', 'Party entered the lair.'] }, menu)
+    expect(maps.onSuccess).toEqual(['beast_found', 'party entered the lair'])
+  })
+
+  it('drops invented prose instead of honouring it', () => {
+    // Live 2026-07-21: "The cult silenced Elara before she could reveal the truth" in on_failure.
+    const maps = parseOutcomeMaps({
+      on_success: ['guide_saved'],
       on_failure: ['The cult silenced Elara before she could reveal the truth'],
-    }), ctx)
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.plan.encounter?.onSuccess).toEqual(['study_secured'])
-    expect(result.plan.encounter?.onFailure).toEqual([])
-    expect(result.dropped.some((d) => d.includes('not authored'))).toBe(true)
+    }, menu)
+    expect(maps.onSuccess).toEqual(['guide_saved'])
+    expect(maps.onFailure).toEqual([])
+    expect(maps.dropped.some((d) => d.includes('not on the menu'))).toBe(true)
   })
 
-  it('still fails when success maps onto nothing - that cannot move the spine', () => {
-    const result = parseBeatPlan(plan({
-      kind: 'skill_challenge',
-      label: 'Force the study',
-      on_success: ['something invented'],
-    }), ctx)
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.errors.some((e) => e.includes('on_success'))).toBe(true)
+  it('an empty on_success is the CALLER\'s problem (deterministic spine fallback), not fatal', () => {
+    const maps = parseOutcomeMaps({ on_success: ['something invented'] }, menu)
+    expect(maps.onSuccess).toEqual([])
+    expect(maps.dropped).toHaveLength(1)
+  })
+
+  it('tolerates garbage input', () => {
+    expect(parseOutcomeMaps(null, menu).onSuccess).toEqual([])
+    expect(parseOutcomeMaps('prose', menu).onSuccess).toEqual([])
   })
 })

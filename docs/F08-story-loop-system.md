@@ -9,7 +9,7 @@ The story brain: track nested loops, classify what players are actually doing, p
 
 ## 2. Loop Stack Manager (deterministic)
 
-```
+```text
 meta_loop:   adventure_id pk, arc_summary, entry_point, exit_conditions jsonb,
              antagonist_plan jsonb {steps[], current_step},
              committed_bbeg_npc_id?, suspicion_tally jsonb {npc_id: score}
@@ -34,7 +34,7 @@ them — quest-shaped goals arrive as in-fiction offers with a giver, stated rew
 and nothing quest-shaped becomes active until the party says yes. Acceptance is what creates
 motivation; narration that presumes it ("you've come here to uncover the truth") is a defect.
 
-```
+```text
 quest_offers: id, adventure_id, contract_id?,   -- authored contract (F4 §4.3) or live-woven
               quest_label, giver_npc_id,
               terms jsonb {reward: {gold, extras[]}, stakes, deadline?},
@@ -82,7 +82,7 @@ stay legible in the transcript. Archive view (declined/completed history) is v1.
 
 Trigger: scene transitions; Action Router mismatch flag (3+ off-loop intents); DM manual "reclassify".
 
-```
+```text
 Input:  { last_n_events (condensed, n≈15), active_loop {type, beat},
           available_loop_types + expected intent profiles,
           current_objective, scene_state }
@@ -99,7 +99,7 @@ Output: { assessment: "on_loop" | "pivot",
 
 Trigger: pivot accepted; beat exit conditions met; DM "plan next beat".
 
-```
+```text
 Input:  { loop {type, template, completed_beats}, current_objective + hidden_desc,
           scene_state, party_summary, undiscovered ingredients near scene,
           variety_flags (from Variety Manager) }
@@ -133,7 +133,7 @@ Output: { beat: { name, goals: [player-facing situations to establish],
 
 Trigger: new beat opened; objective revealed; new ingredient placed; session start (backstory pass, F5).
 
-```
+```text
 Input:  { target (objective|ingredient), party backstories + piety/renown state,
           active loop/beat, npc registry (dispositions), recent player interests
           (from event log tags) }
@@ -388,7 +388,266 @@ in the machine's claimable shape — see the sim report.
 - [x] Minimal retrieval memory: pgvector insert + nearest-neighbor retrieval, adventure-scoped,
       anon-unreadable; embed/retrieve failures degrade to no memories.
 
+---
+
+## 12. The deterministic story spine (overhaul, 2026-07-23)
+
+**Why.** Paid playtests produced adventures that could not be finished. Run `6675274d` (*Below
+the Sunken Chapel*) reached a state where the active objective's only route was a social
+encounter naming a dead collective NPC and a survivor who existed only in prose: staging
+refused, the encounter never opened, so the beat was never "spent", so nothing ever re-planned
+it — a permanently unwinnable story. Three independent causes had to line up, and every safety
+net was structurally blind to at least one of them.
+
+The diagnosis was not "the model made a mistake". It was that **identity, sequencing and
+liveness were all delegated to free text**, then checked by string equality. MAIN-SPEC §1.1(2a)
+is the resulting principle; this section is its implementation.
+
+Rollout flags (module consts, shadow-first, in `session/`): `ATOM_REGISTRY_ENFORCES`,
+`PLANNER_CREATES_NPCS`, `DIRECTOR_APPLIES`, `GUARANTEED_ROUTE_APPLIES`, `FAIL_FORWARD_APPLIES`.
+
+### 12.1 The canonical atom registry
+
+`story_atoms` (unique `slug` per adventure) is the one naming authority for the flag/event/fact
+strings predicates complete through. Spine atoms are extracted from objective predicates by
+stage 3 (re-synced by stage 8 after repairs, and by objective regen); local atoms are
+**declared** by a beat plan and allocated by code.
+
+Every producer resolves through `resolveAtomText`, and every award still funnels through the
+single gate `applyMilestones`. Three divergent vocabulary windows (award gate, Adjudicator,
+Archivist) collapsed into one `milestoneVocabulary`.
+
+**Auto-repair is canonical equality only** — case, punctuation, apostrophes, separators.
+Anything fuzzier is *suggestion* material, proven by adversarial review with executed repros:
+antonyms sit 1–2 edits apart (`guards_averted` → `guards_alerted`; the whole `un-` prefix
+class), token reorder flips subject and object (`party_betrayed_varga` ≠
+`varga_betrayed_party`), and sequential atoms collide (`ward_2_broken` → `ward_1_broken`, whose
+predicate is *already true*, exiting the new beat instantly). The Beat Planner is explicitly
+instructed to author success/setback **pairs**, so it manufactures antonym neighbours by design.
+
+### 12.2 Two-call Beat Planner
+
+Call 1 plans the beat and declares `new_local_atoms` (≤4) plus any `create_npcs` it needs;
+exit conditions may only reference declared or objective atoms. Call 2 maps outcome tiers over
+a **schema-enum'd menu** of registered atoms. This removes the documented circularity that
+previously forced free-text generation (half the outcome vocabulary was the atoms of the same
+response). A bare `{"flag":"x"}` is coerced to `eq:true` rather than failing the whole beat.
+
+### 12.3 Plan-time stageability
+
+Liveness moved from open time to **plan time**. The planner and Encounter Designer see only
+NPCs that can take a stage now; names resolve to ids when the beat is authored; a social spec
+with nobody stageable is **deterministically downgraded** to a skill challenge carrying the
+same outcome maps (the tier bridge makes this lossless for the spine). The planner may declare
+`create_npcs` for a role the roster lacks — the "Elara" fix, where a scene was written around
+someone who existed only in prose. Stage 4 hard-fails a chapter whose NPCs are all dead/absent.
+
+### 12.4 Route health
+
+Four verdicts — `healthy`, `stillborn`, `spent`, `missing` — replacing `beatHasNoRouteLeft`, which required the
+beat's encounter to have *opened and resolved* and was therefore blind to the failure that
+started this. A never-opened beat past a grace window whose social spec resolves to no living
+NPC is **stillborn** and forces a re-plan.
+
+### 12.5 The Progress Director — one ladder, every turn
+
+Runs at the `intent.ts` post-route hook: the only place *every* turn passes.
+`evaluateStoryProgress` fires only on encounter resolutions, fact writes and scene effects, so a
+turn that folded into narration previously reached **no detector at all**.
+
+Counters live in `dm.story.director`; the decision is pure (`story/director.ts`). One action per
+turn, monotonic (never repeats or regresses a rung without intervening progress):
+
+| Rung | Action | Default threshold |
+| --- | --- | --- |
+| 1 | `nudge` — re-frame the obstacle, no new information | 2 no-progress turns |
+| 2 | `reveal` — surface an undiscovered clue or hook in-fiction | 4 |
+| 3 | `replan_beat` — the beat is not working; author a new one | 6 |
+| 4 | `guaranteed_route` — open the objective's code-authored rescue | 9 |
+| 5 | `fail_forward` — retire the objective, narrate the cost | 15 |
+
+A broken route (`stillborn`/`missing`) jumps straight to rung 3 — hinting at a beat that can
+never be played is useless. An open encounter holds rungs 1–2 but not the rescues. Thresholds
+carry ±1 seeded jitter ("telegraph, don't schedule") and are DM-tunable via
+`dm.settings.directorThresholds`.
+
+**Offer pressure** is an orthogonal track: nothing on the ladder can help before the story is
+accepted. It presses with a 4-turn backoff, then — after `OFFER_PRESSURE_MAX_PRESSES` — stops
+asking and **forces the start** (`forceAcceptOffer`), narrated as events overtaking the party,
+never as scolding. Without that terminal step a passive party has no active objective, making
+the entire ladder unreachable: observed live as 6 presses and 0 objectives across 30 turns.
+
+This ladder **replaced three uncoordinated ones** — the stuck-hint sweep, the dead-table stall
+promoter (which wrote no progression *by design*), and the idle nudge's two-tier escalation.
+`decideHint`, `maybeAutoHint` and the promoter path are deleted. The idle nudge survives as a
+wall-clock trigger only: a different axis (nobody acting at all), capped at 2, and merging it
+would create a `beats ↔ director` module cycle.
+
+### 12.6 Guaranteed routes and fail-forward
+
+Each objective carries a `guaranteed_route`: the **minimal atom set that provably satisfies its
+predicate** (cheapest `any` branch, full `all` union; `eq:false` branches are unsatisfiable by
+writing and skipped), wrapped as a playable skill challenge. Property-tested against
+`evaluatePredicate`. Partial and failure tiers stay empty — it is a route, not a handout. The
+beat alignment guard now fails **closed** to these atoms instead of shipping a misaligned beat.
+
+`objectives.outcome` makes end state explicit (`completed | failed`). A failed objective still
+advances the ladder and still scores endings — the signal vocabulary always accepted
+`{objective_id, outcome:'failed'}` and nothing ever produced one, and `updateEndings` hardcoded
+`'completed'`, so tragic/pyrrhic endings were unreachable by construction. Fail-forward is
+full-AI only (assist records a DM proposal), sits at a deliberately distant threshold, and is
+narrated as the antagonist gaining ground. When every objective is terminal the ending commits
+even without a decisive score.
+
+### 12.7 Encounter templates (anti-generic)
+
+Code-authored rescues risk making every stuck moment feel the same. The tabletop answer is the
+random table: not free invention, and not one shape either. `story/templates-encounter.ts`
+holds 14 curated shapes (chase, infiltration, ritual, endurance, investigation sweep;
+interrogation, negotiation, rally, deception; mechanism, riddle lock, environmental; ambush,
+holdout), each requiring one **twist axis** — timer, terrain, moral choice, secondary
+objective. The Designer picks from a menu with recently-used shapes removed; code owns the
+mechanical skeleton.
+
+### 12.7a Reachability gate (Phase 5)
+
+Stage 7 checks prose contradictions; it cannot see whether an adventure is *finishable*. That
+is a graph property, decidable deterministically, so it is a gate rather than a warning —
+`packages/rules/src/guide/graph.ts`, run at the end of stage 8 immediately before the
+`guide_ready` flip.
+
+The prerequisite was **award surfaces**: nothing authored carried award metadata (outcome maps
+were invented at runtime), so a guide-time reachability question would have passed vacuously.
+`encounters.outcome_atoms` is now **derived** — the designer already declares which objective an
+encounter serves, and that objective's predicate already determines what completing it needs,
+so code computes the atoms rather than asking a model to re-pick them.
+`ingredients.awards_atoms` is the optional clue-side equivalent.
+
+| Finding | Severity |
+| --- | --- |
+| `objective_no_claimable_atom` — nothing live play can ever claim | error |
+| `objective_unreachable` — no route awards its atoms and no guaranteed route | error |
+| `chapter_no_living_npc` — the Sunken Chapel failure | error |
+| `ending_unreachable` — keys only on objectives that do not exist | error |
+| `objective_thin_routes` — fewer than 2 authored routes (Three-Clue Rule; the rescue route is the third clue, not the first) | warning |
+| `no_failure_ending` — every ending demands completions, so a fail-forward run has nowhere to land | warning |
+| `orphan_award_atoms` — an award no objective reads | warning |
+
+`REACHABILITY_GATE` is `'off' | 'warn' | 'fail'`, currently **`'warn'`** — findings are recorded
+as `guide_warnings` and a `reachability_lint` event, and the guide still ships. Tighten to
+`'fail'` after a release of lab data: a false hard error blocks generation outright, which is
+worse than the bug it prevents.
+
+### 12.7b Canon vs. creative (Phase 6)
+
+The Consistency Checker was being handed the live transcript (`factSheet`'s "Recent lines") *and*
+the generating prompt verbatim. A narrator told to continue along a direction wrote exactly that,
+and the checker then saw the identical sentence as both an established Fact and the Draft under
+review — reporting a contradiction with itself:
+
+```text
+claim:        "two figures emerge from the oppressive blackness..."
+conflictsWith "two figures emerge from the oppressive blackness"
+```
+
+`parseConsistency` forces `ok:false` whenever violations exist, so that self-conflict blocked the
+draft, forced a regeneration under a `NEVER:` constraint quoting the very thing it was asked to
+write, and on the second failure published the mechanical fallback. **Players saw "The attempt is
+resolved; the outcome stands."**
+
+`session/canon.ts` splits the two audiences. The **narrator** still receives everything — prompt,
+transcript, retrieved memories, party profiles — because it needs them to write well. The
+**checker** receives canon only: location/day, party roster, the dead/absent roster, and
+committed world flags. Things that would still be true if nobody had said anything this scene.
+
+The Archivist's NPC life/death verdicts now require a **verbatim evidence quote** that must
+actually appear in the transcript (the recognition judge's discipline). A false "dead" removes an
+NPC from staging and blocks their dialogue for the rest of the session; unverified claims log
+`npc_state_unverified` and become a DM proposal instead. Restorative `present` needs no proof —
+it can only widen what is possible, and that is what keeps an arrived NPC from being locked out.
+
+### 12.8 Invariants
+
+1. Every atom in any predicate, outcome map or award resolves to a `story_atoms` row.
+2. `applyMilestones` remains the only progression writer, and accepts only registry atoms.
+3. No beat opens with an unstageable encounter.
+4. Every turn the active objective has ≥1 live route, or the ladder escalated exactly one rung.
+5. Pending offers re-surface within threshold and eventually start the story.
+6. A beat's `on_success` always credits the current objective (fail-closed); a **climax** beat
+   credits its objective's *full* minimal satisfying set, so winning the finale ends the story.
+7. Every objective terminates within its ladder bound; failures advance the story.
+8. The ending commits when every objective is terminal, publishes its prose to the player
+   **exactly once** (atomic single-winner claim), and marks the adventure done.
+9. Every adventure has **1–3 combat encounters, at least one** (`COMBAT_FLOOR`/`COMBAT_BUDGET`).
+10. The **final objective is the climax** (once an arc exists behind it), framed as the peak
+    whatever its form — a fight, an escape, a reckoning; combat is never imposed on it.
+
+### 12.9 Verification & known gaps
+
+Verified by `packages/rules` unit tests (588), the $0 `story-live.mjs` suite (132 assertions),
+and paid Adventure Lab runs (`docs/F15` §4). The dungeon plot that was permanently unwinnable now
+completes objectives; escalation rungs climb on threshold; and — after §12.10 — a one-shot
+**finishes naturally end to end**: a heist reached its climax and correct ending in 18 turns of
+un-driven play (rising action → a tide-clocked climax → the right conclusion, published once).
+Historical natural-completion rate before that work was 1 of 14.
+
+**Still harness-assisted, not yet reliable un-driven:** natural-play *throughput*. A one-shot
+finishes when it reaches its finale, but pacing is variable — the Adventure Lab's climax-aware
+autocomplete (drive objectives up to the finale, then let the climax play) is how most genres are
+exercised cheaply. Objective *design* (3–4 atom `all` chains take many turns) is the lever, not
+the machinery. **Backstops deployed but not yet seen firing:** `combat_floor_forced` (guidance
+has sufficed every run) and the climax full-set alignment (`climax_alignment_forced`).
+
+**Combat is a placeholder auto-win** until F09. A defeated boss's state is therefore assigned
+somewhat arbitrarily (e.g. `absent`), which the ending signals read — real fight outcomes
+(killed / captured / fled) will feed those signals once the battle map lands.
+
+### 12.10 Climax, combat floor, and the ending reaching the player (2026-07-24)
+
+The overhaul made the spine *traversable*; this pass made a traversal *land as a story*.
+
+**The climax is a designated beat.** When the active objective is the last non-terminal one AND
+something has already resolved (an arc must exist — without the second clause a single-objective
+quest flagged turn one as its own finale and completed instantly), `planAndOpenBeat` treats the
+beat as the climax: the opening cutscene is framed as the culmination, **type-agnostic** ("pitch
+the stakes at their peak… a confrontation, a desperate escape, a reckoning, a choice"). Forcing
+every story to peak on a boss fight is the generic-gameplay trap — a heist climaxes on the escape.
+
+**A boss combat opens itself; a social/skill climax is played.** A beat's encounter normally
+waits for the party to commit to it (`entry='offered'`). For a finale *fight* that let the
+confrontation go un-triggered if the party never phrased an attack, so a combat climax auto-opens
+(lead-in → resolution → aftermath). A social or skill finale still waits — it is meant to be
+played. The climax beat also credits its objective's **full** minimal satisfying set, not one
+atom, or an `all`-chain finale could win half a conjunction and loop.
+
+**Combat floor and ceiling: 1 major fight guaranteed, 3 total** (`COMBAT_FLOOR=1`,
+`COMBAT_BUDGET=3`). Adventurers should draw steel at least once; real-time combat is the slowest
+thing at the table, so three is the ceiling. The floor escalates as guidance past the ladder
+midpoint, then a hard structural force at the climax if still unmet; the ceiling downgrades an
+over-budget non-climax combat to a skill challenge. Court was dropped from the genre set for the
+same reason — a premise where "steel settles nothing" makes an armed party's kit inert.
+
+**The ending reaches the player, once.** Publishing the climax through `publishNarration` re-ran
+the narrator — a second heavy call at the end of the longest tail — and when that worker hit its
+resource limit the ending was silently lost. It now publishes the climax author's finished prose
+**directly**, guarded by the deterministic structural claim-check (no dead/absent speaker) rather
+than a fragile second LLM pass, and the commit is an **atomic single-winner claim**
+(`.is('committed_ending_id', null)`) after three overlapping progress passes had narrated the
+same ending three times. Combat *resolution* is a marker event; the lead-in and aftermath stay as
+narration — the seam the F09 battle map plugs into.
+
+**Ending selection:** `state:alive` means present and not dead — it no longer counts an `absent`
+NPC as alive, which had flipped a won heist onto a defeat ending 3–2 (a departed boss firing both
+a triumph's "villain lives" penalty and a tragedy's reward).
+
+**Deferred to Phase 5:** the guide-time reachability lint needs award surfaces
+(`encounters.outcome_atoms`, `ingredients.awards_atoms`) that no authored row carries today.
+Note that MAIN-SPEC §1.1a backlog item 1 (parallel objectives) would change what "reachable"
+means — decide before building it.
+
 ## 11. Open questions
 
 - Loop template library size at launch (proposal: the 10 types in §2, each with a 3–5 beat template).
 - Suspicion signal extraction quality — start with Summarizer tagging + simple keyword heuristics; refine with proposal-log feedback.
+- Whether the objective ladder should ever allow **parallel** active objectives (MAIN-SPEC §1.1a
+  backlog 1). Today it is strictly sequential, which is the single largest railroad factor.

@@ -149,7 +149,9 @@ script are outside this machine.
 ## 5. Slices (implement in order)
 
 ### Slice 1 - Encounter state domain + visible frame
+
 Goal: the state plumbing and UI, no behavior change.
+
 - `packages/rules/src/state/types.ts`: add `EncounterState`
   `{ id, kind: 'skill_challenge'|'puzzle'|'social'|'combat', label, stakes: string,
      progress: Json, contributions: Record<characterId, number>, startedAt }` and
@@ -163,7 +165,9 @@ Goal: the state plumbing and UI, no behavior change.
   component test.
 
 ### Slice 2 - Skill-challenge engine + routing
+
 Goal: the first real encounter type, end to end.
+
 - `packages/rules/src/play/skill-challenge.ts` (pure, unit-tested):
   `{ neededSuccesses, maxFailures, suggestedSkills: string[], perSkillUses: Record<skill, count> }`;
   functions: `recordAttempt(state, characterId, skill, success)` returning updated state +
@@ -179,7 +183,9 @@ Goal: the first real encounter type, end to end.
   `scene-director-live.mjs` opening a hand-seeded challenge and driving it to each tier.
 
 ### Slice 3 - The machine switch: authoring, entry mapping, phase enforcement
+
 Goal: the totalizing loop goes live. This is the largest slice.
+
 - `beats` table migration: add `encounter_spec jsonb` (nullable).
 - Beat Planner prompt (`session/story-agents.ts`) emits
   `encounter: { kind, label, stakes, rationale, params, on_success, on_partial, on_failure }`
@@ -209,7 +215,9 @@ Goal: the totalizing loop goes live. This is the largest slice.
   cutscene -> next beat, and an off-script reply spawning an ad-hoc micro-encounter.
 
 ### Slice 4 - Social encounter spec
+
 Goal: conversations get goals and ends.
+
 - Spec params: `{ goal, exits: [{ outcome, description, milestones: [...] }], stakes,
   npcIds }`. Entering stages the NPCs (existing `startSocial`); `GameState.encounter`
   carries progress (exchanges count, disposition trajectory).
@@ -222,7 +230,9 @@ Goal: conversations get goals and ends.
   authored exit updates the debug Story panel and exits the beat.
 
 ### Slice 5 - Puzzles
+
 Goal: the puzzle scene mode earns its name.
+
 - Spec params: `{ solution: string (secret), steps: [{ description, hint }], maxAttempts,
   failConsequence: { kind: 'spawn_encounter'|'cost'|'antagonist_step', params } }`.
 - Attempts route through the Adjudicator with the secret solution in context: it scores
@@ -235,7 +245,9 @@ Goal: the puzzle scene mode earns its name.
 - Accept: unit tests for progress/hints/attempt exhaustion; live probe with a seeded puzzle.
 
 ### Slice 6 - Random encounters + danger
+
 Goal: the world pushes back, legibly.
+
 - `locations` migration: `danger integer default 0`, `encounter_table jsonb` (weighted
   entries: `{ weight, kind, label, params }`). Guide Stage 4/5 prompt additions author both;
   generated fallback table when missing.
@@ -250,7 +262,9 @@ Goal: the world pushes back, legibly.
   spawn and restoration of the interrupted encounter.
 
 ### Slice 7 - Minimal retrieval (memory)
+
 Goal: long-form narration stays consistent across sessions.
+
 - Migration: `memory_fragments (id, adventure_id, kind: 'encounter'|'scene_summary',
   content text, embedding vector(1024), created_at)` + ivfflat index. Embedding via
   OpenRouter embeddings endpoint (single helper in `_shared/llm.ts`; pick the cheapest

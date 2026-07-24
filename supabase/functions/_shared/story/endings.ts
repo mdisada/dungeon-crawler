@@ -43,7 +43,13 @@ function signalHolds(when: EndingSignalWhen, world: EndingWorld): boolean {
   if ('objective_id' in when) return world.objectiveOutcomes[when.objective_id] === when.outcome
   if ('npc_id' in when) {
     const state = world.npcStates[when.npc_id]
-    if (when.state === 'alive') return state !== undefined && state !== 'dead'
+    // 'alive' means present and not dead - NOT "anything but dead". The old check counted an
+    // ABSENT npc (one who has left the scene) as alive, and also refused a never-recorded npc
+    // (undefined) the alive default the rest of the engine gives it. Live 2026-07-24, heist: the
+    // party won every objective and secured the manifest, but the boss Valerius ended 'absent',
+    // the alive signals fired anyway (-3 on the triumph ending, +3 on the tragedy), and a
+    // DEFEAT ending committed over "Justice Served" 3 to 2. Absent and dead are both "not alive".
+    if (when.state === 'alive') return state !== 'dead' && state !== 'absent'
     return state === when.state
   }
   const value = world.dialValues[when.dial]

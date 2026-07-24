@@ -32,6 +32,7 @@ ad-hoc challenge with sensible skills/DCs) instead of stonewalling; random-encou
 interruptions land dramatically and restore cleanly.
 
 **Pacing findings (fixed during the run, deployed):**
+
 1. **Stale-beat loop** - a beat outliving its completed objective kept re-offering a dead
    encounter with a dead vocabulary. Fixed: objective completion now forces a beat re-plan
    (`progress.ts`, trigger `objective_completed`).
@@ -63,6 +64,7 @@ author predicates/signals in the machine's claimable vocabulary; per-location
 fallback table covers it meanwhile).
 
 **Remaining pacing observations (not bugs):**
+
 - ~8 turns per 6.5-minute segment; each turn is adjudicator + narrator + checker (~30-45s).
   Fine for play, slow for sims.
 - The sim player's character (cloned, low modifiers) failed most DC 13-15 checks; challenges

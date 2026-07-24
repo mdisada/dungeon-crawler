@@ -9,7 +9,7 @@ Get the right people and characters into an adventure, and define the session li
 
 ## 2. Membership & invites
 
-```
+```text
 adventure_members: adventure_id, user_id, role ('dm'|'player'),
                    character_id?, joined_at, unique(adventure_id,user_id)
 ```
@@ -28,7 +28,7 @@ Opening an `active` adventure from Home shows a **modal lobby** over the (dimmed
 
 ## 4. Session lifecycle
 
-```
+```text
 sessions: id, adventure_id, index, started_at, ended_at?,
           start_checkpoint_id, end_summary_id?
 checkpoints: id, adventure_id, session_id, created_at, label?,

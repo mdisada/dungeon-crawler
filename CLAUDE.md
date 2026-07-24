@@ -539,6 +539,13 @@ Before declaring work complete, verify:
   `state_version`) is the sole state authority — per `MAIN-SPEC.md`. The prototype
   `backend/main.py` standalone Python process + SQLite (`backend/data/campaigns.db`) is being
   replaced, not repointed. See `TASK.md` §3-4 for what prototype code is worth reusing as reference.
+- **Exception (2026-07-24, F12 Assets Lab):** `backend/` is now also the **local asset worker** —
+  not just reference. `backend/assets.py` + `backend/image.py` + `backend/tts.py` serve local
+  image/TTS generation over the `assets:{user_id}` Realtime channel, uploading results to the
+  private `assets` Storage bucket. This is a real runtime for on-device GPU media generation, which
+  never belonged in an edge function; it does not touch game-state authority (still Postgres) or
+  the AI _text_ gateway (still ai-proxy). Set `ASSETS_USER_ID` in `backend/.env`; run `uv run
+  main.py`. See `DECISIONS.md` 2026-07-24.
 - **No Docker on the dev machine.** Do not suggest or rely on `supabase start` / `supabase db
   reset` for local dev — apply migrations with `supabase db push --db-url
   <POSTGRES_URL_NON_POOLING>` and seed data with `node supabase/seed/apply-seed.mjs

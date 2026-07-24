@@ -6,9 +6,9 @@ by Wizards of the Coast LLC, available at <https://www.dndbeyond.com/srd>, used 
 (CC-BY-4.0).
 
 > This work includes material from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards
-> of the Coast LLC, available at https://www.dndbeyond.com/srd. The SRD 5.2.1 is licensed under
+> of the Coast LLC, available at <https://www.dndbeyond.com/srd>. The SRD 5.2.1 is licensed under
 > the Creative Commons Attribution 4.0 International License, available at
-> https://creativecommons.org/licenses/by/4.0/legalcode.
+> <https://creativecommons.org/licenses/by/4.0/legalcode>.
 
 SRD data is ingested via the [Open5e API](https://api.open5e.com/v2/) (`supabase/seed/ingest-srd.mjs`,
 filtered to Open5e's `srd-2024` document). Open5e's own codebase is separately licensed (modified

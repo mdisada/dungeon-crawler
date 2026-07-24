@@ -5,9 +5,10 @@ import {
 } from '../_shared/guide/stages/stage1.ts'
 import { buildStage2Prompt, parseStage2 } from '../_shared/guide/stages/stage2.ts'
 import { buildStage3Prompt, parseStage3 } from '../_shared/guide/stages/stage3.ts'
-import type { ChapterSketch, MetaLoop } from '../_shared/guide/types.ts'
+import { buildGuaranteedRoute } from '../_shared/guide/guaranteed-route.ts'
+import type { ChapterSketch, Json, MetaLoop } from '../_shared/guide/types.ts'
 import { enqueueJob, type StageEnv } from './stage-env.ts'
-import { assertOk, toSeed } from './util.ts'
+import { assertOk, syncSpineAtoms, toSeed } from './util.ts'
 
 interface ChapterRow {
   id: string
@@ -143,7 +144,7 @@ export async function runStage3(env: StageEnv, chapterId: string): Promise<void>
     .eq('human_edited', false)
   assertOk(deleteError, 'objectives delete failed')
 
-  const { error: insertError } = await env.db.from('objectives').insert(
+  const { data: inserted, error: insertError } = await env.db.from('objectives').insert(
     objectives.map((o, i) => ({
       adventure_id: env.adventure.id,
       chapter_id: chapterId,
@@ -152,8 +153,33 @@ export async function runStage3(env: StageEnv, chapterId: string): Promise<void>
       hidden_description: o.hiddenDescription,
       completion_predicates: o.completionPredicates,
     })),
-  )
+  ).select('id, title, hidden_description, completion_predicates')
   assertOk(insertError, 'objectives insert failed')
+
+  // Guaranteed routes (overhaul Phase 4): a code-authored rescue encounter per objective,
+  // whose success provably satisfies that objective's predicate. Needs the row ids, so it
+  // runs after the insert. A predicate with no writable satisfying set yields no route - the
+  // objective is then only completable by its authored paths, which the Phase-5 reachability
+  // lint will flag rather than this stage papering over.
+  for (const row of ((inserted ?? []) as {
+    id: string; title: string; hidden_description: string | null; completion_predicates: unknown
+  }[])) {
+    const route = buildGuaranteedRoute({
+      objectiveId: row.id,
+      title: row.title,
+      hiddenDescription: row.hidden_description ?? undefined,
+      completionPredicates: row.completion_predicates,
+    })
+    if (!route) continue
+    const { error: routeError } = await env.db
+      .from('objectives')
+      .update({ guaranteed_route: route as unknown as Json })
+      .eq('id', row.id)
+    if (routeError) console.error('guaranteed_route write failed', routeError)
+  }
+
+  // The atom registry mirrors whatever predicates exist right now (overhaul Phase 1).
+  await syncSpineAtoms(env.db, env.adventure.id)
 
   await enqueueJob(env.db, env.adventure.id, 4, chapterId)
 }

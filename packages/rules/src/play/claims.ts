@@ -1,0 +1,124 @@
+// Prose claim checking (2026-07-23): does a draft depict someone who cannot be depicted?
+//
+// This replaces the free-text consistency checker for prose, which was asked "does this
+// paragraph contradict these facts?" and got it wrong 14 times out of 14 across three paid
+// runs. The facts it was handed were de-slugified fragments ("observed iron hand scout"), and
+// nothing about a fragment tells a model what would negate it - so "mentions the subject"
+// collapsed into "contradicts the fact", and the narrator was blocked for describing the
+// corpses of enemies the party had just fought.
+//
+// The split here is the standing rule applied to checking: the MODEL perceives, the CODE
+// judges. The model never decides whether something is a contradiction. It answers one
+// concrete question about people it can see named in the draft - are they speaking and acting,
+// or are they being described, remembered, discussed? - and the code compares that answer to
+// live NPC state. "Dead person speaks" is a verdict arithmetic can reach; "does this prose
+// contradict the world" is not.
+//
+// The class this exists to catch is the speaking corpse (live, multiple playtests). The class
+// it must NEVER catch is the murder mystery that says its victim's name in every scene - the
+// original bug that made the narrator fall back to mechanical text six times in one session.
+
+/** How a draft depicts a named person. Only the first two are claims about the present. */
+export type ClaimRole = 'speaks' | 'acts' | 'mentioned'
+
+export const CLAIM_ROLES: readonly ClaimRole[] = ['speaks', 'acts', 'mentioned']
+
+export interface ClaimEntity {
+  id: string
+  name: string
+  /** Live state: 'alive' | 'dead' | 'absent' (anything else is treated as present). */
+  state: string
+}
+
+export interface EntityClaim {
+  /** Must match a roster name exactly - the extractor picks from a closed menu. */
+  name: string
+  role: ClaimRole
+}
+
+export interface ClaimViolation {
+  id: string
+  name: string
+  role: ClaimRole
+  state: string
+  /** Ready-to-use regeneration constraint. */
+  constraint: string
+}
+
+/**
+ * Whole-word, case-insensitive presence of a proper name. Entity resolution against a closed,
+ * code-owned roster - not an attempt to read meaning, so it stays deterministic.
+ *
+ * (story/staging.ts has a sibling of this for routing dialogue to the person addressed. They
+ * are deliberately separate: this module must not pull the story domain into play.)
+ */
+export function namesEntity(text: string, name: string): boolean {
+  const clean = name.toLowerCase().trim()
+  if (!clean) return false
+  const escaped = clean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`).test(` ${text.toLowerCase()} `)
+}
+
+export const isPresent = (state: string): boolean => state !== 'dead' && state !== 'absent'
+
+/**
+ * The cheap structural gate. Only a dead or absent person NAMED in the draft can produce a
+ * violation, so a scene where nobody is dead never pays for an extraction call at all - and in
+ * a healthy run that is almost every scene.
+ */
+export function suspectEntities(
+  draft: string,
+  roster: readonly ClaimEntity[],
+): ClaimEntity[] {
+  return roster.filter((e) => !isPresent(e.state) && namesEntity(draft, e.name))
+}
+
+/**
+ * The verdict, in code. A dead or absent person may be described, mourned, remembered and
+ * discussed freely - `mentioned` is always fine, and so is any name the extractor invented that
+ * is not on the roster. Only speaking or acting is a contradiction.
+ */
+export function claimViolations(
+  claims: readonly EntityClaim[],
+  roster: readonly ClaimEntity[],
+): ClaimViolation[] {
+  const byName = new Map(roster.map((e) => [e.name.toLowerCase().trim(), e]))
+  const seen = new Set<string>()
+  const violations: ClaimViolation[] = []
+  for (const claim of claims) {
+    if (claim.role === 'mentioned') continue
+    const entity = byName.get(String(claim.name ?? '').toLowerCase().trim())
+    if (!entity || isPresent(entity.state) || seen.has(entity.id)) continue
+    seen.add(entity.id)
+    violations.push({
+      id: entity.id,
+      name: entity.name,
+      role: claim.role,
+      state: entity.state,
+      constraint: entity.state === 'dead'
+        ? `${entity.name} is DEAD. Their body may be described and their name spoken by others, ` +
+          `but they cannot speak, move or act.`
+        : `${entity.name} is NOT in this scene. They may be named, remembered and discussed, ` +
+          `but they cannot speak or act here.`,
+    })
+  }
+  return violations
+}
+
+/** Parses the extractor's reply. Unknown roles degrade to 'mentioned' - the harmless one. */
+export function parseEntityClaims(raw: unknown): EntityClaim[] {
+  const root = typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : {}
+  const list = Array.isArray(root.claims) ? root.claims : []
+  const claims: EntityClaim[] = []
+  for (const item of list) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) continue
+    const claim = item as Record<string, unknown>
+    const name = typeof claim.name === 'string' ? claim.name.trim() : ''
+    if (!name) continue
+    const role = claim.role === 'speaks' || claim.role === 'acts' ? claim.role : 'mentioned'
+    claims.push({ name, role })
+  }
+  return claims
+}
