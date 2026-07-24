@@ -31,6 +31,10 @@ import { evaluateStoryProgress } from './progress.ts'
 import { recordProposal } from './proposals.ts'
 import type { ChallengeCheckStash } from './stashes.ts'
 import { commitDiffs, loadState, logEvent } from './util.ts'
+import { bossNpcStateForOutcome } from '../_shared/combat/index.ts'
+import { resolveLiveCombat } from './combat.ts'
+import type { LiveCombatResult } from './combat.ts'
+import { applyNpcState } from './npc-state.ts'
 
 export function activeEncounter(state: GameState): EncounterState | null {
   return state.encounter ?? null
@@ -333,12 +337,43 @@ export async function runCombatPlaceholderEncounter(
       'Do NOT resolve the fight, decide a winner, or describe how it ends.',
     'Encounter entered',
   )
-  // The combat RESOLUTION is a separate mechanic (the F09 battle map; a placeholder auto-win for
-  // now). It is a marker event, NOT a narration line - the bare "party victorious (placeholder
-  // auto-resolve)" used to be appended to the transcript, dropping a mechanical stub into the
-  // middle of the prose. What belongs in OUR narration is the story AROUND the fight: the
-  // lead-in above (the clash joined) and the aftermath below. So log the outcome and let the
-  // aftermath beat carry it.
+  // F09.0a: resolve the fight on the REAL engine from authored data (the objective -> encounter
+  // join in combat.ts), single-writer. Combat is an isolated black box - it re-enters the spine
+  // ONLY through the two calls below (applyNpcState + resolveOpenEncounter), the exact seams the
+  // placeholder already used; it touches no consistency/pacing agent. On any gap (ad-hoc beat, no
+  // authored enemies, empty party) or engine error, fall back to the historical auto-win so a live
+  // session can never break. The resolution is a marker event, NOT a narration line - the story
+  // AROUND the fight (lead-in above, aftermath below) is what OUR narration carries.
+  const live: LiveCombatResult | null = await resolveLiveCombat(
+    service, env, (await loadState(service, env.adventureId)).state,
+    { label: spec.label, stakes: spec.stakes, onSuccess: spec.onSuccess, onPartial: spec.onPartial, onFailure: spec.onFailure },
+  ).catch((err: unknown) => {
+    console.error('combat resolve failed; using placeholder auto-win', err)
+    return null
+  })
+
+  if (live) {
+    await logEvent(service, env.adventureId, sessionId, 'combat_resolved', {
+      label: spec.label, outcome: live.result.outcome, tier: live.result.tier,
+      boss_outcome: live.result.bossOutcome, casualties: live.result.casualties as unknown as Json,
+      encounter_id: live.encounterId, seed: live.seed, rounds: live.rounds,
+      warnings: live.warnings, resolver: 'engine',
+    })
+    // Boss fate -> npcStates BEFORE resolving, so the aftermath canon + ending signals see it. The
+    // group guard is a no-op for a solo/boss npc, so a real dead/alive write lands (F09 SS3.3).
+    if (live.boss) {
+      const npcState = bossNpcStateForOutcome(live.result.bossOutcome)
+      if (npcState) {
+        await applyNpcState(
+          service, env, sessionId, live.boss, npcState, 'combat',
+          `boss ${live.result.bossOutcome} in "${spec.label}"`,
+        )
+      }
+    }
+    await resolveOpenEncounter(service, env, sessionId, live.result.tier, combatAftermath(spec, live))
+    return
+  }
+
   await logEvent(service, env.adventureId, sessionId, 'combat_resolved', {
     label: spec.label, outcome: 'victory', resolver: 'placeholder',
   })
@@ -348,6 +383,21 @@ export async function runCombatPlaceholderEncounter(
       'defeated, what the victory cost and what it opens - as the scene settles. Do not re-narrate ' +
       'the blow-by-blow of the fight itself.',
   )
+}
+
+/** The aftermath narration context for a real result - resolveOpenEncounter prepends its tierText. */
+function combatAftermath(spec: StoredBeatSpec, live: LiveCombatResult): string {
+  if (live.result.tier === 'failed') {
+    return `The fight ("${spec.label}") turned against the party - they were overwhelmed and went down. ` +
+      'Narrate the fail-forward AFTERMATH: the party is beaten (unconscious, not dead) and the story moves ' +
+      'on, worse for it. Do not re-narrate the blow-by-blow.'
+  }
+  const pcDown = live.result.casualties.pcIds.length
+  const bossNote = live.boss && live.result.bossOutcome === 'killed' ? ` ${live.boss.name} lies dead among them.` : ''
+  const costNote = pcDown > 0 ? ` The win came at a cost - ${pcDown} of the party fell before the end.` : ''
+  return `The fight ("${spec.label}") is over and the party won.${bossNote}${costNote} Narrate the AFTERMATH ` +
+    'as the scene settles - the enemy defeated, what the victory cost and what it opens. Do not re-narrate ' +
+    'the blow-by-blow of the fight itself.'
 }
 
 // --- Skill challenge (Slice 2) ---------------------------------------------------------------
