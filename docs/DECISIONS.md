@@ -1198,3 +1198,53 @@ Verified: stats returns `total_cost` (e.g. 0.000608 for a short line) ~9s in. Al
 narration cost tracking, not just the lab. Redeployed ai-proxy.
 
 **Updated:** `supabase/functions/ai-proxy` (handleTts), Assets Lab `use-lab-runs.ts`.
+
+
+---
+
+## 2026-07-24 — Fish Audio is the default cloud TTS (replacing Voxtral); cloud cloning now works
+
+**What:** Bought Fish Audio credits; made it the default cloud TTS provider. `ai-proxy` routes a
+tts request to Fish (`POST api.fish.audio/v1/tts`, engine in the `model:` header) when the model is
+a Fish engine id (`s1`/`s2-pro`/`s2.1-pro`/`s2.1-pro-free`), else to the OpenRouter/Voxtral audio
+endpoint as before. `FISH_AUDIO_API_KEY` is a Supabase edge secret (set via `supabase secrets set`)
+— NOT a client var; the copy the user placed in `frontend/.env.local` is non-VITE so it never
+bundles, but the secret ai-proxy actually reads is the edge one. Default `user_settings.tts_model`
+flipped to `s1` (migration + both existing rows updated).
+
+**Cloning now works on the cloud route (unlike Voxtral).** Fish clones from an uploaded clip with
+**no transcript required**: `ai-proxy` registers the clip as a Fish voice model once
+(`POST /model`, multipart, `train_mode: fast` → trained synchronously), caches the returned
+`reference_id` on `voice_profiles.fish_reference_id`, and reuses it. Verified end-to-end against the
+live API (create → synth → delete). Voice payload to ai-proxy was normalized and is shared by both
+providers: `voiceProfileId` (+`voiceStoragePath`) = clone an uploaded clip; `voiceId` = a raw id
+(Voxtral slug OR Fish reference_id); neither = provider default voice. ai-proxy interprets it per
+the resolved model — Voxtral still rejects a clip (no cloning endpoint), Fish clones it.
+
+**Cost:** Fish bills on its own platform and returns no cost in the response, so Fish tts rows log
+`cost_usd = null` and the lab shows "-". The Assets Lab TTS panel is provider-aware (Fish voice
+controls when the model is a Fish engine, Voxtral slug field otherwise); Voxtral stays selectable
+for comparison. `previewVoice` now defaults to the cloud route (Fish clones without needing the
+local worker).
+
+**Updated:** new migration `20260724100000_fish_audio_tts.sql`, `supabase/functions/_shared/fish.ts`
++ `media-models.ts` (allowlist) + `ai-proxy` (handleFishTts, normalized voice payload),
+`frontend/src/features/tts` (fish-voices.ts, synthesize, preview-voice, types), Assets Lab TTS panel.
+
+
+---
+
+## 2026-07-24 — Fish TTS cost logging (per-byte) + Assets Lab provider labels
+
+**What:** Fish returns no per-request cost and exposes only a credit-balance endpoint
+(`wallet/self/api-credit`), so cost is computed deterministically from the input's UTF-8 byte size
+(`_shared/fish.ts::fishCostUsd`) and written to usage_log like the other providers. Rate (Fish
+docs, verified): s1 / s2-pro / s2.1-pro = $15 / 1M UTF-8 bytes ($0.000015/byte); s2.1-pro-free = $0.
+Billing is by input-text bytes, so this matches Fish's meter exactly (voice-model training cost, if
+any, is not logged — undocumented and free in fast mode). Also relabeled the Assets Lab: the cloud
+route radio and the run-table "Route" column now show the real provider ("Fish Audio" / "Voxtral
+(OpenRouter)" for TTS, "OpenRouter" for image) instead of a hardcoded "OpenRouter", via a
+`cloudLabel` prop and a `routeLabel` on LabRun.
+
+**Updated:** `supabase/functions/_shared/fish.ts` + `ai-proxy` (handleFishTts logs cost),
+Assets Lab `route-controls.tsx` / `image-panel.tsx` / `tts-panel.tsx` / `run-table.tsx` / `types.ts`.

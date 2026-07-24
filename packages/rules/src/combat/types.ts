@@ -148,6 +148,9 @@ export interface CombatEngineState {
   turnIndex: number
   economy: TurnEconomy
   difficulty: DifficultySetting
+  /** Grid dimensions in squares (default GRID_SIZE x GRID_SIZE); custom map sizes come from the Lab. */
+  gridWidth: number
+  gridHeight: number
   status: 'active' | 'ended'
   winner: CombatSide | null
 }

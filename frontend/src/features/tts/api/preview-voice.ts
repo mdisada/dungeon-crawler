@@ -24,9 +24,10 @@ export interface VoicePreview {
 export async function previewVoice(
   userId: string,
   profile: VoiceProfile,
-  // Cloning only exists on the local Chatterbox route (OpenRouter has no cloning endpoint), so a
-  // profile preview goes local by default and falls back to the raw clip when no worker answers.
-  route: AssetRoute = 'local',
+  // Fish (the default cloud provider) clones an uploaded clip, so a profile preview goes through
+  // the cloud route -- no local worker needed. Falls back to playing the raw clip on any failure
+  // (e.g. the user's tts_model is still Voxtral, which can't clone).
+  route: AssetRoute = 'openrouter',
 ): Promise<VoicePreview> {
   try {
     const result = await synthesize({

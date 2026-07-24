@@ -50,6 +50,13 @@ jobs: id, user_id, adventure_id?, kind ('image'|'tts'|'tts_stream'|'embedding'|'
 
 ## 4. TTS
 
+> **Default cloud TTS is Fish Audio (2026-07-24), not Voxtral.** `ai-proxy` routes to Fish
+> (`api.fish.audio/v1/tts`, engine in the `model:` header) for model ids `s1`/`s2-pro`/`s2.1-pro`/
+> `s2.1-pro-free`, else to OpenRouter/Voxtral. Fish **clones from an uploaded clip** (registered as
+> a Fish voice model once, `reference_id` cached on `voice_profiles.fish_reference_id`), so the
+> cloud route can clone — unlike Voxtral. Key is the edge secret `FISH_AUDIO_API_KEY`. Fish returns
+> no cost, so its usage_log rows have null cost. See `DECISIONS.md` 2026-07-24.
+
 ### 4.1 Voice profiles
 
 ```text

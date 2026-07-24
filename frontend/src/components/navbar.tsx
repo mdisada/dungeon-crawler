@@ -45,6 +45,12 @@ export function Navbar() {
           >
             Characters
           </Link>
+          <Link
+            to="/maps"
+            className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Maps
+          </Link>
           {isAdventureLabUser(session?.user.email) && (
             <Link
               to="/adventure-lab"

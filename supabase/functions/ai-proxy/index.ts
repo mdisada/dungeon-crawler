@@ -11,6 +11,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import { corsHeaders } from '../_shared/cors.ts'
+import { createFishVoice, fishCostUsd, fishSpeak, isFishModel } from '../_shared/fish.ts'
 import { allowlistMessage, isAllowedMediaModel } from '../_shared/media-models.ts'
 import { isAgentRole, resolveModel } from '../_shared/model-routing.ts'
 
@@ -184,8 +185,15 @@ async function handleTts(opts: {
   startedAt: number
 }) {
   const { model, payload, userId, adventureId, agentRole, startedAt } = opts
-  if (typeof payload.voice !== 'string') {
-    return jsonError(400, 'payload.voice (a voice_id from the Settings voice picker) is required')
+  // Normalized voice payload (shared with the Fish path): `voiceId` is a raw id whose meaning is
+  // provider-specific -- here a Voxtral preset slug. A clip (voiceProfileId) can't clone on this
+  // route: OpenRouter's /audio/speech has no cloning input.
+  const voiceId = typeof payload.voiceId === 'string' ? payload.voiceId : null
+  if (!voiceId) {
+    if (payload.voiceProfileId) {
+      return jsonError(400, 'Voice cloning is not available on the Voxtral/OpenRouter route -- use Fish (s1) or the local route.')
+    }
+    return jsonError(400, 'payload.voiceId (a Voxtral voice slug, e.g. en_paul_neutral) is required')
   }
 
   const upstream = await fetch(OPENROUTER_AUDIO_URL, {
@@ -194,7 +202,7 @@ async function handleTts(opts: {
     body: JSON.stringify({
       model,
       input: payload.input,
-      voice: payload.voice,
+      voice: voiceId,
       response_format: payload.response_format ?? 'mp3',
     }),
   })
@@ -251,6 +259,86 @@ async function handleTts(opts: {
   }
 
   return new Response(clientStream, { headers: { ...corsHeaders, 'Content-Type': contentType } })
+}
+
+// Fish Audio TTS. Voice resolution (normalized payload, shared with the Voxtral path):
+//   voiceProfileId (+ voiceStoragePath) -> clone the uploaded clip: reuse the profile's cached
+//     fish_reference_id, or register the clip as a Fish model once and cache the new id.
+//   voiceId -> a Fish reference_id (a library/community voice) used directly.
+//   neither -> Fish's built-in default voice.
+async function handleFishTts(opts: {
+  model: string
+  payload: Record<string, unknown>
+  userClient: ReturnType<typeof createClient>
+  userId: string
+  adventureId: string | null | undefined
+  agentRole: string
+  startedAt: number
+}) {
+  const { model, payload, userClient, userId, adventureId, agentRole, startedAt } = opts
+
+  const input = typeof payload.input === 'string' ? payload.input : ''
+  if (!input.trim()) return jsonError(400, 'payload.input (text to synthesize) is required')
+
+  let referenceId: string | null = null
+  try {
+    if (typeof payload.voiceProfileId === 'string') {
+      referenceId = await resolveFishReference(userClient, payload.voiceProfileId)
+    } else if (typeof payload.voiceId === 'string') {
+      referenceId = payload.voiceId
+    }
+  } catch (err) {
+    return jsonError(400, err instanceof Error ? err.message : 'Could not resolve Fish voice')
+  }
+
+  const format = typeof payload.response_format === 'string' ? payload.response_format : 'mp3'
+  const upstream = await fishSpeak({ model, input, referenceId, format })
+  if (!upstream.ok || !upstream.body) {
+    const detail = await upstream.text().catch(() => '')
+    return jsonError(upstream.status, `Fish Audio error: ${upstream.status} ${detail}`)
+  }
+
+  // Fish returns no per-request cost, but it bills deterministically by the input's UTF-8 byte
+  // size, so cost is computed from the text rather than read back (see fishCostUsd).
+  const cost = fishCostUsd(model, input)
+  const contentType = upstream.headers.get('Content-Type') ?? 'audio/mpeg'
+  const [clientStream, drain] = upstream.body.tee()
+  const logTask = (async () => {
+    const reader = drain.getReader()
+    while (!(await reader.read()).done) {
+      /* drain to measure completion */
+    }
+    await logUsage({ userId, adventureId, agentRole, model, kind: 'tts', usage: { cost }, latencyMs: Date.now() - startedAt })
+  })()
+  if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(logTask)
+
+  return new Response(clientStream, { headers: { ...corsHeaders, 'Content-Type': contentType } })
+}
+
+/** Reuses a voice profile's cached Fish reference_id, or trains one from its clip and caches it. */
+async function resolveFishReference(
+  userClient: ReturnType<typeof createClient>,
+  voiceProfileId: string,
+): Promise<string> {
+  // RLS scopes this to the caller's own profiles, so a returned row proves ownership.
+  const { data: profile, error } = await userClient
+    .from('voice_profiles')
+    .select('name, storage_path, fish_reference_id')
+    .eq('id', voiceProfileId)
+    .single()
+  if (error || !profile) throw new Error('Voice profile not found')
+  if (profile.fish_reference_id) return profile.fish_reference_id as string
+
+  const { data: clip, error: dlError } = await userClient.storage.from('voices').download(profile.storage_path)
+  if (dlError || !clip) throw new Error('Could not read the voice clip')
+
+  const referenceId = await createFishVoice((profile.name as string) ?? 'voice', clip)
+  const { error: updateError } = await userClient
+    .from('voice_profiles')
+    .update({ fish_reference_id: referenceId })
+    .eq('id', voiceProfileId)
+  if (updateError) console.error('failed to cache fish_reference_id', updateError)
+  return referenceId
 }
 
 async function handleImage(opts: {
@@ -358,6 +446,9 @@ Deno.serve(async (req) => {
       return await handleText({ model, payload, stream: Boolean(stream), userId, adventureId, agentRole, startedAt })
     }
     if (kind === 'tts') {
+      if (isFishModel(model)) {
+        return await handleFishTts({ model, payload, userClient, userId, adventureId, agentRole, startedAt })
+      }
       return await handleTts({ model, payload, userId, adventureId, agentRole, startedAt })
     }
     if (kind === 'image') {

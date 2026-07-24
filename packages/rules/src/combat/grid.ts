@@ -8,12 +8,25 @@ import type { Combatant } from './types.ts'
 
 export type Cell = [number, number]
 
+/** Grid dimensions in squares. Defaults to the standard GRID_SIZE x GRID_SIZE map. */
+export interface GridBounds {
+  width: number
+  height: number
+}
+
+export const DEFAULT_BOUNDS: GridBounds = { width: GRID_SIZE, height: GRID_SIZE }
+
+/** Reads the bounds off any engine state (the Lab supports custom map sizes). */
+export function gridBounds(dims: { gridWidth: number; gridHeight: number }): GridBounds {
+  return { width: dims.gridWidth, height: dims.gridHeight }
+}
+
 export function cellKey(x: number, y: number): string {
   return `${x},${y}`
 }
 
-export function inBounds(x: number, y: number): boolean {
-  return x >= 0 && y >= 0 && x < GRID_SIZE && y < GRID_SIZE
+export function inBounds(x: number, y: number, bounds: GridBounds = DEFAULT_BOUNDS): boolean {
+  return x >= 0 && y >= 0 && x < bounds.width && y < bounds.height
 }
 
 export function chebyshev(a: { x: number; y: number }, b: { x: number; y: number }): number {
@@ -47,13 +60,13 @@ const DIRS: Cell[] = [
  * straight - a Chebyshev-minimal path with at most one bend, so previews read as a clean line.
  * Null if any cell is blocked or off-map, so the caller falls back to BFS around obstacles.
  */
-function directPath(from: Cell, to: Cell, blocked: Set<string>): Cell[] | null {
+function directPath(from: Cell, to: Cell, blocked: Set<string>, bounds: GridBounds): Cell[] | null {
   const path: Cell[] = []
   let [x, y] = from
   while (x !== to[0] || y !== to[1]) {
     x += Math.sign(to[0] - x)
     y += Math.sign(to[1] - y)
-    if (!inBounds(x, y) || blocked.has(cellKey(x, y))) return null
+    if (!inBounds(x, y, bounds) || blocked.has(cellKey(x, y))) return null
     path.push([x, y])
   }
   return path
@@ -64,11 +77,11 @@ function directPath(from: Cell, to: Cell, blocked: Set<string>): Cell[] | null {
  * Prefers the straight direct line; falls back to deterministic BFS only when obstacles block
  * it. Null when unreachable.
  */
-export function findPath(from: Cell, to: Cell, blocked: Set<string>): Cell[] | null {
+export function findPath(from: Cell, to: Cell, blocked: Set<string>, bounds: GridBounds = DEFAULT_BOUNDS): Cell[] | null {
   const [tx, ty] = to
-  if (!inBounds(tx, ty) || blocked.has(cellKey(tx, ty))) return null
+  if (!inBounds(tx, ty, bounds) || blocked.has(cellKey(tx, ty))) return null
   if (from[0] === tx && from[1] === ty) return []
-  const direct = directPath(from, to, blocked)
+  const direct = directPath(from, to, blocked, bounds)
   if (direct) return direct
   const cameFrom = new Map<string, string>()
   const startKey = cellKey(from[0], from[1])
@@ -80,7 +93,7 @@ export function findPath(from: Cell, to: Cell, blocked: Set<string>): Cell[] | n
       const nx = cx + dx
       const ny = cy + dy
       const key = cellKey(nx, ny)
-      if (!inBounds(nx, ny) || blocked.has(key) || cameFrom.has(key)) continue
+      if (!inBounds(nx, ny, bounds) || blocked.has(key) || cameFrom.has(key)) continue
       cameFrom.set(key, cellKey(cx, cy))
       if (nx === tx && ny === ty) {
         const path: Cell[] = []
@@ -99,7 +112,7 @@ export function findPath(from: Cell, to: Cell, blocked: Set<string>): Cell[] | n
 }
 
 /** Every cell reachable within `budget` steps, mapped to its cost (start cell excluded). */
-export function reachableCells(from: Cell, budget: number, blocked: Set<string>): Map<string, number> {
+export function reachableCells(from: Cell, budget: number, blocked: Set<string>, bounds: GridBounds = DEFAULT_BOUNDS): Map<string, number> {
   const costs = new Map<string, number>()
   costs.set(cellKey(from[0], from[1]), 0)
   const queue: Cell[] = [from]
@@ -111,7 +124,7 @@ export function reachableCells(from: Cell, budget: number, blocked: Set<string>)
       const nx = cx + dx
       const ny = cy + dy
       const key = cellKey(nx, ny)
-      if (!inBounds(nx, ny) || blocked.has(key) || costs.has(key)) continue
+      if (!inBounds(nx, ny, bounds) || blocked.has(key) || costs.has(key)) continue
       costs.set(key, cost + 1)
       queue.push([nx, ny])
     }

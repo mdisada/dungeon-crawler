@@ -8,13 +8,15 @@ export interface VoiceProfile {
 }
 
 /**
- * A cloned voice sends the reference clip itself (a signed URL for OpenRouter, a Storage path
- * for the worker); a preset voice sends a bare id the engine already knows. Kokoro on CPU only
- * supports the latter, which is why the worker reports `cloning` in its capabilities.
+ * How a voice is chosen for one synthesis:
+ *   profile - clone an uploaded clip (Fish or local Chatterbox; not Voxtral)
+ *   preset  - a bare id the engine knows (Voxtral slug, Fish reference_id, or worker preset)
+ *   default - the provider's built-in voice (Fish default / worker narrator); no id sent
  */
 export type VoiceSelection =
   | { kind: 'profile'; profile: VoiceProfile }
   | { kind: 'preset'; voiceId: string }
+  | { kind: 'default' }
 
 export interface SynthesizeArgs {
   userId: string

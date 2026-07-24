@@ -3,7 +3,7 @@ import type {
   DifficultySetting, SaveModifiers, SpellSpec,
 } from '@rules/combat'
 
-/** One grid cell = 32 px on the 1024x1024 map = 5 ft. */
+/** One grid cell = 32 px = 5 ft. The map's pixel size is CELL_PX x (cols, rows). */
 export const CELL_PX = 32
 export const FEET_PER_PX = 5 / CELL_PX
 
@@ -17,6 +17,15 @@ export interface LabStats {
   spells: SpellSpec[]
 }
 
+/** The Lab's editable-token stat bundle from a shared engine CombatantSetup (fills save defaults). */
+export function labStatsFromSetup(setup: CombatantSetup): LabStats {
+  const saves: SaveModifiers = { str: 0, dex: setup.dexMod, con: 0, int: 0, wis: 0, cha: 0, ...setup.saves }
+  return {
+    hpMax: setup.hpMax, ac: setup.ac, speed: setup.speed, dexMod: setup.dexMod,
+    saves, attacks: setup.attacks, spells: setup.spells ?? [],
+  }
+}
+
 /** Setup-phase token. Position is top-left map pixels so gridless placement stays free-form. */
 export interface LabToken {
   id: string
@@ -28,14 +37,6 @@ export interface LabToken {
   px: number
   py: number
   stats: LabStats
-}
-
-export interface BattleMapRecord {
-  id: string
-  name: string
-  path: string
-  obstacles: Cell[]
-  url: string
 }
 
 export interface RosterCharacter {
@@ -66,6 +67,8 @@ export interface LabExport {
   seed: number
   mapId: string | null
   gridOn: boolean
+  gridCols: number
+  gridRows: number
   setup: { combatants: CombatantSetup[]; obstacles: Cell[]; difficulty: DifficultySetting }
   tape: TapeEntry[]
   events: CombatEvent[]

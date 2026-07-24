@@ -4,11 +4,155 @@ import {
   buildStage7EditPlanPrompt, buildStage7Prompt, parseStage7, parseStage7EditPlan,
   REPAIRABLE_FIELDS, validateRegistryCoverage,
 } from '../_shared/guide/stages/stage7.ts'
+import { buildGroupClassifierPrompt, groupNpcIds, parseGroupClassifier } from '../_shared/guide/group-npcs.ts'
+import type { EncounterSpec } from '../_shared/guide/group-npcs.ts'
 import type { EntityRef, WarningDraft } from '../_shared/guide/types.ts'
 import { enqueueJob, type StageEnv } from './stage-env.ts'
 import { assertOk, buildDigest, logPipelineEvent } from './util.ts'
 
+const GROUP_WARNING_PREFIX = 'NPC that is really a group: '
+
+/**
+ * A group masquerading as an NPC, removed structurally now that every chapter's encounters exist.
+ * A non-boss npc row whose name is a COUNTABLE enemy (count >= 2) is a TYPE, not a person - the
+ * same call session/npc-state.ts makes at play time, made here so the row never reaches play. The
+ * group survives correctly as its encounter enemies plus a lore registry entry; the npc row is
+ * dropped, ingredient placements pointing at it are cleared, and each removal is logged + warned.
+ * Human-edited rows are never deleted - they warn instead, leaving the creator in charge.
+ *
+ * Runs FIRST in stage 6, before the digest is built, so hooks/contracts/links never reference a
+ * row that is about to disappear.
+ */
+async function reclassifyGroupNpcs(env: StageEnv): Promise<void> {
+  const [npcResult, encounterResult] = await Promise.all([
+    env.db.from('npcs').select('id, name, role, description, faction, human_edited').eq('adventure_id', env.adventure.id),
+    env.db.from('encounters').select('spec').eq('adventure_id', env.adventure.id),
+  ])
+  assertOk(npcResult.error, 'group-check npcs load failed')
+  assertOk(encounterResult.error, 'group-check encounters load failed')
+
+  // Bosses are individuals by definition, even when fought - never a candidate for removal.
+  const candidates = ((npcResult.data ?? []) as {
+    id: string; name: string; description: string; faction: string; role: string; human_edited: boolean
+  }[]).filter((n) => n.role !== 'boss')
+  const encounters = ((encounterResult.data ?? []) as { spec: EncounterSpec | null }[]).map((e) => e.spec ?? {})
+
+  // Deterministic tell (count>=2 enemy) - near-zero false positives.
+  const groupIds = new Set(groupNpcIds(candidates, encounters))
+
+  // Semantic pass for groups/forces with NO combat tell (a purely-social "Merchant Council").
+  // A classifier failure is never worth the stage - fall back to the deterministic set alone.
+  if (candidates.length > 0) {
+    try {
+      const indexes = await env.generate(
+        'consistency_checker',
+        buildGroupClassifierPrompt(candidates.map((n) => ({ name: n.name, description: n.description, faction: n.faction }))),
+        (raw) => parseGroupClassifier(raw, candidates.length),
+      )
+      for (const i of indexes) if (candidates[i]) groupIds.add(candidates[i].id)
+    } catch (err) {
+      console.error('group classifier failed, using deterministic groups only', err)
+    }
+  }
+
+  // Any run replaces only its own warnings - a group fixed by hand since the last run must clear.
+  const { error: cleanupError } = await env.db
+    .from('guide_warnings')
+    .delete()
+    .eq('adventure_id', env.adventure.id)
+    .eq('stage', 6)
+    .like('message', `${GROUP_WARNING_PREFIX}%`)
+  assertOk(cleanupError, 'group warning cleanup failed')
+
+  if (groupIds.size === 0) return
+
+  const groups = candidates.filter((n) => groupIds.has(n.id))
+  // Human-edited rows are kept (the creator is in charge) and only warned; the rest are removed.
+  const removed = groups.filter((n) => !n.human_edited)
+  const deleteIds = removed.map((n) => n.id)
+
+  if (deleteIds.length > 0) {
+    // Clear placement.npc_id on any ingredient pointing at a row we are about to delete, so a
+    // clue is not left tied to a speaker that no longer exists. Loaded and rewritten in JS -
+    // placement is jsonb with no FK, so there is no cascade to lean on.
+    const { data: ingredients, error: ingLoadError } = await env.db
+      .from('ingredients')
+      .select('id, placement')
+      .eq('adventure_id', env.adventure.id)
+    assertOk(ingLoadError, 'group-check ingredients load failed')
+    const deleteSet = new Set(deleteIds)
+    for (const ing of (ingredients ?? []) as { id: string; placement: Record<string, unknown> | null }[]) {
+      const placement = ing.placement ?? {}
+      if (typeof placement.npc_id === 'string' && deleteSet.has(placement.npc_id)) {
+        const { npc_id: _removed, ...rest } = placement
+        const { error } = await env.db.from('ingredients').update({ placement: rest }).eq('id', ing.id)
+        assertOk(error, 'ingredient placement cleanup failed')
+      }
+    }
+
+    const { error: deleteError } = await env.db.from('npcs').delete().in('id', deleteIds)
+    assertOk(deleteError, 'group npc delete failed')
+  }
+
+  // Reclassify the registry so a REMOVED entity survives as lore (a named group, never an agent)
+  // and stage 7's coverage check does not then flag the row we just removed as "missing". Both
+  // the global registry (meta_loop) and every chapter's list must flip, or a global lore entity
+  // is "uncovered" by a chapter that still calls it an npc. Kept (human-edited) rows are left
+  // classified as npc - their row still exists, so lore would be the lie.
+  const removedNamesLower = new Set(removed.map((n) => n.name.trim().toLowerCase()))
+  const matchesGroup = (e: EntityRef) => removedNamesLower.has(e.name.trim().toLowerCase())
+
+  const meta = env.adventure.meta_loop
+  const metaEntities: EntityRef[] = meta?.entities ?? []
+  if (meta && metaEntities.some((e) => matchesGroup(e) && e.kind !== 'lore')) {
+    const entities = metaEntities.map((e) => (matchesGroup(e) ? { ...e, kind: 'lore' as const } : e))
+    const { error } = await env.db.from('adventures').update({ meta_loop: { ...meta, entities } }).eq('id', env.adventure.id)
+    assertOk(error, 'group registry reclassification failed')
+  }
+
+  const { data: chapterRows, error: chapterError } = await env.db
+    .from('chapters')
+    .select('id, entities')
+    .eq('adventure_id', env.adventure.id)
+  assertOk(chapterError, 'group-check chapters load failed')
+  for (const chapter of (chapterRows ?? []) as { id: string; entities: EntityRef[] | null }[]) {
+    const entities = chapter.entities ?? []
+    if (!entities.some((e) => matchesGroup(e) && e.kind !== 'lore')) continue
+    const updated = entities.map((e) => (matchesGroup(e) ? { ...e, kind: 'lore' as const } : e))
+    const { error } = await env.db.from('chapters').update({ entities: updated }).eq('id', chapter.id)
+    assertOk(error, 'group chapter reclassification failed')
+  }
+
+  const warningRows = groups.map((n) => ({
+    adventure_id: env.adventure.id,
+    stage: 6,
+    target_table: 'npcs',
+    // A deleted row has no id left to point at; an edited (kept) row does.
+    target_id: n.human_edited ? n.id : null,
+    message: n.human_edited
+      ? `${GROUP_WARNING_PREFIX}"${n.name}" reads as a group or force rather than a single person, but ` +
+        `was left as-is because you edited it. A group cannot hold one conversation or one death - split ` +
+        `it into a named individual, or delete this NPC.`
+      : `${GROUP_WARNING_PREFIX}"${n.name}" was generated as an NPC but reads as a group or force, not a ` +
+        `single person, so the NPC row was removed. If the party needs to interact with it, add a named ` +
+        `individual who represents it (an envoy, a captain).`,
+    // Auto-removed rows are a record of a fix; a kept (human-edited) row needs a human.
+    kind: n.human_edited ? 'warning' : 'info',
+  }))
+  const { error: warnError } = await env.db.from('guide_warnings').insert(warningRows)
+  assertOk(warnError, 'group warnings insert failed')
+
+  await logPipelineEvent(env.db, env.adventure.id, 'group_npc_reclassified', {
+    removed: removed.map((n) => n.name),
+    kept_human_edited: groups.filter((n) => n.human_edited).map((n) => n.name),
+  })
+}
+
 export async function runStage6(env: StageEnv): Promise<void> {
+  // Drop groups that slipped through as NPC rows BEFORE the digest is built - hooks, contracts
+  // and objective links must never reference a row that is about to disappear.
+  await reclassifyGroupNpcs(env)
+
   const { digest, refs, objectiveIdByHandle, entryGiverHandles } = await buildDigest(env.db, env.adventure.id)
 
   const { hooks, contracts } = await env.generate(

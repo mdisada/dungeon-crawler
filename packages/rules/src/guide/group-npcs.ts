@@ -1,0 +1,125 @@
+// A GROUP masquerading as an NPC, caught structurally. An `npcs` row is ONE person - one voice,
+// one life state, one staging slot (see EntityKind in types.ts and session/npc-state.ts). Stage 4
+// is told this plainly and still, under the pressure of a "required entities are non-negotiable"
+// list, sometimes emits a group row anyway ("Valerius's Agents", "Silver Scale Guild guards").
+// The coverage check only catches a group the model DECLINES to create; a group it DOES create
+// slips straight through to play, where it is handed a heartbeat and a seat in conversation.
+//
+// The structural tell is the one session/npc-state.ts already trusts at play time: a row whose
+// NAME is used as a COUNTABLE enemy (count >= 2) is a TYPE, not a person - you cannot give a
+// single life state to a thing there are several of. This module makes that call once at
+// guide-build, over every chapter's encounters, so the row is removed before it can ship.
+//
+// count >= 2 is the whole signal. A SOLO combat enemy (count 1) is one being that also fights -
+// a boss, a duelist - and stays a legitimate NPC, so it is deliberately never flagged. Matching
+// is by normalized identity, NOT the lenient substring match the coverage check uses (that would
+// flag the individual "Guard Captain Vex" for the enemy "Guard"); a single trailing plural is
+// folded so the npc "Thorne's Agents" pairs with the enemy "Thorne's Agent".
+//
+// A group with NO combat tell (a purely-social "Merchant Council" never fielded as enemies) has
+// no structural signal - buildGroupClassifierPrompt / parseGroupClassifier drive a cheap LLM
+// pass over the roster to catch those, the one thing the deterministic check cannot.
+
+import { Check, extractJsonObject } from './json.ts'
+import type { ParseResult } from './types.ts'
+
+export interface NamedNpc {
+  id: string
+  name: string
+}
+
+/** An encounter's combat spec - only the enemy roster matters to this check. */
+export interface EncounterSpec {
+  enemies?: { name: string; count: number }[]
+}
+
+/** Normalized creature key: lowercased, punctuation to spaces, one trailing plural 's' folded. */
+export function creatureKey(name: string): string {
+  const n = (name ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  return n.length > 2 && n.endsWith('s') ? n.slice(0, -1) : n
+}
+
+/**
+ * Keys of names fielded as a GROUP (count >= 2) in any encounter's enemy roster. Defensive about
+ * shape: this also runs at play time over raw jsonb specs, where `enemies` may be missing or an
+ * enemy entry malformed - a bad row is skipped, never thrown on.
+ */
+export function groupEnemyKeys(encounters: EncounterSpec[]): Set<string> {
+  const keys = new Set<string>()
+  for (const encounter of encounters) {
+    const enemies = Array.isArray(encounter.enemies) ? encounter.enemies : []
+    for (const enemy of enemies) {
+      if (enemy && enemy.count >= 2) {
+        const key = creatureKey(enemy.name)
+        if (key) keys.add(key)
+      }
+    }
+  }
+  return keys
+}
+
+/**
+ * IDs of NPC rows that are really groups - their name matches a count>=2 enemy. Returned in
+ * input order. The caller supplies the rows to judge (bosses are individuals by definition and
+ * should not be passed in) and decides policy on what comes back (reclassify to lore, drop row).
+ */
+export function groupNpcIds(npcs: NamedNpc[], encounters: EncounterSpec[]): string[] {
+  const groupKeys = groupEnemyKeys(encounters)
+  if (groupKeys.size === 0) return []
+  return npcs.filter((npc) => {
+    const key = creatureKey(npc.name)
+    return key.length > 0 && groupKeys.has(key)
+  }).map((npc) => npc.id)
+}
+
+/** True when `name` is fielded as a group (count >= 2) in these encounters. The play-time guard. */
+export function isGroupName(name: string, encounters: EncounterSpec[]): boolean {
+  const key = creatureKey(name)
+  return key.length > 0 && groupEnemyKeys(encounters).has(key)
+}
+
+// --- Semantic pass (LLM): catches groups/forces that are never fielded as countable enemies ---
+
+export interface ClassifiableNpc {
+  name: string
+  description: string
+  faction: string
+}
+
+/** One focused classifier: which roster rows are groups/forces, not individuals. */
+export function buildGroupClassifierPrompt(npcs: ClassifiableNpc[]): {
+  system: string
+  user: string
+  maxTokens: number
+} {
+  const system = `You are auditing NPC records for a tabletop RPG. Each record must be ONE individual: a single person or being with a name, a voice, and opinions, who could sit down and hold a conversation.
+
+Some records are really a GROUP or a FORCE and must NOT be NPCs:
+- a group of people: a faction, guild, order, cult, army, squad, patrol, council, crew, "the city watch", "Valerius's agents", "the lost expedition".
+- a force or phenomenon: a curse, plague, storm, or blight - "the Murkheart", "the Blight".
+
+A single named person is ALWAYS an individual, even when they lead or belong to a group ("Iron Hand Envoy Sera", "Captain Voss of the watch") - do NOT flag them. Only flag a record whose SUBJECT is the collective or the force itself. When unsure, treat it as an individual and do not flag it.
+
+Return the 1-based numbers of the records that are GROUPS or FORCES.
+
+Respond with ONLY a JSON object, no prose, in exactly this shape:
+{ "groups": [2, 5] }
+An empty list is correct when every record is an individual.`
+
+  const user = npcs
+    .map((n, i) => `${i + 1}. ${n.name}${n.faction ? ` (faction: ${n.faction})` : ''} - ${n.description || 'no description'}`)
+    .join('\n')
+
+  return { system, user, maxTokens: 400 }
+}
+
+/** Parses { "groups": [n, ...] } into deduped 0-based indices, bounded to the roster size. */
+export function parseGroupClassifier(raw: string, count: number): ParseResult<number[]> {
+  const extracted = extractJsonObject(raw)
+  if (!extracted.ok) return extracted
+  const c = new Check()
+  const indexes = c
+    .arr(extracted.data.groups ?? [], '$.groups', 0, count)
+    .map((n, i) => c.int(n, `$.groups[${i}]`, 1, count) - 1)
+  return c.result([...new Set(indexes)])
+}

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 
+import { useSession } from '@/features/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -8,12 +9,12 @@ import { regenerateRow } from '../api/pipeline'
 import { deleteGuideRow, insertGuideRow, saveGuideRow } from '../api/save-guide-row'
 import { useMediaUrl } from '../hooks/use-media-url'
 import type { GuideData, LocationRow } from '../types'
-import { MapEditor } from './map-editor'
+import { LocationMapDialog } from './location-map-dialog'
 import { RegenBanner } from './regen-banner'
 
 const KEPT_BACKGROUNDS = 3
 
-function LocationOverview({ adventureId, location, onChanged }: { adventureId: string; location: LocationRow; onChanged: () => void }) {
+function LocationOverview({ adventureId, location, userId, onChanged }: { adventureId: string; location: LocationRow; userId: string; onChanged: () => void }) {
   const [fields, setFields] = useState({
     name: location.name,
     description: location.description,
@@ -21,7 +22,9 @@ function LocationOverview({ adventureId, location, onChanged }: { adventureId: s
   })
   const [isBusy, setIsBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isMapOpen, setIsMapOpen] = useState(false)
   const backgroundUrl = useMediaUrl(location.backgroundPath)
+  const spawnCount = location.map ? location.map.spawns.party.length + location.map.spawns.enemy.length : 0
 
   function save(patch: Record<string, unknown>) {
     saveGuideRow('locations', location.id, patch)
@@ -108,7 +111,31 @@ function LocationOverview({ adventureId, location, onChanged }: { adventureId: s
         )}
       </section>
 
-      <MapEditor adventureId={adventureId} location={location} onChanged={onChanged} />
+      <section className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-semibold">Battle map</h3>
+          <span className="text-xs text-muted-foreground">
+            {location.map?.imagePath
+              ? `${location.map.gridCols}x${location.map.gridRows} tiles · ${location.map.obstacles.length} obstacles · ${spawnCount} spawns`
+              : 'No map yet'}
+          </span>
+        </div>
+        <div>
+          <Button size="sm" variant="outline" disabled={!userId} onClick={() => setIsMapOpen(true)}>
+            {location.map?.imagePath ? 'Edit battle map' : 'Add battle map'}
+          </Button>
+        </div>
+      </section>
+      {userId && (
+        <LocationMapDialog
+          open={isMapOpen}
+          onOpenChange={setIsMapOpen}
+          adventureId={adventureId}
+          location={location}
+          userId={userId}
+          onSaved={onChanged}
+        />
+      )}
 
       {location.pendingRegen && (
         <RegenBanner
@@ -125,6 +152,7 @@ function LocationOverview({ adventureId, location, onChanged }: { adventureId: s
 }
 
 export function LocationsTab({ data, onChanged }: { data: GuideData; onChanged: () => void }) {
+  const { user } = useSession()
   const [selectedId, setSelectedId] = useState<string | null>(data.locations[0]?.id ?? null)
   const selected = data.locations.find((l) => l.id === selectedId) ?? data.locations[0] ?? null
 
@@ -157,7 +185,7 @@ export function LocationsTab({ data, onChanged }: { data: GuideData; onChanged: 
         </Button>
       </aside>
       {selected ? (
-        <LocationOverview key={selected.id} adventureId={data.adventure.id} location={selected} onChanged={onChanged} />
+        <LocationOverview key={selected.id} adventureId={data.adventure.id} location={selected} userId={user?.id ?? ''} onChanged={onChanged} />
       ) : (
         <p className="text-sm text-muted-foreground">No locations yet.</p>
       )}

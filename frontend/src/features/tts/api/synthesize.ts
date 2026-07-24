@@ -12,7 +12,19 @@ function placeholderAudio(): string {
   return URL.createObjectURL(encodeWav(new Float32Array(8_000), 16_000))
 }
 
-async function requestCloudTts(text: string, voice: string, model: string | undefined): Promise<Blob> {
+// Normalized voice payload -- ai-proxy interprets it per the resolved provider (model): a Fish
+// engine clones `voiceProfileId` or uses `voiceId` as a reference_id; Voxtral uses `voiceId` as a
+// preset slug and rejects a profile. The client doesn't need to know which provider is active.
+type CloudVoicePayload =
+  | { voiceProfileId: string; voiceStoragePath: string }
+  | { voiceId: string }
+  | Record<string, never>
+
+async function requestCloudTts(
+  text: string,
+  voicePayload: CloudVoicePayload,
+  model: string | undefined,
+): Promise<Blob> {
   const res = await callEdgeFunction('ai-proxy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -20,7 +32,7 @@ async function requestCloudTts(text: string, voice: string, model: string | unde
       kind: 'tts',
       agent_role: 'user_direct',
       ...(model ? { model } : {}),
-      payload: { input: text, voice, response_format: 'mp3' },
+      payload: { input: text, response_format: 'mp3', ...voicePayload },
     }),
   })
   if (!res.ok) {
@@ -59,7 +71,8 @@ export async function synthesize({
       jobId,
       payload: {
         text,
-        // Cloning uses the clip itself; a preset id is just a name the engine knows.
+        // Cloning uses the clip itself; a preset id is just a name the engine knows; neither
+        // (default) lets the worker use its configured narrator voice.
         voicePath: voice.kind === 'profile' ? voice.profile.storagePath : null,
         voiceId: voice.kind === 'preset' ? voice.voiceId : null,
       },
@@ -68,19 +81,19 @@ export async function synthesize({
     return { chunks: data.chunks, marks }
   }
 
-  // Cloud cloning is not possible: OpenRouter's /audio/speech takes a preset voice slug, and
-  // Voxtral's cloning endpoint (audio.voices.create) isn't proxied. Fail loudly rather than
-  // sending a clip URL that returns "Provider returned 404".
-  if (voice.kind === 'profile') {
-    throw new Error(
-      'Voice cloning is only available on the local route. On OpenRouter, pick a preset voice ' +
-        '(e.g. en_paul_neutral).',
-    )
-  }
+  // A clip profile clones on Fish (the default cloud provider) and errors on Voxtral -- ai-proxy
+  // enforces that per model, so the client just forwards the selection either way. 'default' sends
+  // no voice fields: Fish uses its built-in voice.
+  const voicePayload: CloudVoicePayload =
+    voice.kind === 'profile'
+      ? { voiceProfileId: voice.profile.id, voiceStoragePath: voice.profile.storagePath }
+      : voice.kind === 'preset'
+        ? { voiceId: voice.voiceId }
+        : {}
 
   const startedAt = performance.now()
   onProgress?.('generating')
-  const blob = await requestCloudTts(text, voice.voiceId, model)
+  const blob = await requestCloudTts(text, voicePayload, model)
   const generatedAtMs = performance.now() - startedAt
 
   onProgress?.('uploading')

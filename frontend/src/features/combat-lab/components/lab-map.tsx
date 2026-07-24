@@ -3,13 +3,19 @@ import type { ReactNode } from 'react'
 
 import { cn } from '@/lib/utils'
 import type { Cell } from '@rules/combat'
-import { GRID_SIZE } from '@rules/state'
+
+import type { MapImageFit } from '@/features/map-editor'
 
 import { useLabViewport } from '../hooks/use-lab-viewport'
 import { CELL_PX, FEET_PER_PX } from '../types'
 
-const MAP_PX = GRID_SIZE * CELL_PX
 const TOKEN_PX = CELL_PX
+
+const FIT_CLASS: Record<MapImageFit, string> = {
+  fill: 'object-fill',
+  cover: 'object-cover',
+  contain: 'object-contain',
+}
 
 export interface LabMapToken {
   id: string
@@ -31,6 +37,11 @@ export interface LabMapToken {
 interface LabMapProps {
   mapUrl: string | null
   gridOn: boolean
+  /** Grid dimensions in tiles; the map is cols x rows cells of CELL_PX. */
+  cols: number
+  rows: number
+  /** How the uploaded image maps onto the grid area. */
+  imageFit: MapImageFit
   obstacles: Cell[]
   paintMode: boolean
   measureMode: boolean
@@ -58,12 +69,12 @@ interface LabMapProps {
 
 /**
  * Adapted copy of the play feature's battle-map renderer (F09 SS9: no play imports): map image,
- * optional 32x32 grid, painted obstacles, movement highlights, draggable tokens, obstacle
+ * optional cols x rows grid, painted obstacles, movement highlights, draggable tokens, obstacle
  * painting, px->feet measuring, plus the combat-UI layers (targeting, move preview, overlay).
  */
 export function LabMap({
-  mapUrl, gridOn, obstacles, paintMode, measureMode, targetingActive, aimMode, templateCells,
-  tokens, rangeCells, dashCells, pendingPath, anchoredOverlay, onTokenDrop, onTokenClick,
+  mapUrl, gridOn, cols, rows, imageFit, obstacles, paintMode, measureMode, targetingActive, aimMode,
+  templateCells, tokens, rangeCells, dashCells, pendingPath, anchoredOverlay, onTokenDrop, onTokenClick,
   onTokenHover, onPaintCell, onAimHover, onAimClick,
 }: LabMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -74,14 +85,17 @@ export function LabMap({
   const dragRef = useRef<{ id: string; pointerId: number } | null>(null)
   const strokeRef = useRef<Set<string> | null>(null)
 
-  const clamp = (v: number) => Math.min(MAP_PX - TOKEN_PX, Math.max(0, v))
+  const mapW = cols * CELL_PX
+  const mapH = rows * CELL_PX
+  const clampX = (v: number) => Math.min(mapW - TOKEN_PX, Math.max(0, v))
+  const clampY = (v: number) => Math.min(mapH - TOKEN_PX, Math.max(0, v))
   const snap = (v: number) => (gridOn ? Math.floor((v + TOKEN_PX / 2) / CELL_PX) * CELL_PX : v)
 
   function paintAt(clientX: number, clientY: number) {
     const at = toMapPx(clientX, clientY)
     if (!at) return
     const cell: Cell = [Math.floor(at.x / CELL_PX), Math.floor(at.y / CELL_PX)]
-    if (cell[0] < 0 || cell[1] < 0 || cell[0] >= GRID_SIZE || cell[1] >= GRID_SIZE) return
+    if (cell[0] < 0 || cell[1] < 0 || cell[0] >= cols || cell[1] >= rows) return
     const key = `${cell[0]},${cell[1]}`
     if (strokeRef.current?.has(key)) return
     strokeRef.current?.add(key)
@@ -106,7 +120,7 @@ export function LabMap({
     const at = toMapPx(clientX, clientY)
     if (!at) return null
     const cell: Cell = [Math.floor(at.x / CELL_PX), Math.floor(at.y / CELL_PX)]
-    const within = cell[0] >= 0 && cell[1] >= 0 && cell[0] < GRID_SIZE && cell[1] < GRID_SIZE
+    const within = cell[0] >= 0 && cell[1] >= 0 && cell[0] < cols && cell[1] < rows
     return within ? cell : null
   }
 
@@ -149,7 +163,7 @@ export function LabMap({
   function tokenPointerMove(e: React.PointerEvent, token: LabMapToken) {
     if (dragRef.current?.id !== token.id) return
     const at = toMapPx(e.clientX, e.clientY)
-    if (at) setDrag({ id: token.id, px: snap(clamp(at.x - TOKEN_PX / 2)), py: snap(clamp(at.y - TOKEN_PX / 2)) })
+    if (at) setDrag({ id: token.id, px: snap(clampX(at.x - TOKEN_PX / 2)), py: snap(clampY(at.y - TOKEN_PX / 2)) })
   }
 
   function tokenPointerUp(e: React.PointerEvent, token: LabMapToken) {
@@ -157,7 +171,7 @@ export function LabMap({
     dragRef.current = null
     const at = toMapPx(e.clientX, e.clientY)
     setDrag(null)
-    if (at) onTokenDrop(token.id, snap(clamp(at.x - TOKEN_PX / 2)), snap(clamp(at.y - TOKEN_PX / 2)))
+    if (at) onTokenDrop(token.id, snap(clampX(at.x - TOKEN_PX / 2)), snap(clampY(at.y - TOKEN_PX / 2)))
   }
 
   function tokenKeyDown(e: React.KeyboardEvent, token: LabMapToken) {
@@ -169,7 +183,7 @@ export function LabMap({
     const move = delta[e.key]
     if (!move) return
     e.preventDefault()
-    onTokenDrop(token.id, clamp(token.px + move[0]), clamp(token.py + move[1]))
+    onTokenDrop(token.id, clampX(token.px + move[0]), clampY(token.py + move[1]))
   }
 
   const measureFeet = measure
@@ -195,10 +209,10 @@ export function LabMap({
     >
       <div
         className="relative origin-top-left"
-        style={{ width: MAP_PX, height: MAP_PX, transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})` }}
+        style={{ width: mapW, height: mapH, transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})` }}
       >
         {mapUrl ? (
-          <img src={mapUrl} alt="Battle map" className="absolute inset-0 h-full w-full object-cover" draggable={false} />
+          <img src={mapUrl} alt="Battle map" className={cn('absolute inset-0 h-full w-full', FIT_CLASS[imageFit])} draggable={false} />
         ) : (
           <div aria-hidden className="absolute inset-0 bg-gradient-to-br from-emerald-950 to-slate-900" />
         )}

@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase'
+import { normalizeBattleMap } from '../types'
 import type {
-  BattleMap,
   Chapter,
   CoopSet,
   EncounterRow,
@@ -111,7 +111,7 @@ export async function getGuide(adventureId: string): Promise<GuideData> {
         imagePrompt: l.image_prompt,
         backgroundPath: l.background_url,
         previousBackgroundPaths: l.previous_background_urls ?? [],
-        map: (l.map as BattleMap | null) ?? null,
+        map: normalizeBattleMap(l.map),
         humanEdited: l.human_edited,
         pendingRegen: l.pending_regen,
       }),

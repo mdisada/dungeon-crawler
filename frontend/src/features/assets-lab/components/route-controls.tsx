@@ -13,6 +13,8 @@ export type WorkerState =
 interface Props {
   route: AssetRoute
   onRouteChange: (route: AssetRoute) => void
+  /** Name of the cloud provider for this medium (e.g. "OpenRouter", "Fish Audio"). */
+  cloudLabel: string
   model: string
   onModelChange: (model: string) => void
   /** user_settings value used when the model box is left blank. */
@@ -31,6 +33,7 @@ interface Props {
 export function RouteControls({
   route,
   onRouteChange,
+  cloudLabel,
   model,
   onModelChange,
   defaultModel,
@@ -55,7 +58,7 @@ export function RouteControls({
               checked={route === 'openrouter'}
               onChange={() => onRouteChange('openrouter')}
             />
-            OpenRouter
+            {cloudLabel}
           </label>
           <label className="flex items-center gap-1.5 text-sm">
             <input

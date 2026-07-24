@@ -4,10 +4,11 @@
 // action never perturbs the roll sequence and replays stay byte-identical.
 
 import type { Rng } from '../play/rng.ts'
+import { GRID_SIZE } from '../state/types.ts'
 import { applyDamage, checkCombatEnd, conscious, resolveAttack } from './attack.ts'
 import { rollD20 } from './dice.ts'
 import { scaledHpMax, STANDARD_DIFFICULTY } from './difficulty.ts'
-import { blockedCells, cellKey, chebyshev, findPath, inBounds, lineOfSight } from './grid.ts'
+import { blockedCells, cellKey, chebyshev, findPath, gridBounds, inBounds, lineOfSight } from './grid.ts'
 import { resolveCast, spellAffects } from './spells.ts'
 import { CombatError } from './types.ts'
 import type {
@@ -19,6 +20,9 @@ export interface CombatSetup {
   combatants: CombatantSetup[]
   obstacles: [number, number][]
   difficulty?: DifficultySetting
+  /** Grid dimensions in squares; both default to GRID_SIZE when omitted. */
+  gridWidth?: number
+  gridHeight?: number
 }
 
 /** State is plain JSON data, so a JSON round-trip is a safe, runtime-portable deep clone. */
@@ -71,13 +75,16 @@ function advanceTurn(state: CombatEngineState, events: CombatEvent[]): void {
 
 export function createCombat(setup: CombatSetup, rng: Rng): EngineResult {
   const difficulty = setup.difficulty ?? STANDARD_DIFFICULTY
+  const gridWidth = setup.gridWidth ?? GRID_SIZE
+  const gridHeight = setup.gridHeight ?? GRID_SIZE
+  const bounds = { width: gridWidth, height: gridHeight }
   const seen = new Set<string>()
   const occupied = new Set<string>()
   const obstacleSet = new Set(setup.obstacles.map(([x, y]) => cellKey(x, y)))
   for (const c of setup.combatants) {
     if (seen.has(c.id)) throw new CombatError(`Duplicate combatant id: ${c.id}`)
     seen.add(c.id)
-    if (!inBounds(c.x, c.y)) throw new CombatError(`${c.name} placed outside the map`)
+    if (!inBounds(c.x, c.y, bounds)) throw new CombatError(`${c.name} placed outside the map`)
     if (obstacleSet.has(cellKey(c.x, c.y))) throw new CombatError(`${c.name} placed on an obstacle`)
     if (occupied.has(cellKey(c.x, c.y))) throw new CombatError(`${c.name} placed on an occupied square`)
     occupied.add(cellKey(c.x, c.y))
@@ -141,6 +148,8 @@ export function createCombat(setup: CombatSetup, rng: Rng): EngineResult {
     turnIndex: 0,
     economy: { action: true, bonus: true, move: 0 },
     difficulty,
+    gridWidth,
+    gridHeight,
     status: 'active',
     winner: null,
   }
@@ -182,7 +191,7 @@ function resolveMove(state: CombatEngineState, to: [number, number], rng: Rng, e
   const active = activeCombatant(state)
   const stepCost = active.conditions.includes('prone') ? 2 : 1
   const blocked = blockedCells(state.obstacles, state.combatants, active.id)
-  const path = findPath([active.x, active.y], to, blocked)
+  const path = findPath([active.x, active.y], to, blocked, gridBounds(state))
   if (!path || path.length === 0) throw new CombatError('No path to that square')
   if (path.length * stepCost > state.economy.move) throw new CombatError('Not enough movement')
 
@@ -267,7 +276,7 @@ function resolveCastAction(
     if (!lineOfSight([active.x, active.y], [target.x, target.y], obstacleSet)) throw new CombatError('No line of sight')
   } else {
     if (!aim) throw new CombatError('No aim point')
-    if (!inBounds(aim[0], aim[1])) throw new CombatError('Aim outside the map')
+    if (!inBounds(aim[0], aim[1], gridBounds(state))) throw new CombatError('Aim outside the map')
     // range 0 = self-origin (cone/line burst from the caster); otherwise the aim cell must be in range.
     if (spell.range > 0 && chebyshev(active, { x: aim[0], y: aim[1] }) > spell.range) {
       throw new CombatError('Aim point out of range')
@@ -363,7 +372,7 @@ export function editCombatant(prev: CombatEngineState, id: string, patch: Combat
     const nx = patch.x ?? c.x
     const ny = patch.y ?? c.y
     const blocked = blockedCells(state.obstacles, state.combatants, c.id)
-    if (!inBounds(nx, ny) || blocked.has(cellKey(nx, ny))) throw new CombatError('Square not free')
+    if (!inBounds(nx, ny, gridBounds(state)) || blocked.has(cellKey(nx, ny))) throw new CombatError('Square not free')
     c.x = nx
     c.y = ny
   }

@@ -7,11 +7,6 @@ interface Props {
   onClear: () => void
 }
 
-const ROUTE_LABEL: Record<LabRun['route'], string> = {
-  openrouter: 'OpenRouter',
-  local: 'Local',
-}
-
 export function RunTable({ runs, onClear }: Props) {
   if (runs.length === 0) {
     return <p className="text-sm text-muted-foreground">No runs yet. Generate something above.</p>
@@ -42,7 +37,7 @@ export function RunTable({ runs, onClear }: Props) {
           <tbody>
             {runs.map((run) => (
               <tr key={run.id} className="border-b align-top">
-                <td className="py-2 pr-3 whitespace-nowrap">{ROUTE_LABEL[run.route]}</td>
+                <td className="py-2 pr-3 whitespace-nowrap">{run.routeLabel}</td>
                 <td className="py-2 pr-3 font-mono text-xs">{run.model}</td>
                 <td className="py-2 pr-3 whitespace-nowrap">{run.variant}</td>
                 <td className="py-2 pr-3 whitespace-nowrap text-muted-foreground">{run.input}</td>

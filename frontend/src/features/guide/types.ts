@@ -1,6 +1,9 @@
 // Row shapes for the F04 guide editor, camelCased from the guide content tables.
 
+import type { Cell } from '@rules/combat'
 import type { NpcStatBlock } from '@rules/guide'
+
+import type { MapImageFit, Spawns } from '@/features/map-editor'
 
 export interface StoryDial {
   key: string
@@ -61,10 +64,55 @@ export interface Npc {
   pendingRegen: Record<string, unknown> | null
 }
 
+/**
+ * A location's battle map (stored inline on locations.map, in the adventure-media bucket). Widened
+ * to the rich authoring shape (grid size, image-fit, party/enemy spawns) shared with the standalone
+ * map library. The play runtime (session/state.ts) reads only imagePath + obstacles, so the extra
+ * fields are authored-and-forward-compatible.
+ */
 export interface BattleMap {
   imagePath: string | null
-  obstacles: [number, number][]
-  spawns: [number, number][]
+  gridCols: number
+  gridRows: number
+  imageWidth: number | null
+  imageHeight: number | null
+  imageFit: MapImageFit
+  obstacles: Cell[]
+  spawns: Spawns
+}
+
+export const DEFAULT_BATTLE_MAP: BattleMap = {
+  imagePath: null, gridCols: 32, gridRows: 32, imageWidth: null, imageHeight: null,
+  imageFit: 'fill', obstacles: [], spawns: { party: [], enemy: [] },
+}
+
+const asCells = (v: unknown): Cell[] =>
+  Array.isArray(v)
+    ? v.filter((c): c is Cell => Array.isArray(c) && c.length === 2 && typeof c[0] === 'number' && typeof c[1] === 'number')
+    : []
+
+/** Reads a raw locations.map jsonb into the rich shape, upgrading legacy flat data on the fly. */
+export function normalizeBattleMap(raw: unknown): BattleMap | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const m = raw as Record<string, unknown>
+  const rawSpawns = m.spawns
+  const spawns: Spawns = Array.isArray(rawSpawns)
+    ? { party: asCells(rawSpawns), enemy: [] } // legacy flat spawns -> party side
+    : {
+        party: asCells((rawSpawns as Record<string, unknown> | undefined)?.party),
+        enemy: asCells((rawSpawns as Record<string, unknown> | undefined)?.enemy),
+      }
+  const fit = m.imageFit
+  return {
+    imagePath: typeof m.imagePath === 'string' ? m.imagePath : null,
+    gridCols: typeof m.gridCols === 'number' ? m.gridCols : 32,
+    gridRows: typeof m.gridRows === 'number' ? m.gridRows : 32,
+    imageWidth: typeof m.imageWidth === 'number' ? m.imageWidth : null,
+    imageHeight: typeof m.imageHeight === 'number' ? m.imageHeight : null,
+    imageFit: fit === 'cover' || fit === 'contain' ? fit : 'fill',
+    obstacles: asCells(m.obstacles),
+    spawns,
+  }
 }
 
 export interface LocationRow {

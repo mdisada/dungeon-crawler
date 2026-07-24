@@ -13,6 +13,11 @@
 const DEFAULT_ALLOWLIST = [
   'google/gemini-3.1-flash-lite-image',
   'mistralai/voxtral-mini-tts-2603',
+  // Fish Audio TTS engines (default cloud TTS since 2026-07-24). ai-proxy routes these to Fish.
+  's1',
+  's2-pro',
+  's2.1-pro',
+  's2.1-pro-free',
 ]
 
 function allowlist(): string[] {

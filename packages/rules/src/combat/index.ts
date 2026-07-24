@@ -7,12 +7,22 @@ export {
   activeCombatant, createCombat, editCombatant, resolveAction, setDifficulty,
 } from './engine.ts'
 export type { CombatantPatch, CombatSetup } from './engine.ts'
+export { characterToSetup, npcStatBlockToSetup } from './convert.ts'
+export type { PartyMemberInput } from './convert.ts'
+export {
+  bossNpcStateForOutcome, buildManifest, deriveResult, fightIsOver, manifestToSetup, resolveDifficulty,
+} from './manifest.ts'
+export type {
+  BossOutcome, BuildManifestInput, CombatManifest, CombatResult, ManifestBeatSpec, ManifestEnemyGroup,
+  ManifestMapInput, ManifestNpcRow,
+} from './manifest.ts'
 export { MONSTER_FIXTURES, monsterSetup } from './fixtures.ts'
 export type { MonsterFixture } from './fixtures.ts'
 export {
-  blockedCells, cellKey, chebyshev, findPath, inBounds, lineOfSight, reachableCells,
+  blockedCells, cellKey, chebyshev, DEFAULT_BOUNDS, findPath, gridBounds, inBounds, lineOfSight,
+  reachableCells,
 } from './grid.ts'
-export type { Cell } from './grid.ts'
+export type { Cell, GridBounds } from './grid.ts'
 export { chooseAutoAction, runAutoTurn } from './heuristic.ts'
 export { resolveCast, spellAffects, spellArea, spellTargets } from './spells.ts'
 export { findSpell, SPELL_LIBRARY } from './spell-library.ts'

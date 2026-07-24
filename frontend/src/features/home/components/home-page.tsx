@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { useSession } from '@/features/auth'
+import { MapEditorDialog } from '@/features/map-editor'
 import { deleteAdventure, listMemberAdventures } from '@/features/play'
 import type { MemberAdventure } from '@/features/play'
 
@@ -26,6 +27,7 @@ export function HomePage() {
   const [adventures, setAdventures] = useState<MemberAdventure[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [isMapOpen, setIsMapOpen] = useState(false)
 
   const refetch = useCallback(() => {
     let cancelled = false
@@ -83,7 +85,20 @@ export function HomePage() {
           <h2 className="text-base font-medium">Your characters</h2>
           <p className="text-sm text-muted-foreground">Create and manage your party.</p>
         </Link>
+
+        {user && (
+          <button
+            type="button"
+            onClick={() => setIsMapOpen(true)}
+            className="flex flex-col gap-1 rounded-xl border bg-card p-5 text-left transition-colors hover:border-ring hover:bg-accent"
+          >
+            <h2 className="text-base font-medium">Battle maps</h2>
+            <p className="text-sm text-muted-foreground">Upload, tag, and edit maps for your encounters.</p>
+          </button>
+        )}
       </div>
+
+      {user && <MapEditorDialog open={isMapOpen} onOpenChange={setIsMapOpen} userId={user.id} />}
 
       <section aria-label="Your adventures" className="flex flex-col gap-3">
         <h2 className="text-base font-medium">Your adventures</h2>

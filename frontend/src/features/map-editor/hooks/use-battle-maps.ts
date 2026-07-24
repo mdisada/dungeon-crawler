@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react'
 
-import type { Cell } from '@rules/combat'
-
-import { listBattleMaps, saveMapObstacles, uploadBattleMap } from '../api/battle-maps'
-import type { BattleMapRecord } from '../types'
+import { deleteBattleMap, listBattleMaps, updateBattleMap, uploadBattleMap } from '../api/battle-maps'
+import type { BattleMapPatch, BattleMapRecord } from '../types'
 
 export function useBattleMaps(userId: string) {
   const [maps, setMaps] = useState<BattleMapRecord[]>([])
@@ -12,7 +10,7 @@ export function useBattleMaps(userId: string) {
 
   useEffect(() => {
     let cancelled = false
-    listBattleMaps()
+    listBattleMaps(userId)
       .then((rows) => {
         if (cancelled) return
         setMaps(rows)
@@ -34,10 +32,15 @@ export function useBattleMaps(userId: string) {
     return record
   }
 
-  async function saveObstacles(id: string, obstacles: Cell[]): Promise<void> {
-    await saveMapObstacles(id, obstacles)
-    setMaps((prev) => prev.map((m) => (m.id === id ? { ...m, obstacles } : m)))
+  async function update(id: string, patch: BattleMapPatch): Promise<void> {
+    await updateBattleMap(id, patch)
+    setMaps((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
   }
 
-  return { maps, status, error, upload, saveObstacles }
+  async function remove(id: string, path: string): Promise<void> {
+    await deleteBattleMap(id, path)
+    setMaps((prev) => prev.filter((m) => m.id !== id))
+  }
+
+  return { maps, status, error, upload, update, remove }
 }

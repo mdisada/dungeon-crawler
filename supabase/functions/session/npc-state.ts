@@ -18,6 +18,8 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import type { Json } from '../_shared/state/index.ts'
+import { isGroupName } from '../_shared/guide/group-npcs.ts'
+import type { EncounterSpec } from '../_shared/guide/group-npcs.ts'
 import { corpsePropText, scenePropsAt } from '../_shared/story/index.ts'
 import type { PropRow } from '../_shared/story/index.ts'
 import type { AgentEnv } from './agents.ts'
@@ -48,14 +50,15 @@ export async function applyNpcState(
   const previous = before.dm?.facts.npcStates?.[npc.id] ?? 'alive'
   if (previous === state) return // nothing changed; do not re-log or re-body
 
-  // A row that is also a countable enemy is a TYPE, not a person, and life state is meaningless
+  // A row that is also a GROUP of enemies is a TYPE, not a person, and life state is meaningless
   // for it. Live 2026-07-23: "Thorne's Agent" was authored as an NPC and ALSO listed as
   // `enemies: [{name: "Thorne's Agent", count: 2}]`. The party killed one, the ledger marked
   // the row dead; another walked into the next scene, the ledger marked it alive again - eight
   // writes and a resurrection for one row, because one identity was standing in for many
   // interchangeable people. The guide states the count, so this is arithmetic, not a judgement:
-  // you cannot give a single life state to a thing there are two of.
-  if (await isCreatureType(service, env.adventureId, npc.name)) {
+  // you cannot give a single life state to a thing there are several of. count >= 2 is the line -
+  // a SOLO enemy (count 1) is one being that also fights (a boss, a duelist) and keeps its state.
+  if (await npcIsGroup(service, env.adventureId, npc.name)) {
     await logEvent(service, env.adventureId, sessionId, 'npc_state_skipped', {
       npc_id: npc.id, name: npc.name, state, source, reason: 'creature_type',
     })
@@ -78,8 +81,14 @@ export async function applyNpcState(
   }
 }
 
-/** Is this name used as a countable enemy anywhere in the guide? */
-async function isCreatureType(
+/**
+ * Is this name fielded as a GROUP - a countable enemy of count >= 2 - anywhere in the guide? A
+ * thing there are several of is a TYPE, not a person: it gets no single life state here, and no
+ * staging slot or voice (guarded in social-staging.ts). Matching is plural-tolerant, so the npc
+ * "Thorne's Agents" is caught by the enemy "Thorne's Agent". Shared with the guide pipeline's
+ * build-time reclassification, which makes the same call over the whole roster.
+ */
+export async function npcIsGroup(
   service: SupabaseClient,
   adventureId: string,
   name: string,
@@ -88,17 +97,8 @@ async function isCreatureType(
     .from('encounters')
     .select('spec')
     .eq('adventure_id', adventureId)
-  const wanted = name.trim().toLowerCase()
-  if (!wanted) return false
-  for (const row of (data ?? []) as { spec: Record<string, Json> | null }[]) {
-    const enemies = Array.isArray(row.spec?.enemies) ? row.spec.enemies : []
-    for (const enemy of enemies) {
-      if (typeof enemy !== 'object' || enemy === null || Array.isArray(enemy)) continue
-      const enemyName = (enemy as Record<string, Json>).name
-      if (typeof enemyName === 'string' && enemyName.trim().toLowerCase() === wanted) return true
-    }
-  }
-  return false
+  const encounters = ((data ?? []) as unknown as { spec: EncounterSpec | null }[]).map((row) => row.spec ?? {})
+  return isGroupName(name, encounters)
 }
 
 async function hasCorpseProp(

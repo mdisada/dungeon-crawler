@@ -60,6 +60,7 @@ export function ImagePanel({ userId, imageModelDefault, worker, onRecheckWorker,
       id: crypto.randomUUID(),
       medium: 'image',
       route,
+      routeLabel: route === 'local' ? 'Local' : 'OpenRouter',
       model: route === 'local' ? 'worker' : model.trim() || imageModelDefault,
       variant: preset,
       input: route === 'openrouter' ? CLOUD_INPUT : `preset:${preset}`,
@@ -78,6 +79,7 @@ export function ImagePanel({ userId, imageModelDefault, worker, onRecheckWorker,
       <RouteControls
         route={route}
         onRouteChange={setRoute}
+        cloudLabel="OpenRouter"
         model={model}
         onModelChange={setModel}
         defaultModel={imageModelDefault}

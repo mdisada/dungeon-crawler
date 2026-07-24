@@ -1,15 +1,14 @@
-// Roster sources for the Lab pickers: the user's finished characters and the combat-ready
-// NPCs (stat_block present) across their adventures. PC attack derivation is deliberately
-// generic for Phase 1 - a melee and a ranged option from ability mods + proficiency - since
-// characters.equipment is untyped; every number is live-editable in the Lab anyway.
+// Roster sources for the Lab pickers: the user's finished characters and the combat-ready NPCs
+// (stat_block present) across their adventures. Both convert through the SHARED @rules/combat
+// initiator converters (characterToSetup / npcStatBlockToSetup) so a token built here is identical
+// to one the live combat initiator would build - one truth, no Lab-local stat derivation.
 
 import { supabase } from '@/lib/supabase'
-import { abilityModifier, proficiencyBonus } from '@rules/character'
 import type { AbilityKey } from '@rules/character'
-import { parseDiceExpr } from '@rules/combat'
-import type { AttackSpec, SaveModifiers } from '@rules/combat'
+import { characterToSetup, npcStatBlockToSetup } from '@rules/combat'
 import type { NpcStatBlock } from '@rules/guide'
 
+import { labStatsFromSetup } from '../types'
 import type { LabStats, RosterCharacter, RosterNpc } from '../types'
 
 interface CharacterRosterRow {
@@ -22,18 +21,10 @@ interface CharacterRosterRow {
 }
 
 function characterStats(row: CharacterRosterRow): LabStats {
-  const mod = (key: AbilityKey) => abilityModifier((row.abilities?.[key] ?? 10) + (row.ability_bonuses?.[key] ?? 0))
-  const str = mod('str')
-  const dex = mod('dex')
-  const prof = proficiencyBonus(row.level || 1)
-  const meleeMod = Math.max(str, dex)
-  const attacks: AttackSpec[] = [
-    { name: 'Melee weapon', kind: 'melee', toHit: prof + meleeMod, damage: { count: 1, sides: 8, bonus: meleeMod }, range: 1 },
-    { name: 'Ranged weapon', kind: 'ranged', toHit: prof + dex, damage: { count: 1, sides: 6, bonus: dex }, range: 16, longRange: 64 },
-  ]
-  // Save mods = ability mod (save proficiencies deferred; live-editable in the lab).
-  const saves: SaveModifiers = { str, dex, con: mod('con'), int: mod('int'), wis: mod('wis'), cha: mod('cha') }
-  return { hpMax: row.hp_max ?? 10, ac: 10 + dex, speed: 6, dexMod: dex, saves, attacks, spells: [] }
+  return labStatsFromSetup(characterToSetup({
+    id: row.id, name: row.name, level: row.level,
+    abilities: row.abilities, abilityBonuses: row.ability_bonuses, hpMax: row.hp_max,
+  }))
 }
 
 export async function listRosterCharacters(): Promise<RosterCharacter[]> {
@@ -52,27 +43,7 @@ export async function listRosterCharacters(): Promise<RosterCharacter[]> {
 }
 
 function npcStats(statBlock: NpcStatBlock): LabStats {
-  const ranged = statBlock.archetype === 'sniper' || statBlock.archetype === 'caster'
-  const attack: AttackSpec = {
-    name: statBlock.attack.name,
-    kind: ranged ? 'ranged' : 'melee',
-    toHit: statBlock.attack.toHit,
-    damage: parseDiceExpr(statBlock.attack.damage),
-    range: ranged ? (statBlock.archetype === 'caster' ? 24 : 16) : 1,
-    // Spells (caster) use a single range band; thrown/bow archetypes get 5e long range.
-    ...(ranged && statBlock.archetype !== 'caster' ? { longRange: 64 } : {}),
-  }
-  const m = statBlock.abilityModifiers
-  const saves: SaveModifiers = { str: m.str, dex: m.dex, con: m.con, int: m.int, wis: m.wis, cha: m.cha }
-  return {
-    hpMax: statBlock.hpMax,
-    ac: statBlock.ac,
-    speed: Math.max(1, Math.round(statBlock.speed / 5)),
-    dexMod: statBlock.abilityModifiers.dex,
-    saves,
-    attacks: [attack],
-    spells: [],
-  }
+  return labStatsFromSetup(npcStatBlockToSetup(statBlock, { id: '', name: '', refId: null }))
 }
 
 interface NpcRosterRow {

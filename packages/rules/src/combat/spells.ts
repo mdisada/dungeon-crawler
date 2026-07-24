@@ -5,8 +5,8 @@
 import type { Rng } from '../play/rng.ts'
 import { applyDamage, applyHeal, conscious } from './attack.ts'
 import { rollD20, rollDiceExpr } from './dice.ts'
-import { cellKey, inBounds } from './grid.ts'
-import type { Cell } from './grid.ts'
+import { cellKey, DEFAULT_BOUNDS, gridBounds, inBounds } from './grid.ts'
+import type { Cell, GridBounds } from './grid.ts'
 import type {
   Combatant, CombatEngineState, CombatEvent, RollBreakdown, SpellArea, SpellSpec,
 } from './types.ts'
@@ -27,12 +27,12 @@ function sideMatches(affects: 'enemies' | 'allies' | 'any', caster: Combatant, o
  * placed on the aim cell; cone/line project from the caster toward it. Continuous geometry so
  * the shape reads naturally on the grid; every cell is clamped in-bounds.
  */
-export function spellArea(area: SpellArea, caster: Cell, aim: Cell): Cell[] {
-  if (area.shape === 'single') return inBounds(aim[0], aim[1]) ? [aim] : []
+export function spellArea(area: SpellArea, caster: Cell, aim: Cell, bounds: GridBounds = DEFAULT_BOUNDS): Cell[] {
+  if (area.shape === 'single') return inBounds(aim[0], aim[1], bounds) ? [aim] : []
 
   const cells: Cell[] = []
   const push = (x: number, y: number) => {
-    if (inBounds(x, y)) cells.push([x, y])
+    if (inBounds(x, y, bounds)) cells.push([x, y])
   }
 
   if (area.shape === 'circle') {
@@ -91,7 +91,7 @@ export function spellTargets(
   }
   const cell = aim.cell
   if (!cell) return []
-  const covered = new Set(spellArea(spell.area, [caster.x, caster.y], cell).map(([x, y]) => cellKey(x, y)))
+  const covered = new Set(spellArea(spell.area, [caster.x, caster.y], cell, gridBounds(state)).map(([x, y]) => cellKey(x, y)))
   return state.combatants.filter(
     (c) => !c.dead && sideMatches(affects, caster, c) && covered.has(cellKey(c.x, c.y)),
   )

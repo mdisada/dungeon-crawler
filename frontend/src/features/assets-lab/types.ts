@@ -12,6 +12,8 @@ export interface LabRun {
   id: string
   medium: Medium
   route: AssetRoute
+  /** Provider shown in the table: "OpenRouter", "Fish Audio", "Voxtral", "Local". */
+  routeLabel: string
   /** Explicit model id, or the local worker's backend name. */
   model: string
   /** Preset key for images, voice name for TTS. */

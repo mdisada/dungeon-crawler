@@ -7,20 +7,20 @@ import type { Rng } from '../play/rng.ts'
 import { conscious } from './attack.ts'
 import { expectedDamage } from './dice.ts'
 import { activeCombatant, resolveAction } from './engine.ts'
-import { blockedCells, cellKey, chebyshev, findPath, inBounds, lineOfSight } from './grid.ts'
-import type { Cell } from './grid.ts'
+import { blockedCells, cellKey, chebyshev, findPath, gridBounds, inBounds, lineOfSight } from './grid.ts'
+import type { Cell, GridBounds } from './grid.ts'
 import type { Combatant, CombatAction, CombatEngineState, CombatEvent, EngineResult } from './types.ts'
 
 /** Shortest path to any free cell adjacent to `target`; [] when already adjacent. */
-function pathToAdjacent(active: Combatant, target: Combatant, blocked: Set<string>): Cell[] | null {
+function pathToAdjacent(active: Combatant, target: Combatant, blocked: Set<string>, bounds: GridBounds): Cell[] | null {
   if (chebyshev(active, target) === 1) return []
   let best: Cell[] | null = null
   for (let dy = -1; dy <= 1; dy++) {
     for (let dx = -1; dx <= 1; dx++) {
       if (dx === 0 && dy === 0) continue
       const cell: Cell = [target.x + dx, target.y + dy]
-      if (!inBounds(cell[0], cell[1]) || blocked.has(cellKey(cell[0], cell[1]))) continue
-      const path = findPath([active.x, active.y], cell, blocked)
+      if (!inBounds(cell[0], cell[1], bounds) || blocked.has(cellKey(cell[0], cell[1]))) continue
+      const path = findPath([active.x, active.y], cell, blocked, bounds)
       if (path && (best === null || path.length < best.length)) best = path
     }
   }
@@ -35,7 +35,7 @@ function moveDestination(
   obstacleSet: Set<string>,
 ): Cell | null {
   const blocked = blockedCells(state.obstacles, state.combatants, active.id)
-  const path = pathToAdjacent(active, target, blocked)
+  const path = pathToAdjacent(active, target, blocked, gridBounds(state))
   if (!path || path.length === 0) return null
   const steps = path.slice(0, state.economy.move)
   if (steps.length === 0) return null

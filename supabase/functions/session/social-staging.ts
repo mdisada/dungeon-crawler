@@ -8,6 +8,7 @@ import type { Json, SpeakerSlot } from '../_shared/state/index.ts'
 import { runGenericNpc, runInteractionSummary } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { recordSceneLedger } from './ledger.ts'
+import { npcIsGroup } from './npc-state.ts'
 import { recordProposal } from './proposals.ts'
 import { detectSocialExit, resolveSocialExit } from './social-encounter.ts'
 import {
@@ -76,6 +77,15 @@ export async function startSocial(service: SupabaseClient, adventureId: string, 
   for (const id of npcIds) {
     const npc = await loadNpc(service, adventureId, id)
     if (!npc) return { status: 404, body: { error: `NPC ${id} not found` } }
+    // A group cannot hold one conversation - staging it hands a faction a heartbeat and a seat.
+    // The guide build removes these, but a human-edited group survives (warned, not deleted), so
+    // the staging guard is the backstop that keeps it out of the roleplay frame regardless.
+    if (await npcIsGroup(service, adventureId, npc.name)) {
+      return {
+        status: 409,
+        body: { error: `${npc.name} is a group, not a single person, and cannot be staged. Create a named representative (an envoy, a captain) to speak for it.` },
+      }
+    }
     const npcState = liveStates[id] ?? (await npcInitialState(service, adventureId, id))
     if (npcState === 'dead' || npcState === 'absent') {
       return { status: 409, body: { error: `${npc.name} is ${npcState} and cannot be staged` } }

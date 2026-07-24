@@ -11,6 +11,7 @@ import { CharacterCreatorPage, CharactersPage } from '@/features/characters'
 import { CombatLabPage } from '@/features/combat-lab'
 import { GuidePage } from '@/features/guide'
 import { HomePage } from '@/features/home'
+import { MapEditorPage } from '@/features/map-editor'
 import { JoinPage, PlayPage } from '@/features/play'
 import { SettingsPage } from '@/features/settings'
 
@@ -36,6 +37,7 @@ function App() {
               <Route path="/adventures/:id/guide" element={<GuidePage />} />
               <Route path="/adventures/:id/play" element={<PlayPage />} />
               <Route path="/join/:code" element={<JoinPage />} />
+              <Route path="/maps" element={<MapEditorPage />} />
               <Route path="/combat-lab" element={<CombatLabPage />} />
               <Route path="/adventure-lab" element={<AdventureLabPage />} />
               <Route path="/assets-lab" element={<AssetsLabPage />} />

@@ -5,27 +5,31 @@ import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { useSession } from '@/features/auth'
+import { useBattleMaps } from '@/features/map-editor'
 import {
-  activeCombatant, attackAdvantageDetail, blockedCells, cellKey, chebyshev, findPath,
-  lineOfSight, predictOpportunityAttacks, reachableCells, spellAffects, spellArea, spellTargets,
+  activeCombatant, attackAdvantageDetail, blockedCells, cellKey, chebyshev, deriveResult, fightIsOver,
+  findPath, gridBounds, lineOfSight, predictOpportunityAttacks, reachableCells, spellAffects,
+  spellArea, spellTargets,
 } from '@rules/combat'
-import type { Cell, CombatantPatch, CombatEngineState } from '@rules/combat'
+import type { Cell, CombatantPatch, CombatEngineState, ManifestMapInput } from '@rules/combat'
 
 import { isLabUser } from '../debug'
-import { useBattleMaps } from '../hooks/use-battle-maps'
 import { useCombatLab } from '../hooks/use-combat-lab'
+import { useEncounterReplay } from '../hooks/use-encounter-replay'
 import { useRoster } from '../hooks/use-roster'
 import { hpBandLabel, quantizedHpFraction } from '../redaction'
 import { CELL_PX } from '../types'
 import { ActionBar } from './action-bar'
 import type { CastingState, PendingMove } from './action-bar'
 import { CombatPanel } from './combat-panel'
+import { EncounterPicker } from './encounter-picker'
 import { ForecastCard } from './forecast-card'
 import { InitiativeRail } from './initiative-rail'
 import { LabMap } from './lab-map'
 import type { LabMapToken } from './lab-map'
 import { LogPanel } from './log-panel'
 import { MapControls } from './map-controls'
+import { ResultPanel } from './result-panel'
 import { RosterPanel } from './roster-panel'
 import { SimControls } from './sim-controls'
 import { SpellForecastCard } from './spell-forecast-card'
@@ -35,6 +39,13 @@ import { UnitCard } from './unit-card'
 import type { UnitCardView } from './unit-card'
 
 type LabTab = 'setup' | 'combat' | 'log'
+
+// Obstacle painting moved to the map editor (/maps); the lab renders map obstacles read-only.
+const noopPaint = () => {}
+
+// The red obstacle overlay is a setup-time placement aid; during combat the map stays clean
+// (the engine still uses the map's obstacles for pathfinding/cover, overlay or not).
+const NO_OBSTACLES: Cell[] = []
 
 export function CombatLabPage() {
   const { user } = useSession()
@@ -56,6 +67,7 @@ function CombatLab({ userId }: { userId: string }) {
   const lab = useCombatLab()
   const mapsApi = useBattleMaps(userId)
   const roster = useRoster()
+  const replay = useEncounterReplay()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [targeting, setTargeting] = useState<number | null>(null)
   const [casting, setCasting] = useState<number | null>(null)
@@ -63,14 +75,20 @@ function CombatLab({ userId }: { userId: string }) {
   const [aimHover, setAimHover] = useState<Cell | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [pendingMove, setPendingMove] = useState<PendingMove | null>(null)
-  const [paintMode, setPaintMode] = useState(false)
   const [measureMode, setMeasureMode] = useState(false)
   const [leftOpen, setLeftOpen] = useState(true)
   const [tab, setTab] = useState<LabTab>('setup')
 
   const phase: 'setup' | 'combat' = lab.engine ? 'combat' : 'setup'
   const engine = lab.engine
-  const active = engine && engine.status === 'active' ? activeCombatant(engine) : null
+  // A replay fight is "resolved" when the engine ends OR the manifest's boss falls (F09 SS3.6);
+  // deriveResult then reports the story-facing CombatResult without touching the spine.
+  const bossRef = lab.replayManifest?.bossRef ?? null
+  const resolved = !!engine && fightIsOver(engine, bossRef)
+  const combatResult = engine && lab.replayManifest && resolved
+    ? deriveResult(engine, { bossRef }, { bossOutcome: lab.bossOutcome })
+    : null
+  const active = engine && engine.status === 'active' && !resolved ? activeCombatant(engine) : null
   const activeIsManual = !!active && !active.auto
   const castingSpell = active && casting !== null ? active.spells[casting] ?? null : null
   const aimMode = !!castingSpell && castingSpell.area.shape !== 'single'
@@ -150,7 +168,7 @@ function CombatLab({ userId }: { userId: string }) {
 
   const templateCells: Cell[] = useMemo(() => {
     if (!engine || !active || !castingSpell || !aimMode || !aimOrigin) return []
-    return spellArea(castingSpell.area, [active.x, active.y], aimOrigin)
+    return spellArea(castingSpell.area, [active.x, active.y], aimOrigin, gridBounds(engine))
   }, [engine, active, castingSpell, aimMode, aimOrigin])
 
   const aimTargetIds = useMemo(() => {
@@ -159,7 +177,9 @@ function CombatLab({ userId }: { userId: string }) {
   }, [engine, active, castingSpell, aimMode, aimOrigin])
 
   const { rangeCells, dashCells } = useMemo(() => {
-    if (!engine || !active || !activeIsManual || targeting !== null || casting !== null) {
+    // Drop the movement overlay once the active unit has spent all its movement: with nothing left
+    // to move, it stops being a useful guide and just clutters the map.
+    if (!engine || !active || !activeIsManual || targeting !== null || casting !== null || engine.economy.move === 0) {
       return { rangeCells: [] as Cell[], dashCells: [] as Cell[] }
     }
     const blocked = blockedCells(engine.obstacles, engine.combatants, active.id)
@@ -167,11 +187,12 @@ function CombatLab({ userId }: { userId: string }) {
       const [x, y] = key.split(',').map(Number)
       return [x, y]
     }
-    const reach = reachableCells([active.x, active.y], engine.economy.move, blocked)
+    const bounds = gridBounds(engine)
+    const reach = reachableCells([active.x, active.y], engine.economy.move, blocked, bounds)
     const range = [...reach.keys()].map(parse)
     let dash: Cell[] = []
     if (engine.economy.action) {
-      const extended = reachableCells([active.x, active.y], engine.economy.move + active.speed, blocked)
+      const extended = reachableCells([active.x, active.y], engine.economy.move + active.speed, blocked, bounds)
       dash = [...extended.keys()].filter((key) => !reach.has(key)).map(parse)
     }
     return { rangeCells: range, dashCells: dash }
@@ -236,7 +257,7 @@ function CombatLab({ userId }: { userId: string }) {
     }
     const stepCost = active.conditions.includes('prone') ? 2 : 1
     const blocked = blockedCells(engine.obstacles, engine.combatants, active.id)
-    const path = findPath([active.x, active.y], to, blocked)
+    const path = findPath([active.x, active.y], to, blocked, gridBounds(engine))
     if (!path || path.length === 0) {
       setPendingMove({ to, path: [], cost: 0, provokes: [], reason: 'No path to that square' })
       return
@@ -392,6 +413,20 @@ function CombatLab({ userId }: { userId: string }) {
     URL.revokeObjectURL(url)
   }
 
+  function handleLoadEncounter() {
+    // The map comes from the Lab's current selection (or a blank field); buildManifest takes it as
+    // input, so the manifest shape stays identical to what live play builds (F09 SS11.1).
+    const mapInput: ManifestMapInput = {
+      mapId: lab.map?.id ?? null,
+      obstacles: lab.map?.obstacles ?? [],
+      spawns: lab.map?.spawns ?? { party: [], enemy: [] },
+      gridWidth: lab.map?.gridCols ?? lab.gridCols,
+      gridHeight: lab.map?.gridRows ?? lab.gridRows,
+    }
+    const manifest = replay.assembleManifest(mapInput)
+    if (manifest) lab.loadManifest(manifest, lab.map)
+  }
+
   const startBlocker: string | null = !lab.gridOn
     ? 'Turn the grid on to enforce combat rules.'
     : !lab.tokens.some((t) => t.side === 'party')
@@ -423,21 +458,38 @@ function CombatLab({ userId }: { userId: string }) {
               <MapControls
                 mapsState={{ maps: mapsApi.maps, status: mapsApi.status, error: mapsApi.error }}
                 selectedMapId={lab.map?.id ?? null}
-                view={{ gridOn: lab.gridOn, paintMode, measureMode }}
+                view={{ gridOn: lab.gridOn, measureMode }}
+                grid={{ cols: lab.gridCols, rows: lab.gridRows, imageFit: lab.imageFit }}
                 onSelectMap={lab.selectMap}
-                onUpload={async (name, file) => {
-                  const record = await mapsApi.upload(name, file)
-                  lab.selectMap(record)
-                }}
                 onViewChange={(patch) => {
                   if (patch.gridOn !== undefined) lab.setGridOn(patch.gridOn)
-                  if (patch.paintMode !== undefined) setPaintMode(patch.paintMode)
                   if (patch.measureMode !== undefined) setMeasureMode(patch.measureMode)
                 }}
-                onSaveObstacles={() => {
-                  if (lab.map) void mapsApi.saveObstacles(lab.map.id, lab.obstacles)
+                onGridChange={(patch) => {
+                  if (patch.cols !== undefined) lab.setGridCols(patch.cols)
+                  if (patch.rows !== undefined) lab.setGridRows(patch.rows)
+                  if (patch.imageFit !== undefined) lab.setImageFit(patch.imageFit)
                 }}
-                canSaveObstacles={!!lab.map}
+              />
+              <EncounterPicker
+                status={replay.status}
+                error={replay.error}
+                adventures={replay.adventures}
+                adventureId={replay.adventureId}
+                onAdventureChange={replay.setAdventureId}
+                encounters={replay.encounters}
+                encounterId={replay.encounterId}
+                onEncounterChange={replay.setEncounterId}
+                selectedEncounter={replay.selectedEncounter}
+                contextStatus={replay.contextStatus}
+                hasBoss={replay.hasBoss}
+                bossName={replay.bossName}
+                includeBoss={replay.includeBoss}
+                onIncludeBoss={replay.setIncludeBoss}
+                partyCount={replay.partyCount}
+                replayActive={!!lab.replayManifest}
+                onLoad={handleLoadEncounter}
+                onClear={lab.clearReplay}
               />
               <RosterPanel
                 characters={roster.characters}
@@ -473,6 +525,7 @@ function CombatLab({ userId }: { userId: string }) {
                 <CombatPanel
                   engine={engine}
                   difficulty={lab.difficulty}
+                  resolved={resolved}
                   onDifficultyChange={lab.changeDifficulty}
                   onAutoResolve={lab.autoResolveTurn}
                   onRunToEnd={lab.runToEnd}
@@ -480,6 +533,14 @@ function CombatLab({ userId }: { userId: string }) {
                 />
               ) : (
                 <p className="text-sm text-muted-foreground">No combat running -- set up and roll initiative.</p>
+              )}
+              {combatResult && lab.replayManifest && (
+                <ResultPanel
+                  result={combatResult}
+                  manifest={lab.replayManifest}
+                  bossOutcome={lab.bossOutcome}
+                  onBossOutcome={lab.setBossOutcome}
+                />
               )}
               {phase === 'combat' && editorTarget && <TokenEditor target={editorTarget} onPatch={handleEditorPatch} />}
             </TabsPanel>
@@ -503,8 +564,11 @@ function CombatLab({ userId }: { userId: string }) {
         <LabMap
           mapUrl={lab.map?.url ?? null}
           gridOn={lab.gridOn}
-          obstacles={lab.obstacles}
-          paintMode={paintMode && phase === 'setup' && lab.gridOn}
+          cols={lab.gridCols}
+          rows={lab.gridRows}
+          imageFit={lab.imageFit}
+          obstacles={phase === 'combat' ? NO_OBSTACLES : lab.obstacles}
+          paintMode={false}
           measureMode={measureMode}
           targetingActive={targeting !== null || (castingSpell?.area.shape === 'single')}
           aimMode={aimMode}
@@ -521,7 +585,7 @@ function CombatLab({ userId }: { userId: string }) {
           onTokenDrop={handleTokenDrop}
           onTokenClick={handleTokenClick}
           onTokenHover={setHoverId}
-          onPaintCell={lab.toggleObstacle}
+          onPaintCell={noopPaint}
           onAimHover={setAimHover}
           onAimClick={setSpellAim}
         />
@@ -531,7 +595,7 @@ function CombatLab({ userId }: { userId: string }) {
             <InitiativeRail engine={engine} selectedId={selectedId} onSelect={setSelectedId} />
           </div>
         )}
-        {engine && (
+        {engine && !resolved && (
           <div className="absolute bottom-3 left-1/2 z-20 -translate-x-1/2">
             <ActionBar
               engine={engine}
@@ -559,6 +623,12 @@ function CombatLab({ userId }: { userId: string }) {
         {engine && unitCardView && (
           <div className="absolute right-2 top-16 z-20">
             <UnitCard view={unitCardView} onClose={() => setSelectedId(null)} />
+          </div>
+        )}
+        {combatResult && (
+          <div className="absolute left-1/2 top-16 z-20 -translate-x-1/2 rounded-full bg-background/90 px-3 py-1 text-xs font-medium shadow">
+            {combatResult.outcome === 'victory' ? 'Victory' : 'Defeat'} - {combatResult.tier}
+            <span className="text-muted-foreground"> - result in DM tab</span>
           </div>
         )}
 
