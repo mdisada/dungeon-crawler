@@ -86,11 +86,24 @@ export interface NarrationLine {
   flag: NarrationFlag | null
 }
 
+/** The authored guide with a live play-state overlay (Guide tab). */
+export interface GuideView {
+  chapters: { index: number; title: string; status: string }[]
+  objectives: { index: number; title: string; state: string }[]
+  npcs: { name: string; role: string; state: string }[]
+  locations: { name: string; current: boolean }[]
+  encounters: { kind: string; label: string }[]
+  endings: { title: string; tone: string; status: string }[]
+  clues: { text: string; type: string; discovered: boolean }[]
+  counts: { objectivesDone: number; objectivesTotal: number; cluesFound: number; cluesTotal: number }
+}
+
 export interface Playthrough {
   turns: Turn[]
   issues: Issue[]
   eventCount: number
   narration: NarrationLine[]
+  guide: GuideView
 }
 
 /** A selectable run in the sidebar - a lab test run OR a real player's adventure. */

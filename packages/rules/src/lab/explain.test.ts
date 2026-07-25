@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { annotateNarration, buildPlaythrough, explainEvent } from './index.ts'
+import { annotateNarration, buildGuideView, buildPlaythrough, explainEvent } from './index.ts'
 import type { ExplainContext, PlayEvent } from './index.ts'
 
 const ctx: ExplainContext = {
@@ -80,5 +80,53 @@ describe('annotateNarration', () => {
     expect(out.map((l) => l.flag)).toEqual([null, null, 'fallback', null, 'duplicate'])
     expect(out[0].speaker).toBeNull()
     expect(out[1].speaker).toBe('Bram')
+  })
+})
+
+describe('buildGuideView', () => {
+  const view = buildGuideView({
+    chapters: [{ index: 0, title: 'Ch1', status: 'active' }],
+    objectives: [
+      { index: 1, title: 'Find the killer', reveal_state: 'completed' },
+      { index: 0, title: 'Investigate', reveal_state: 'completed' },
+      { index: 2, title: 'Confront', reveal_state: 'hidden' },
+    ],
+    npcs: [
+      { id: 'n1', name: 'Elara', role: 'npc', initial_state: 'alive' },
+      { id: 'n2', name: 'The Maw', role: 'boss', initial_state: 'alive' },
+    ],
+    locations: [{ id: 'l1', name: 'Bazaar' }, { id: 'l2', name: 'Archives' }],
+    encounters: [{ type: 'battle', spec: { label: 'Ambush' } }],
+    endings: [
+      { index: 1, title: 'Pyrrhic', tone: 'grim', status: 'candidate' },
+      { index: 0, title: 'Triumph', tone: 'bright', status: 'leading' },
+    ],
+    ingredients: [
+      { type: 'clue', reveals: 'the ledger is fake', content: null, discovered: true },
+      { type: 'secret', reveals: 'the mayor lied', content: null, discovered: false },
+      { type: 'item', reveals: 'a sword', content: null, discovered: false },
+    ],
+    npcStates: { n2: 'dead' },
+    currentLocationId: 'l2',
+  })
+
+  it('orders objectives and overlays their live reveal state', () => {
+    expect(view.objectives.map((o) => o.title)).toEqual(['Investigate', 'Find the killer', 'Confront'])
+    expect(view.objectives[2].state).toBe('hidden')
+    expect(view.counts).toMatchObject({ objectivesDone: 2, objectivesTotal: 3 })
+  })
+
+  it('overlays live NPC state, current location, and clue discovery', () => {
+    expect(view.npcs.find((npc) => npc.name === 'The Maw')?.state).toBe('dead')
+    expect(view.npcs.find((npc) => npc.name === 'Elara')?.state).toBe('alive')
+    expect(view.locations.find((l) => l.name === 'Archives')?.current).toBe(true)
+    // Only info toys (clue/secret) are clues, not the item; discovery overlaid.
+    expect(view.clues.map((c) => c.text)).toEqual(['the ledger is fake', 'the mayor lied'])
+    expect(view.counts).toMatchObject({ cluesFound: 1, cluesTotal: 2 })
+  })
+
+  it('sorts endings by index and keeps the leading one', () => {
+    expect(view.endings[0]).toMatchObject({ title: 'Triumph', status: 'leading' })
+    expect(view.encounters[0]).toEqual({ kind: 'battle', label: 'Ambush' })
   })
 })

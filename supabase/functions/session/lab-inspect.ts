@@ -5,8 +5,8 @@
 // users), so this is service-role + email-allowlisted rather than RLS - the debug_usage pattern.
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
-import { annotateNarration, buildPlaythrough } from '../_shared/lab/index.ts'
-import type { ExplainContext, PlayEvent } from '../_shared/lab/index.ts'
+import { annotateNarration, buildGuideView, buildPlaythrough } from '../_shared/lab/index.ts'
+import type { ExplainContext, GuideInput, PlayEvent } from '../_shared/lab/index.ts'
 
 const LAB_EMAILS = ['mig.isada@gmail.com', 'madisada@gmail.com']
 type Result = { status: number; body: Record<string, unknown> }
@@ -21,12 +21,15 @@ export async function labInspect(service: SupabaseClient, adventureId: string, u
   if (!allowed(userEmail)) return forbidden
   if (!adventureId) return { status: 400, body: { error: 'adventure_id required' } }
 
-  const [events, npcs, objectives, locations, ingredients, stateRow] = await Promise.all([
+  const [events, npcs, objectives, locations, ingredients, chapters, encounters, endings, stateRow] = await Promise.all([
     service.from('event_log').select('id, type, payload, created_at').eq('adventure_id', adventureId).order('id').limit(3000),
-    service.from('npcs').select('id, name').eq('adventure_id', adventureId),
-    service.from('objectives').select('id, title').eq('adventure_id', adventureId),
+    service.from('npcs').select('id, name, role, initial_state').eq('adventure_id', adventureId),
+    service.from('objectives').select('id, index, title, reveal_state').eq('adventure_id', adventureId),
     service.from('locations').select('id, name').eq('adventure_id', adventureId),
-    service.from('ingredients').select('id, reveals, content').eq('adventure_id', adventureId),
+    service.from('ingredients').select('id, type, reveals, content, discovered').eq('adventure_id', adventureId),
+    service.from('chapters').select('index, title, status').eq('adventure_id', adventureId),
+    service.from('encounters').select('type, spec').eq('adventure_id', adventureId),
+    service.from('endings').select('index, title, tone, status').eq('adventure_id', adventureId),
     service.from('adventure_state').select('state').eq('adventure_id', adventureId).maybeSingle(),
   ])
   if (events.error) return { status: 500, body: { error: events.error.message } }
@@ -43,15 +46,34 @@ export async function labInspect(service: SupabaseClient, adventureId: string, u
   }
   const playthrough = buildPlaythrough((events.data ?? []) as unknown as PlayEvent[], ctx)
 
+  const state = (stateRow.data?.state ?? {}) as Row
+  const scene = (state.scene ?? {}) as Row
+  const facts = (((state.dm ?? {}) as Row).facts ?? {}) as Row
+
   // The player-facing transcript: the rendered dialogue buffer (what the table actually saw),
   // annotated for fallback/duplicate lines. Complete for one-shots (the buffer holds ~100 lines).
-  const dialogue = (((stateRow.data?.state ?? {}) as Row).dialogue ?? {}) as Row
+  const dialogue = (state.dialogue ?? {}) as Row
   const lines = (Array.isArray(dialogue.lines) ? dialogue.lines : []) as Row[]
   const narration = annotateNarration(lines.map((l) => ({ speaker: (l.speaker as string) ?? null, text: String(l.text ?? '') })))
 
+  // The authored guide with a live overlay (npc states, current location, objective/clue progress).
+  const guide = buildGuideView({
+    chapters: (chapters.data ?? []) as unknown as GuideInput['chapters'],
+    objectives: (objectives.data ?? []) as unknown as GuideInput['objectives'],
+    npcs: (npcs.data ?? []) as unknown as GuideInput['npcs'],
+    locations: (locations.data ?? []) as unknown as GuideInput['locations'],
+    encounters: (encounters.data ?? []) as unknown as GuideInput['encounters'],
+    endings: (endings.data ?? []) as unknown as GuideInput['endings'],
+    ingredients: (ingredients.data ?? []) as unknown as GuideInput['ingredients'],
+    npcStates: (facts.npcStates ?? {}) as Record<string, string>,
+    currentLocationId: (scene.locationId as string) ?? null,
+  })
+
   return {
     status: 200,
-    body: { turns: playthrough.turns, issues: playthrough.issues, eventCount: playthrough.eventCount, narration } as unknown as Record<string, unknown>,
+    body: {
+      turns: playthrough.turns, issues: playthrough.issues, eventCount: playthrough.eventCount, narration, guide,
+    } as unknown as Record<string, unknown>,
   }
 }
 

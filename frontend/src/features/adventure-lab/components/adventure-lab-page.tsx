@@ -5,6 +5,7 @@ import { useSession } from '@/features/auth'
 import { isAdventureLabUser } from '../debug'
 import { useLabEntries } from '../hooks/use-lab-entries'
 import { usePlaythrough } from '../hooks/use-playthrough'
+import { GuideOverlay } from './guide-view'
 import { LabPlaythrough } from './lab-playthrough'
 import { LabTabs } from './lab-tabs'
 import { NarrationView } from './narration-view'
@@ -63,11 +64,7 @@ export function AdventureLabPage() {
         {selectedAdv && !playthrough && loading && <p className="p-4 text-sm text-muted-foreground">Loading…</p>}
         {playthrough && mainTab === 'narration' && <NarrationView lines={playthrough.narration} />}
         {playthrough && mainTab === 'logs' && <LabPlaythrough playthrough={playthrough} />}
-        {mainTab === 'guide' && (
-          <p className="p-4 text-sm text-muted-foreground">
-            The Adventure Guide view (authored content + live overlay) arrives in Phase 3.
-          </p>
-        )}
+        {playthrough && mainTab === 'guide' && <GuideOverlay guide={playthrough.guide} />}
       </div>
     </div>
   )
