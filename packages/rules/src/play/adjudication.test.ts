@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   extractJson, parseAdjudication, parseConsistency, parseNarrationOptions,
-  parseNpcOutput, parseSocialClassification,
+  parseNpcOutput, parseSocialClassification, repairTruncatedJson,
 } from './adjudication.ts'
 import { DC_MAX, DC_MIN } from './checks.ts'
 
@@ -14,6 +14,37 @@ describe('extractJson', () => {
     expect(extractJson('```json\n{"a":1}\n```')).toEqual({ a: 1 })
     expect(extractJson('Sure! Here you go: {"a":1} hope that helps')).toEqual({ a: 1 })
     expect(extractJson('no json at all')).toBeNull()
+  })
+
+  it('salvages a truncated reply so the leading fields survive', () => {
+    // Tail value cut off mid-string: dialogue is complete, tone is partial but present.
+    expect(extractJson('{"dialogue": "Hello there, traveler.", "tone": "warm and invit')).toEqual({
+      dialogue: 'Hello there, traveler.',
+      tone: 'warm and invit',
+    })
+    // Cut off inside a later array - dialogue still recovered, and it parses.
+    const arr = extractJson('{"dialogue": "Take this.", "reveals": ["clue_a", "clue_') as Record<string, unknown>
+    expect(arr.dialogue).toBe('Take this.')
+    // Cut off between fields (dangling comma).
+    expect(extractJson('{"dialogue": "Done.",')).toEqual({ dialogue: 'Done.' })
+    // A truncated npc reply still yields a usable line through the real parser.
+    const parsed = parseNpcOutput(
+      extractJson('{"dialogue": "The vault is thataway, friend.", "tone": "hel'),
+      ['pc-1'],
+    )
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) expect(parsed.data.dialogue).toBe('The vault is thataway, friend.')
+  })
+})
+
+describe('repairTruncatedJson', () => {
+  it('closes an open string and balances containers', () => {
+    expect(repairTruncatedJson('{"a": "b')).toBe('{"a": "b"}')
+    expect(repairTruncatedJson('{"a": ["b')).toBe('{"a": ["b"]}')
+    expect(repairTruncatedJson('{"a": 1,')).toBe('{"a": 1}')
+  })
+  it('returns null when the text is already balanced', () => {
+    expect(repairTruncatedJson('{"a": 1}')).toBeNull()
   })
 })
 

@@ -17,7 +17,7 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
-import type { Json } from '../_shared/state/index.ts'
+import type { Json, StateDiff } from '../_shared/state/index.ts'
 import { isGroupName } from '../_shared/guide/group-npcs.ts'
 import type { EncounterSpec } from '../_shared/guide/group-npcs.ts'
 import { corpsePropText, scenePropsAt } from '../_shared/story/index.ts'
@@ -65,9 +65,24 @@ export async function applyNpcState(
     return
   }
 
-  await commitDiffs(service, env.adventureId, () => [
-    { domain: 'dm', patch: { facts: { npcStates: { [npc.id]: state } } } },
-  ])
+  await commitDiffs(service, env.adventureId, (s) => {
+    const diffs: StateDiff[] = [
+      { domain: 'dm', patch: { facts: { npcStates: { [npc.id]: state } } } },
+    ]
+    // An absent or dead NPC is no longer a staged speaker. Leaving them on stage routes the
+    // party's next line to a mouth that can't answer - the enforce claim-guard then blocks it and
+    // the scene's real, narration-only character (a magistrate the party is plainly addressing)
+    // goes voiceless (live 2026-07-25: three npc_consistency_failures in one scene, all the
+    // departed Elara). Unstage them; if the frame empties, the route classifier falls back to
+    // narration next turn, where the DM voices whoever is actually present.
+    if ((state === 'absent' || state === 'dead') && s.dialogue.speakers.some((sp) => sp.npcId === npc.id)) {
+      diffs.push({
+        domain: 'dialogue',
+        patch: { speakers: s.dialogue.speakers.filter((sp) => sp.npcId !== npc.id) as unknown as Json },
+      })
+    }
+    return diffs
+  })
   await logEvent(service, env.adventureId, sessionId, 'npc_state_recorded', {
     npc_id: npc.id, name: npc.name, state, source,
     ...(evidence ? { evidence: evidence.slice(0, 200) } : {}),
@@ -151,6 +166,48 @@ async function createCorpseProp(
   await logEvent(service, env.adventureId, sessionId, 'prop_created', {
     prop: 'corpse', ingredient_id: data.id, npc_id: npc.id, name: npc.name, location_id: locationId,
   })
+}
+
+/**
+ * The boss NPC a free-text combat label refers to, if any. Name containment both ways, so
+ * "The Whispering Maw's Manifestation" resolves to the boss "The Whispering Maw". The
+ * placeholder-combat paths use it to tell an ad-hoc boss clash from a fight with ordinary foes.
+ */
+export async function bossReferencedBy(
+  service: SupabaseClient,
+  adventureId: string,
+  label: string,
+): Promise<{ id: string; name: string } | null> {
+  const { data } = await service
+    .from('npcs')
+    .select('id, name')
+    .eq('adventure_id', adventureId)
+    .eq('role', 'boss')
+  const rows = ((data ?? []) as { id: string; name: string }[]).filter((r) => r.name)
+  const l = label.toLowerCase()
+  return rows.find((r) => l.includes(r.name.toLowerCase()) || r.name.toLowerCase().includes(l)) ?? null
+}
+
+/**
+ * Has the antagonist been beaten? True when a boss NPC - or the committed BBEG - is dead. The
+ * Meta Loop Steward reads this before advancing the off-screen agenda: a dead antagonist does not
+ * keep scheming (live 2026-07-24, the Whispering Maw advanced its plan for days after the party
+ * put it down). Absent is NOT defeated - a departed boss may still return.
+ */
+export async function antagonistDefeated(
+  service: SupabaseClient,
+  adventureId: string,
+  committedBbegId: string | null,
+): Promise<boolean> {
+  const { state } = await loadState(service, adventureId)
+  const npcStates = state.dm?.facts.npcStates ?? {}
+  if (committedBbegId && npcStates[committedBbegId] === 'dead') return true
+  const { data } = await service
+    .from('npcs')
+    .select('id')
+    .eq('adventure_id', adventureId)
+    .eq('role', 'boss')
+  return ((data ?? []) as { id: string }[]).some((r) => npcStates[r.id] === 'dead')
 }
 
 /** Props physically present where the party stands - describable things, never agents. */

@@ -26,11 +26,16 @@ import { assertOk, commitDiffs, loadContext, loadState, logEvent } from './util.
  *              unmeasurable because it blocked, so a false positive and a true one looked alike.
  *   'enforce'- one constrained regeneration when a dead mouth speaks; keep the better draft.
  *
- * Starts at 'shadow'. The class it targets - the speaking corpse - is real and recurring, but
- * the last thing to block prose was wrong 14 times out of 14, so this one earns its authority
- * with data before it gets any.
+ * Started at 'shadow'. The class it targets - the speaking corpse - is real and recurring, but
+ * the last thing to block prose was wrong 14 times out of 14, so this one earned its authority
+ * with data first. Flipped to 'enforce' 2026-07-25 on that data: the shadow log caught the
+ * departed Elara Meadowlight speaking a full scene after she vanished ("state: absent, role:
+ * speaks") and published it anyway, which then fed the ledger a live sighting and thrashed her
+ * state absent->alive. Unlike the flags checker, this is a perceive-then-deterministically-judge
+ * pass (who does the passage SHOW acting; are they dead/absent), not a fragment-vs-proposition
+ * guess - the exact shape that can be enforced without the false-positive tax.
  */
-export const PROSE_CLAIM_CHECK: 'off' | 'shadow' | 'enforce' = 'shadow'
+export const PROSE_CLAIM_CHECK: 'off' | 'shadow' | 'enforce' = 'enforce'
 
 /**
  * The rebuilt check: model perceives (who does this passage SHOW speaking or acting?), code

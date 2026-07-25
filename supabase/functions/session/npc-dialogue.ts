@@ -210,10 +210,20 @@ export async function npcReply(
     const claimCheck = await runClaimCheck(env, output.dialogue, roster)
     if (claimCheck.violations.length > 0) {
       await logEvent(service, env.adventureId, sessionId, 'claim_check_shadow', {
-        enforced: false, source: 'npc_reply', npc_id: npcId,
+        enforced: PROSE_CLAIM_CHECK === 'enforce', source: 'npc_reply', npc_id: npcId,
         violations: claimCheck.violations.map((v) => ({ name: v.name, role: v.role, state: v.state })) as unknown as Json,
         draft: output.dialogue.slice(0, 400),
       }).catch(() => {})
+      // Enforce (2026-07-25): a reply that STAGES a dead/absent NPC - "Elias steps from the
+      // shadows and says..." - is regenerated once under a hard constraint, keeping whichever
+      // draft is clean. The speaker themself is already guarded by draftIsNpcSpeech; this closes
+      // the other half, the departed NPC handed a line inside someone else's reply.
+      if (PROSE_CLAIM_CHECK === 'enforce' && !env.demo) {
+        const constraint = claimCheck.violations.map((v) => v.constraint).join(' ')
+        const second = await runNpcAgent(env, buildContext(`NEVER: ${constraint}`, direction)).catch(() => output)
+        const retry = await runClaimCheck(env, second.dialogue, roster)
+        if (retry.violations.length === 0) output = second
+      }
     } else if (claimCheck.checked.length > 0) {
       await logEvent(service, env.adventureId, sessionId, 'claim_check_clean', {
         suspects: claimCheck.checked, source: 'npc_reply',
@@ -594,6 +604,7 @@ export async function continueAfterCheck(
     if (applied.staged.length > 0) sceneNote += ` Present and in conversation now: ${applied.staged.join(', ')}.`
     if (applied.dayAdvanced !== null) sceneNote += ' Meaningful time passes during this - let the narration carry it.'
     if (applied.combatWon) sceneNote += ` A fight broke out ("${applied.combatWon}") and the party won decisively - narrate the clash and its immediate aftermath.`
+    if (applied.combatInconclusive) sceneNote += ` The party clashed with ${applied.combatInconclusive}, but it was beyond what an impromptu fight could finish - it was driven back and withdrew, NOT destroyed. Narrate the violent stand-off and its unresolved end; the threat still stalks them.`
   }
   // A successful `do` in a room holding authored evidence finds it (investigation pillar).
   if (result.success) {

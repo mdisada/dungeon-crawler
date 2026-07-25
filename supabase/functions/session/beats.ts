@@ -405,7 +405,22 @@ export async function planAndOpenBeat(
   const castForBeat = [...livingCast]
   if (PLANNER_CREATES_NPCS && plan.encounter?.kind === 'social' && plan.createNpcs.length > 0) {
     const existing = new Set(npcRows.map((n) => n.name.toLowerCase().trim()))
-    const wanted = plan.createNpcs.filter((n) => !existing.has(n.name.toLowerCase().trim()))
+    // Cap cast growth (2026-07-25). At most ONE brand-new named NPC per beat, and never past a
+    // roster ceiling: introducing two significant strangers in a single scene is how a quest-giver
+    // who wrongly went absent got silently replaced by a PAIR of interchangeable stand-ins for her
+    // role (live 2026-07-24, "created [Old Man Hemlock, Seraphina]"). New cast arrives one at a
+    // time, as beats need it - the planner is shown the living roster and should reuse it first.
+    const MAX_ROSTER = 8
+    const room = Math.max(0, MAX_ROSTER - npcRows.length)
+    const requested = plan.createNpcs.filter((n) => !existing.has(n.name.toLowerCase().trim()))
+    const wanted = requested.slice(0, Math.min(room, 1))
+    if (requested.length > wanted.length) {
+      await logEvent(service, env.adventureId, sessionId, 'beat_npcs_capped', {
+        beat: plan.name,
+        requested: requested.map((n) => n.name) as unknown as Json,
+        created: wanted.map((n) => n.name) as unknown as Json,
+      })
+    }
     if (wanted.length > 0) {
       const { data: created, error: createError } = await service
         .from('npcs')

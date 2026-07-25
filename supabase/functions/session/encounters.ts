@@ -34,7 +34,7 @@ import { commitDiffs, loadState, logEvent } from './util.ts'
 import { bossNpcStateForOutcome } from '../_shared/combat/index.ts'
 import { resolveLiveCombat } from './combat.ts'
 import type { LiveCombatResult } from './combat.ts'
-import { applyNpcState } from './npc-state.ts'
+import { applyNpcState, bossReferencedBy } from './npc-state.ts'
 
 export function activeEncounter(state: GameState): EncounterState | null {
   return state.encounter ?? null
@@ -374,8 +374,17 @@ export async function runCombatPlaceholderEncounter(
     return
   }
 
+  // No engine result (ad-hoc beat, no authored enemies, or engine error): the historical auto-win
+  // that keeps a live session moving. But if the fight was against the BOSS, the victory must
+  // reach state the way the engine path does above - mark the boss dead - or the meta-loop steward
+  // keeps advancing a defeated antagonist and the ending signals never see the win (live
+  // 2026-07-24: the Whispering Maw "died" here yet kept hunting the party for two more days).
+  const placeholderBoss = await bossReferencedBy(service, env.adventureId, spec.label)
+  if (placeholderBoss) {
+    await applyNpcState(service, env, sessionId, placeholderBoss, 'dead', 'combat_placeholder', `defeated in "${spec.label}"`)
+  }
   await logEvent(service, env.adventureId, sessionId, 'combat_resolved', {
-    label: spec.label, outcome: 'victory', resolver: 'placeholder',
+    label: spec.label, outcome: 'victory', resolver: 'placeholder', boss_killed: placeholderBoss?.name ?? null,
   })
   await resolveOpenEncounter(
     service, env, sessionId, 'full',
@@ -581,7 +590,24 @@ export async function handleChallengeIntent(
   }
 
   if (resolution.type !== 'check' || !resolution.check) {
-    // No roll needed: the attempt still counts toward the challenge, one way or the other.
+    // No roll. auto_FAIL still counts against the party - the action backfired, a wasted attempt.
+    // An auto_SUCCESS counts as progress UNLESS it was disruptive/destructive rather than a real
+    // attempt at the challenge: casting Fireball into the crowd "to read a journal" is noise, not
+    // deciphering (live 2026-07-24). Code keys on the adjudicator's own `loud` signal (smashing,
+    // explosions, shouting) so a QUIET legitimate attempt the cheap model waved through still
+    // advances the challenge - a blanket "no auto-success counts" stalled honest investigation
+    // (live 2026-07-25: four "look around / move to the alcove" actions credited nothing and the
+    // challenge failed with zero progress).
+    if (resolution.type === 'auto_success' && adjudication.sceneEffects?.loud === true) {
+      await narrationBeat(
+        service, env, sessionId,
+        `Inside the challenge "${encounter.label}", ${character.name}: ${adjudication.interpretation}. ` +
+          `It is loud and destructive, not real progress - it does NOT advance the challenge, which still ` +
+          `demands the party's genuine effort. ${resolution.consequencesHint}`,
+        'Challenge attempt', 'outcome',
+      )
+      return { status: 200, body: { ok: true, resolved: 'auto_success_noncounting' } }
+    }
     const success = resolution.type === 'auto_success'
     const status = await applyChallengeAttempt(service, env, sessionId, {
       characterId: character.id,

@@ -53,13 +53,30 @@ async function buildRecap(
       : 'Previously: the party drove off the ambushers and earned the village\'s wary trust.'
   }
 
+  // The opening must OPEN WHERE THE ADVENTURE IS SET. The first-session narration used to ground
+  // only on the free-text premise, so it invented a setting ("Oakhaven Village") while the row play
+  // then dropped the party into was "The Grand Bazaar" (live 2026-07-24). buildStartDiffs picks the
+  // starting location the same way (first by created_at); grounding the recap on it too keeps the
+  // opening prose and the scene the party actually stands in from being two different places.
+  const { data: startLocation } = await service
+    .from('locations')
+    .select('name, description')
+    .eq('adventure_id', adventure.id)
+    .order('created_at')
+    .limit(1)
+    .maybeSingle()
+  const setting = startLocation?.name
+    ? `The party begins at "${startLocation.name}"${startLocation.description ? ` - ${startLocation.description}` : ''}. ` +
+      'Open THERE: establish that exact place by name, and do not invent a different town or setting. '
+    : ''
+
   try {
     // Openings stage the offer, never the motivation (F08 SS9.1): scene and atmosphere only,
     // ending where the entry giver seeks the party out - acceptance is what creates purpose.
     const source = lastSummary
       ? `Write a "Previously on..." recap (max 120 words) from this session summary. Second person plural, present tense, no spoilers beyond what players witnessed:\n${JSON.stringify(lastSummary.summary)}`
       : `Write a spoiler-safe opening premise narration (max 120 words) for the players from this pitch. ` +
-        `Second person plural, present tense. Establish the place and atmosphere only. Do NOT presume ` +
+        `Second person plural, present tense. Establish the place and atmosphere only. ${setting}Do NOT presume ` +
         `the party's motivation, purpose, or reasons for being here - they have not chosen anything yet. ` +
         `Do not reveal twists or hidden information. End at a concrete moment facing the players` +
         (entryGiverName

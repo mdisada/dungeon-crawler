@@ -681,8 +681,13 @@ function npcSchemaFor(knowledgeIds: string[], pcIds: string[]) {
   return {
     name: 'npc_reply',
     schema: obj({
-      dialogue: { type: 'string', description: '1-3 sentences of spoken dialogue, in character.' },
-      tone: str,
+      // maxLength is the structural cap on a runaway reply. Without it a cheap model can emit a
+      // 4985-char monologue that blows the token budget mid-object, so the JSON truncates
+      // (finish_reason 'length') and nothing parses - live 2026-07-24, npc_agent unparsed twice
+      // in one scene, its internal reasoning ("'locked_by' should be...") leaking into the tail.
+      // The provider enforces the bound, so the model plans a short line instead of overrunning.
+      dialogue: { type: 'string', maxLength: 600, description: '1-3 sentences of spoken dialogue, in character.' },
+      tone: { type: 'string', maxLength: 80 },
       address_pc: idEnum(pcIds),
       reveals: {
         type: 'array',
@@ -744,7 +749,10 @@ export async function runNpcAgent(env: AgentEnv, ctx: NpcContext): Promise<NpcAg
   ].filter(Boolean).join('\n')
   const attempt = async () => {
     const parsed = parseNpcOutput(
-      await agentJson(env, 'npc_agent', NPC_SYSTEM, user, 600,
+      // 900 base (agentJson doubles to 1800 on a parse miss): the reply object carries dialogue +
+      // reveals + opening + proposed_actions + disposition, and 600 truncated the tail on longer
+      // in-character lines. The dialogue maxLength above caps the prose; this caps the envelope.
+      await agentJson(env, 'npc_agent', NPC_SYSTEM, user, 900,
         npcSchemaFor(ctx.knowledge.map((k) => k.id), pcIds)),
       pcIds,
     )

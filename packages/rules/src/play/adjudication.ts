@@ -22,7 +22,39 @@ function asAdvDis(value: unknown): AdvDis {
   return value === 'advantage' || value === 'disadvantage' ? value : 'none'
 }
 
-/** Strips markdown fences models love to add around JSON. */
+/**
+ * Best-effort repair of a JSON object truncated mid-write (finish_reason 'length'). Walks the
+ * text tracking string state and container depth, then closes an open string and balances the
+ * open braces/brackets so the LEADING, complete fields parse. Returns null when the text is
+ * already balanced (repair would not help) or has no object.
+ *
+ * Why it exists: a cheap reasoning model can blow the whole token budget mid-object and return a
+ * truncated reply (live 2026-07-24, npc_agent emitted 13989 chars and hit the cap). The npc
+ * schema puts `dialogue` first, so the party's line survives the repair even when the tail is
+ * lost - a usable reply instead of a thrown error or leaked half-JSON reaching the table.
+ */
+export function repairTruncatedJson(objText: string): string | null {
+  let inStr = false
+  let esc = false
+  const stack: string[] = []
+  for (let i = 0; i < objText.length; i++) {
+    const ch = objText[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (ch === '\\') esc = true
+      else if (ch === '"') inStr = false
+    } else if (ch === '"') inStr = true
+    else if (ch === '{') stack.push('}')
+    else if (ch === '[') stack.push(']')
+    else if (ch === '}' || ch === ']') stack.pop()
+  }
+  if (!inStr && stack.length === 0) return null // balanced already; the caller's parse failed for another reason
+  let out = inStr ? `${objText}"` : objText.replace(/,\s*$/, '')
+  while (stack.length) out += stack.pop()
+  return out
+}
+
+/** Strips markdown fences models love to add around JSON; salvages a truncated tail. */
 export function extractJson(text: string): unknown {
   const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
   try {
@@ -34,7 +66,17 @@ export function extractJson(text: string): unknown {
       try {
         return JSON.parse(cleaned.slice(start, end + 1))
       } catch {
-        return null
+        // fall through to truncation repair
+      }
+    }
+    if (start >= 0) {
+      const repaired = repairTruncatedJson(cleaned.slice(start))
+      if (repaired !== null) {
+        try {
+          return JSON.parse(repaired)
+        } catch {
+          return null
+        }
       }
     }
     return null
