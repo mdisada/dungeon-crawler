@@ -30,32 +30,80 @@ export interface LabRun {
   finished_at: string | null
 }
 
-// Deliberately generic - the page renders whatever {phase, fn, label, detail} rows the runner
-// emits, so changes to the adventure-creation or play flow never require frontend changes.
-// New phases, functions, and event kinds flow through without touching this feature.
-export interface LabRunEvent {
-  id: number
-  run_id: string
-  phase: string
-  fn: string
-  label: string
-  detail: Record<string, unknown>
-  duration_ms: number | null
-  created_at: string
-}
-
-export interface LabComment {
-  id: string
-  run_id: string
-  event_id: number | null
-  body: string
-  created_at: string
-}
-
 /** A lab-generated adventure a new run can replay without paying for generation again. */
 export interface ReusableAdventure {
   adventureId: string
   title: string
+}
+
+// --- Playthrough inspection (lab_inspect endpoint / _shared/lab explainer output) ---
+
+export type RowSeverity = 'info' | 'good' | 'warn' | 'issue'
+
+export interface PlayEvent {
+  id: number
+  type: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+/** One raw event rendered in plain English. */
+export interface LaymanRow {
+  eventId: number
+  at: string
+  type: string
+  icon: string
+  text: string
+  severity: RowSeverity
+  detail: Record<string, unknown>
+}
+
+/** Everything that happened between one player action and the next. */
+export interface Turn {
+  index: number
+  label: string
+  player: string | null
+  playerRoute: string | null
+  at: string
+  rows: LaymanRow[]
+  raw: PlayEvent[]
+  issueCount: number
+}
+
+export interface Issue {
+  eventId: number
+  turnIndex: number
+  severity: 'warn' | 'issue'
+  text: string
+}
+
+export type NarrationFlag = 'fallback' | 'duplicate'
+
+/** One player-facing transcript line, annotated for narrative bugs detectable from the prose. */
+export interface NarrationLine {
+  speaker: string | null
+  text: string
+  flag: NarrationFlag | null
+}
+
+export interface Playthrough {
+  turns: Turn[]
+  issues: Issue[]
+  eventCount: number
+  narration: NarrationLine[]
+}
+
+/** A selectable run in the sidebar - a lab test run OR a real player's adventure. */
+export interface LabEntry {
+  kind: 'test' | 'real'
+  runId: string | null
+  adventureId: string | null
+  title: string
+  status: string
+  spentUsd: number
+  createdAt: string
+  quality: string | null
+  partySize: number | null
 }
 
 // Same premise set the paid playtest harness rotates through - varied loop archetypes so the
