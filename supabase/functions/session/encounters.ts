@@ -10,6 +10,7 @@ import {
   escalatedDc, newSkillChallenge, promptDeadline, recordAttempt, SOLO_PROMPT_WINDOW_S,
 } from '../_shared/play/index.ts'
 import type { CheckResult, SkillChallengeState } from '../_shared/play/index.ts'
+import { biasedFailures, biasedSuccesses } from '../_shared/story/index.ts'
 import type {
   EncounterKind, EncounterSpecState, EncounterState, GameState, Json, PendingPromptState, StateDiff,
 } from '../_shared/state/index.ts'
@@ -22,6 +23,7 @@ import { writeMemoryFragment } from './memory.ts'
 import { recordSceneLedger } from './ledger.ts'
 import { applyMilestones } from './milestones.ts'
 import { narrationBeat } from './narration.ts'
+import { pacingFor } from './pacing.ts'
 import {
   activePcIds, agentContextLines, appendLinesDiff, characterProfiles, loadPartyCharacters,
   newLine, partySkillList, pendingDiffs, typingDiff,
@@ -82,6 +84,9 @@ export async function openEncounter(
   await commitDiffs(service, adventureId, () => [
     ...encounterReplaceDiffs(encounter),
     ...specReplaceDiffs(spec),
+    // The node's entry chips have done their job - inside the encounter the pinned frame is what
+    // says how to engage, and stale "ways in" would read as ways out.
+    { domain: 'dialogue' as const, patch: { suggestedChoices: [] } as unknown as Json },
   ])
   await logEvent(service, adventureId, sessionId, 'encounter_opened', {
     encounter_id: encounter.id, kind: encounter.kind, label: encounter.label, stakes: encounter.stakes,
@@ -128,6 +133,8 @@ export async function resolveOpenEncounter(
   await logEvent(service, env.adventureId, sessionId, 'encounter_resolved', {
     encounter_id: encounter.id, kind: encounter.kind, label: encounter.label,
     tier, milestones: applied as unknown as Json,
+    // Which authored node just resolved - the navigator follows THIS node's edge for THIS tier.
+    ...(spec.nodeKey ? { node_key: spec.nodeKey } : {}),
   })
   if (restored) {
     await logEvent(service, env.adventureId, sessionId, 'encounter_restored', {
@@ -228,9 +235,10 @@ export function spawnInstantiator(service: SupabaseClient, env: AgentEnv, sessio
     }
 
     const num = (v: Json | undefined, fallback: number) => (typeof v === 'number' ? v : fallback)
+    const pacing = pacingFor(state)
     const challenge = newSkillChallenge({
-      neededSuccesses: num(params.needed_successes, 2),
-      maxFailures: num(params.max_failures, 2),
+      neededSuccesses: biasedSuccesses(num(params.needed_successes, 2), pacing),
+      maxFailures: biasedFailures(num(params.max_failures, 2), pacing),
       suggestedSkills: Array.isArray(params.suggested_skills)
         ? (params.suggested_skills as Json[]).filter((s): s is string => typeof s === 'string')
         : [],
@@ -262,6 +270,8 @@ export interface StoredBeatSpec {
   onSuccess: string[]
   onPartial: string[]
   onFailure: string[]
+  /** Set when this spec came from an authored story node (2026-07-26). */
+  nodeKey?: string
 }
 
 export function parseStoredBeatSpec(raw: Json): StoredBeatSpec | null {
@@ -280,11 +290,22 @@ export function parseStoredBeatSpec(raw: Json): StoredBeatSpec | null {
     onSuccess: strings(obj.on_success),
     onPartial: strings(obj.on_partial),
     onFailure: strings(obj.on_failure),
+    ...(typeof obj.node_key === 'string' ? { nodeKey: obj.node_key } : {}),
   }
 }
 
-function specState(spec: StoredBeatSpec): EncounterSpecState {
-  return { onSuccess: spec.onSuccess, onPartial: spec.onPartial, onFailure: spec.onFailure, params: spec.params }
+/**
+ * The ONE place a stored beat spec becomes the hidden encounter state. Exported because the
+ * puzzle and social openers each rebuilt this by hand and silently dropped `nodeKey` - so their
+ * resolutions carried no node, the navigator could not find the node that just resolved, and it
+ * fell back to "next unused route node". The authored transitions (and their arrival_context)
+ * were being discarded on every non-skill encounter (live 2026-07-26).
+ */
+export function specState(spec: StoredBeatSpec): EncounterSpecState {
+  return {
+    onSuccess: spec.onSuccess, onPartial: spec.onPartial, onFailure: spec.onFailure, params: spec.params,
+    ...(spec.nodeKey ? { nodeKey: spec.nodeKey } : {}),
+  }
 }
 
 /** Instantiates a skill-challenge frame from a stored spec (authored or ad-hoc). */
@@ -295,9 +316,10 @@ export async function openSkillChallengeFromSpec(
   spec: StoredBeatSpec,
 ): Promise<EncounterState> {
   const num = (v: Json | undefined, fallback: number) => (typeof v === 'number' ? v : fallback)
+  const pacing = pacingFor((await loadState(service, env.adventureId)).state)
   const challenge = newSkillChallenge({
-    neededSuccesses: num(spec.params.needed_successes, 3),
-    maxFailures: num(spec.params.max_failures, 2),
+    neededSuccesses: biasedSuccesses(num(spec.params.needed_successes, 3), pacing),
+    maxFailures: biasedFailures(num(spec.params.max_failures, 2), pacing),
     suggestedSkills: Array.isArray(spec.params.suggested_skills)
       ? (spec.params.suggested_skills as Json[]).filter((s): s is string => typeof s === 'string')
       : [],
@@ -557,6 +579,7 @@ export async function handleChallengeIntent(
       knownLocations: [],
       knownNpcs: [],
       milestones: [],
+      dcShift: pacingFor(state).dcShift,
     })
   } catch (err) {
     await commitDiffs(service, env.adventureId, () => [typingDiff(false)])

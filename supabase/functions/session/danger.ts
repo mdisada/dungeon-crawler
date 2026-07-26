@@ -10,8 +10,11 @@ import {
   dangerScore, fallbackEncounterTable, parseEncounterTable, pickWeighted, rollSpawn, seededRng,
 } from '../_shared/play/index.ts'
 import type { EncounterTableEntry } from '../_shared/play/index.ts'
+import { biasedDangerBase } from '../_shared/story/index.ts'
 import type { Json } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
+// pacing.ts imports nothing from session/, so this keeps danger.ts a leaf.
+import { pacingFor } from './pacing.ts'
 import { assertOk, loadState, logEvent } from './util.ts'
 
 export type SpawnTrigger = 'scene_travel' | 'advance_day' | 'encounter_failure' | 'loud_action'
@@ -40,7 +43,13 @@ export async function maybeSpawnEncounter(
   const { data: location } = locationId
     ? await service.from('locations').select('name, danger, encounter_table').eq('id', locationId).maybeSingle()
     : { data: null }
-  const base = typeof location?.danger === 'number' ? location.danger : 0
+  // The location's authored danger, shifted by the adventure's difficulty. Applied to the BASE
+  // rather than the final score so the world's own state (night, antagonist progress, noise) still
+  // layers on top and an Easy adventure can still become dangerous through play.
+  const base = biasedDangerBase(
+    typeof location?.danger === 'number' ? location.danger : 0,
+    pacingFor(state),
+  )
 
   const { data: meta } = await service
     .from('meta_loop')

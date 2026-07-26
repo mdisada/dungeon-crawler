@@ -4,6 +4,10 @@
 // runs under Vitest, the frontend bundle, and the Deno edge runtime (relative imports with
 // explicit .ts extensions, no platform APIs).
 
+// pacing.ts is dependency-free by construction, so this does not make the state contract depend
+// on the story engine - only on its difficulty table.
+import type { PacingProfile } from '../story/pacing.ts'
+
 export type Json = string | number | boolean | null | Json[] | { [key: string]: Json }
 
 export type SceneMode = 'narration' | 'roleplay' | 'battle' | 'puzzle' | 'downtime'
@@ -79,12 +83,35 @@ export interface DialogueState {
   speakers: SpeakerSlot[]
   /** "DM is thinking" indicator while a blocking agent call runs (F07 SS4). */
   typing: boolean
+  /**
+   * When `typing` was last raised (ISO), or null when it is down. This is the ONLY monotonic
+   * signal that a turn has orphaned itself: a worker killed mid-call never reaches its catch
+   * block, so `typing` stays true forever. The original self-heal keyed on event-log silence
+   * instead, which any background write refreshes - live 2026-07-26 a turn hit the edge
+   * function's wall clock at 150s and the next 22 turns were all rejected with "The DM is
+   * thinking - one moment" because the log never went quiet for long enough.
+   */
+  typingSince?: string | null
   /** The one live check/assist prompt, or null. */
   pending: PendingPromptState | null
   /** Scene-scoped social openings; cleared when the encounter ends. */
   openings: OpeningState[]
   /** PC the current speaker is addressing directly (F10 SS3.7 thumbnail highlight). */
   addressedCharacterId: string | null
+  /**
+   * The open story node's authored affordances (2026-07-26) - shown as choice chips beside the
+   * free-text box. SUGGESTIONS, never the only input: clicking one prefills the input so the
+   * player can edit or ignore it, which keeps play a declaration rather than a menu selection and
+   * keeps every player on equal footing (the reason the VN-style Continue button was rejected).
+   */
+  suggestedChoices?: SuggestedChoice[]
+}
+
+export interface SuggestedChoice {
+  /** Matches an authored affordance; submitted UNEDITED it bypasses the entry mapper entirely. */
+  key: string
+  label: string
+  hint: string
 }
 
 export interface HpState {
@@ -131,6 +158,17 @@ export interface CombatState {
   economy: ActionEconomy
 }
 
+/** One character's private stake (2026-07-26). Party-visible like a name or class - the client
+ *  emphasizes your own. Reward-only by construction: nothing here gates the main story. */
+export interface PersonalStake {
+  /** The 2-3 sentence "why you are here", shown once at session start and kept on the card. */
+  intro: string
+  objectiveLabel: string
+  status: 'active' | 'completed' | 'failed'
+  /** Player-facing reward summary ("25 gp", "a captain's favour"), empty when unstated. */
+  reward: string
+}
+
 export interface PlayerView {
   userId: string
   characterId: string
@@ -138,6 +176,7 @@ export interface PlayerView {
   connected: boolean
   hp: HpState
   conditions: string[]
+  personal?: PersonalStake | null
 }
 
 export interface PlayersState {
@@ -207,8 +246,6 @@ export interface DmSettingsState {
   autoChecks: boolean
   /** Idle-nudge threshold in minutes (F08 SS9.1); absent = default 3. */
   nudgeMinutes?: number
-  /** Stuck-hint auto-detector threshold in no-progress turns; absent = default 3. */
-  hintTurns?: number
   /** Progress Director threshold overrides (Phase 3); absent fields use the defaults. */
   directorThresholds?: {
     nudge?: number
@@ -218,6 +255,13 @@ export interface DmSettingsState {
     failForward?: number
     offerPressure?: number
   }
+  /**
+   * The adventure's resolved difficulty/pacing profile, written once at session start from
+   * `adventures.difficulty_setting` (2026-07-27). Stored resolved rather than as preset+overrides
+   * so every hot path is one state read with no table hit and no re-derivation. `directorThresholds`
+   * above still wins where it is set - that is the DM's live override, this is the creator's setup.
+   */
+  pacing?: PacingProfile
 }
 
 export interface ReviewCandidate {
@@ -295,6 +339,9 @@ export interface EncounterSpecState {
   params?: Json
   /** Hidden half of the interrupted encounter, restored with its frame (Slice 6). */
   interrupted?: EncounterSpecState | null
+  /** The authored story node this encounter came from (2026-07-26). Carried so the resolution
+   *  event names it and the navigator can follow that node's transition for the tier. */
+  nodeKey?: string
 }
 
 /** DM-only domains, stripped from player resyncs and broadcast on dm:{id} only. */
@@ -417,9 +464,11 @@ export function initialGameState(): GameState {
       activeLineId: null,
       speakers: [],
       typing: false,
+      typingSince: null,
       pending: null,
       openings: [],
       addressedCharacterId: null,
+      suggestedChoices: [],
     },
     combat: null,
     players: { list: [], gold: 0 },

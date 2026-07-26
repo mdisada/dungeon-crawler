@@ -1,9 +1,13 @@
+import type { DifficultyPreset, PacingOverrides } from '@rules/story/pacing'
+
 export type AdventureMode = 'full_ai' | 'assist'
 export type AdventureType = 'one_shot' | 'multi_chapter'
 export type AdventureStatus = 'draft' | 'generating' | 'guide_ready' | 'active' | 'completed' | 'archived'
 
-export const DIFFICULTY_PRESETS = ['easy', 'standard', 'hard', 'deadly'] as const
-export type DifficultyPreset = (typeof DIFFICULTY_PRESETS)[number]
+// The preset list and its per-knob profiles live in the rules package - the guide pipeline and the
+// session runtime read the same table, so a second copy here would be a drift waiting to happen.
+export { DIFFICULTY_PRESETS } from '@rules/story/pacing'
+export type { DifficultyPreset, PacingOverrides } from '@rules/story/pacing'
 
 export const PLAYER_BOUNDS = { min: 1, max: 8 } as const
 export const CHAPTER_BOUNDS = { min: 2, max: 12 } as const
@@ -30,6 +34,8 @@ export interface Adventure {
   status: AdventureStatus
   narratorVoiceId: string | null
   difficultyPreset: DifficultyPreset | null
+  /** Only the knobs the creator moved off the preset; empty is the normal case. */
+  pacingOverrides: PacingOverrides
   createdAt: string
   updatedAt: string
 }
@@ -45,6 +51,7 @@ export interface AdventureDraft {
   plotIdea: string
   plotHistory: PlotHistory
   difficultyPreset: DifficultyPreset | null
+  pacingOverrides: PacingOverrides
 }
 
 export function toDraftFields(adventure: Adventure): AdventureDraft {
@@ -58,5 +65,6 @@ export function toDraftFields(adventure: Adventure): AdventureDraft {
     plotIdea: adventure.plotIdea,
     plotHistory: adventure.plotHistory,
     difficultyPreset: adventure.difficultyPreset,
+    pacingOverrides: adventure.pacingOverrides,
   }
 }

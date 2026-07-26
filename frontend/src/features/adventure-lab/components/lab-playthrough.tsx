@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
-import type { Issue, Playthrough, RowSeverity, Turn } from '../types'
+import type { Playthrough, RowSeverity, Turn } from '../types'
 
 const SEV_TEXT: Record<RowSeverity, string> = {
   info: 'text-foreground/90',
@@ -9,49 +9,13 @@ const SEV_TEXT: Record<RowSeverity, string> = {
   issue: 'text-destructive',
 }
 
-function jumpToTurn(index: number) {
-  document.getElementById(`turn-${index}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-}
-
-function IssuesPanel({ issues }: { issues: Issue[] }) {
-  const [open, setOpen] = useState(true)
-  if (issues.length === 0) {
-    return (
-      <div className="rounded-md border border-emerald-600/40 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400">
-        No anomalies flagged.
-      </div>
-    )
-  }
-  return (
-    <div className="rounded-md border border-amber-500/50">
-      <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold">
-        ⚠️ {issues.length} thing{issues.length === 1 ? '' : 's'} to check
-        <span className="ml-auto text-xs font-normal text-muted-foreground">{open ? 'hide' : 'show'}</span>
-      </button>
-      {open && (
-        <ul className="max-h-44 overflow-y-auto border-t">
-          {issues.map((issue) => (
-            <li key={issue.eventId}>
-              <button
-                type="button"
-                onClick={() => jumpToTurn(issue.turnIndex)}
-                className={`flex w-full gap-2 px-3 py-1 text-left text-xs hover:bg-muted/50 ${issue.severity === 'issue' ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'}`}
-              >
-                <span className="shrink-0 text-muted-foreground">turn {issue.turnIndex}</span>
-                <span className="truncate">{issue.text}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-function TurnCard({ turn }: { turn: Turn }) {
+function TurnCard({ turn, highlight }: { turn: Turn; highlight?: boolean }) {
   const [raw, setRaw] = useState(false)
   return (
-    <div id={`turn-${turn.index}`} className={`scroll-mt-2 rounded-md border ${turn.issueCount > 0 ? 'border-amber-500/50' : ''}`}>
+    <div
+      id={`turn-${turn.index}`}
+      className={`scroll-mt-2 rounded-md border ${highlight ? 'ring-2 ring-amber-500' : ''} ${turn.issueCount > 0 ? 'border-amber-500/50' : ''}`}
+    >
       <div className="flex items-baseline gap-2 border-b bg-muted/30 px-3 py-1.5">
         <span className="shrink-0 text-xs font-semibold">{turn.label}</span>
         {turn.player !== null && (
@@ -93,14 +57,18 @@ function TurnCard({ turn }: { turn: Turn }) {
   )
 }
 
-export function LabPlaythrough({ playthrough }: { playthrough: Playthrough }) {
+export function LabPlaythrough({ playthrough, jumpTo }: { playthrough: Playthrough; jumpTo?: number | null }) {
+  // A click from the Narration tab lands here; scroll the target turn into view once it's painted.
+  useEffect(() => {
+    if (jumpTo == null) return
+    const el = document.getElementById(`turn-${jumpTo}`)
+    if (el) requestAnimationFrame(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }, [jumpTo])
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
-      <IssuesPanel issues={playthrough.issues} />
-      <div className="min-h-0 flex-1 overflow-y-auto rounded-md border p-2">
-        <div className="flex flex-col gap-3">
-          {playthrough.turns.map((turn) => <TurnCard key={turn.index} turn={turn} />)}
-        </div>
+    <div className="min-h-0 flex-1 overflow-y-auto rounded-md border p-2">
+      <div className="flex flex-col gap-3">
+        {playthrough.turns.map((turn) => <TurnCard key={turn.index} turn={turn} highlight={turn.index === jumpTo} />)}
       </div>
     </div>
   )

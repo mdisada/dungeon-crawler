@@ -5,14 +5,15 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import {
-  classifyIntent, dmSettings, liveRng, promptDeadline, promptExpired, rollCheck,
-  ASSIST_PROMPT_WINDOW_S, GROUP_PROMPT_WINDOW_S, SOLO_PROMPT_WINDOW_S,
+  classifyIntent, dmSettings, isLogSilent, isTypingStale, liveRng, promptDeadline, promptExpired,
+  rollCheck, ASSIST_PROMPT_WINDOW_S, GROUP_PROMPT_WINDOW_S, SOLO_PROMPT_WINDOW_S,
 } from '../_shared/play/index.ts'
 import type { CheckSpec, IntentRoute, PendingPrompt } from '../_shared/play/index.ts'
 import type { GameState, Json, PendingPromptState } from '../_shared/state/index.ts'
 import { runAdjudicator } from './agents.ts'
 import type { AgentEnv, SceneEffects } from './agents.ts'
 import { narrationBeat } from './narration.ts'
+import { pacingFor } from './pacing.ts'
 import { handleSay } from './npc-dialogue.ts'
 import { endEncounter, startSocial } from './social-staging.ts'
 import { maybeSpawnEncounter } from './danger.ts'
@@ -91,6 +92,28 @@ async function spendDeadlines(
   }
 }
 
+/**
+ * Is the table wedged, or is the DM genuinely mid-turn? Age of `typing` is authoritative because
+ * nothing can refresh it (see _shared/play/liveness.ts); the event-log rule survives only for
+ * pre-existing sessions whose state has no `typingSince` yet.
+ */
+async function tableIsWedged(
+  service: SupabaseClient,
+  adventureId: string,
+  state: GameState,
+): Promise<boolean> {
+  const now = new Date()
+  if (state.dialogue.typingSince) return isTypingStale(state.dialogue.typingSince, now)
+  const { data: lastEvent } = await service
+    .from('event_log')
+    .select('created_at')
+    .eq('adventure_id', adventureId)
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return isLogSilent((lastEvent?.created_at as string) ?? null, now)
+}
+
 export async function playerIntent(
   service: SupabaseClient,
   adventureId: string,
@@ -106,6 +129,10 @@ export async function playerIntent(
   const text = String(body.text ?? '').slice(0, 2000)
   const targetId = body.target_id ? String(body.target_id) : null
   const skill = body.skill ? String(body.skill) : null
+  // Set only when the player submitted an authored choice chip UNEDITED (2026-07-26) - the
+  // client drops it the moment the prefilled text is touched. Validated against the open node's
+  // real affordances downstream; an unknown key simply falls through to the mapper.
+  const affordanceKey = body.affordance_key ? String(body.affordance_key).slice(0, 64) : null
 
   // Superseded-by-events rule (F07 SS4): stale pending proposals expire as play moves on.
   await expireStaleProposals(service, adventureId)
@@ -133,23 +160,25 @@ export async function playerIntent(
         return { status: 409, body: { error: 'The moment resolved itself - go again', swept: true } }
       }
     }
-    // Self-heal a dead pipeline: a worker killed mid-call (WORKER_RESOURCE_LIMIT, seen live)
-    // never reaches its catch block, so typing:true - or a pending prompt orphaned after its
-    // roll - would lock the table forever. If nothing has been logged for 2 minutes, the DM
-    // is not thinking and no flow is coming back for the prompt: clear both and proceed.
-    const { data: lastEvent } = await service
-      .from('event_log')
-      .select('created_at')
-      .eq('adventure_id', adventureId)
-      .order('id', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    const lastAt = lastEvent ? new Date(lastEvent.created_at as string).getTime() : 0
-    if (Date.now() - lastAt < 120_000) {
+    // Self-heal a dead pipeline: a worker killed mid-call (WORKER_RESOURCE_LIMIT, or the edge
+    // function's own wall clock) never reaches its catch block, so typing:true - or a pending
+    // prompt orphaned after its roll - would lock the table forever.
+    //
+    // The signal is how long `typing` has been UP, not how long the event log has been quiet.
+    // Silence was the original test and it is refreshable: any background write resets it, so a
+    // table can stay locked indefinitely while work trickles in around it. Live 2026-07-26, one
+    // turn hit the wall clock at 150s and the following 22 turns were all rejected - the log
+    // never went quiet for two consecutive minutes, so the heal never ran and the run ended
+    // with a dead table.
+    if (!(await tableIsWedged(service, adventureId, row.state))) {
       return row.state.dialogue.pending
         ? { status: 409, body: { error: 'Resolve the current check first' } }
         : { status: 409, body: { error: 'The DM is thinking - one moment' } }
     }
+    await logEvent(service, adventureId, null, 'incident', {
+      kind: 'typing_self_healed', typing_since: row.state.dialogue.typingSince ?? null,
+      had_pending: Boolean(row.state.dialogue.pending),
+    }).catch(() => {})
     await commitDiffs(service, adventureId, () => [...pendingDiffs(null, null), typingDiff(false)])
   }
   // Slice 2 table lock: one gist review at a time; nothing else moves until the DM decides.
@@ -243,7 +272,7 @@ export async function playerIntent(
     }
     case 'entry': {
       const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
-      result = await handleCutsceneIntent(service, env, play.sessionId, character, text, kind)
+      result = await handleCutsceneIntent(service, env, play.sessionId, character, text, kind, { affordanceKey })
       break
     }
     case 'fast_path':
@@ -395,6 +424,7 @@ async function adjudicate(
       knownLocations: ((locationRows.data ?? []) as { name: string }[]).map((l) => l.name),
       knownNpcs: ((npcRows.data ?? []) as { name: string }[]).map((n) => n.name),
       milestones: [...new Set([...vocab.flags, ...vocab.events, ...vocab.facts])],
+      dcShift: pacingFor(state).dcShift,
     })
   } catch (err) {
     await commitDiffs(service, adventureId, () => [typingDiff(false)])
@@ -705,9 +735,9 @@ async function dmCommand(
     if (typeof body.nudge_minutes === 'number' && body.nudge_minutes >= 1) {
       patch.nudgeMinutes = Math.min(60, Math.round(body.nudge_minutes))
     }
-    if (typeof body.hint_turns === 'number' && body.hint_turns >= 1) {
-      patch.hintTurns = Math.min(20, Math.round(body.hint_turns))
-    }
+    // `hint_turns` was removed 2026-07-27. It configured the stuck-hint ladder the Progress
+    // Director replaced, and nothing had read it since - a DM could set it and change nothing.
+    // Use `director_thresholds` below instead.
     // Progress Director thresholds (Phase 3/4). DM-tunable per MAIN-SPEC - a table that wants
     // to be left alone raises them, and a test run lowers them to reach the rescue rungs
     // without playing 15 stalled turns. Each field is independently optional.
@@ -716,14 +746,19 @@ async function dmCommand(
       const clamp = (v: unknown) =>
         typeof v === 'number' && v >= 1 ? Math.min(60, Math.round(v)) : undefined
       const thresholds: Record<string, number> = {}
-      for (const key of ['nudge', 'reveal', 'replanBeat', 'guaranteedRoute', 'failForward', 'offerPressure']) {
+      // The two *OnObjective clocks were missing here while `thresholdsFor` read them, so the only
+      // limits that survive a party churning through failures were unreachable at runtime.
+      for (const key of [
+        'nudge', 'reveal', 'replanBeat', 'guaranteedRoute', 'failForward', 'offerPressure',
+        'guaranteedRouteOnObjective', 'failForwardOnObjective',
+      ]) {
         const value = clamp(raw[key])
         if (value !== undefined) thresholds[key] = value
       }
       if (Object.keys(thresholds).length > 0) patch.directorThresholds = thresholds as unknown as Json
     }
     if (Object.keys(patch).length === 0) {
-      return { status: 400, body: { error: 'auto_dialogue, auto_checks, nudge_minutes, hint_turns, or director_thresholds required' } }
+      return { status: 400, body: { error: 'auto_dialogue, auto_checks, nudge_minutes, or director_thresholds required' } }
     }
     // Always write the full settings object so partial pre-Slice-2 states heal to a complete shape.
     const after = await commitDiffs(service, adventureId, (s) => [

@@ -202,8 +202,15 @@ export function appendLinesDiff(state: GameState, lines: DialogueLine[], extra?:
   }
 }
 
+/**
+ * Raising `typing` stamps WHEN, so a turn that dies without reaching its catch block can be
+ * detected by age rather than by hoping the event log goes quiet (see DialogueState.typingSince).
+ */
 export function typingDiff(typing: boolean): StateDiff {
-  return { domain: 'dialogue', patch: { typing } }
+  return {
+    domain: 'dialogue',
+    patch: { typing, typingSince: typing ? new Date().toISOString() : null },
+  }
 }
 
 /** Sets/clears the single blocking prompt + its server-side context stash (dm-only). */

@@ -18,9 +18,10 @@
  * @param {object} ctx.state          final game state
  * @param {Array} ctx.turnStats
  * @param {Array} ctx.incidents
+ * @param {Array} [ctx.resolutions]   encounter_resolved payloads - drives the graph-health checks
  * @returns {{ ok: boolean, violations: string[] }}
  */
-export function checkInvariants({ eventCounts, state, turnStats, incidents }) {
+export function checkInvariants({ eventCounts, state, turnStats, incidents, resolutions = [] }) {
   const violations = []
   // Split by what the finding MEANS, not by how alarming it sounds. `fatal` means the story
   // engine cannot advance, so every further turn is wasted money - abort. `warnings` are real
@@ -78,6 +79,55 @@ export function checkInvariants({ eventCounts, state, turnStats, incidents }) {
   if (blind >= 5) warnings.push(`${blind} turns produced neither narration nor dialogue`)
   if (turnStats.length >= 20 && blind >= turnStats.length * 0.5) {
     violations.push(`${blind}/${turnStats.length} turns produced nothing the player could read`)
+  }
+
+  // --- authored-graph health (added 2026-07-27) --------------------------------------------
+  //
+  // Run 9ed8729b reported quality "good" and 3 objectives completed while the spine was not
+  // working at all: three of five encounter resolutions credited nothing, both remaining
+  // objectives were finished by the recognition judge rather than by an authored outcome map, and
+  // one objective re-arrived at the same dead end three times. Every check above passed, because
+  // they all ask "did SOMETHING happen" and the safety nets guaranteed that something did.
+  //
+  // These three ask the sharper question: did the story advance the way it was authored to, or
+  // did the fallbacks carry it? A run the safety nets rescued is not a passing run - it is a
+  // failing run with the evidence hidden.
+  const barren = resolutions.filter((r) => (r?.milestones ?? []).length === 0).length
+  if (resolutions.length >= 4 && barren >= Math.ceil(resolutions.length * 0.5)) {
+    violations.push(
+      `${barren}/${resolutions.length} encounter resolutions credited no milestone - the outcome ` +
+      'maps are not what is moving the story')
+  }
+
+  // The recognition judge exists to catch what the deterministic path missed. When it is
+  // completing MORE objectives than the outcome maps are, it has stopped being a safety net.
+  const recognized = count('objective_recognized')
+  const completed = count('objective_completed')
+  if (completed > 0 && recognized >= completed) {
+    warnings.push(
+      `${recognized} objective(s) credited by the recognition judge vs ${completed} completed - ` +
+      'the safety net is doing the spine\'s job')
+  }
+
+  // The navigator arriving at the same non-decision over and over. Whatever the reason, a party
+  // that keeps being told "nothing to open" is a party standing still.
+  if (count('graph_navigation_exhausted') >= 3) {
+    violations.push(
+      `the navigator found nothing to open ${count('graph_navigation_exhausted')}x - the authored ` +
+      'graph is running dry mid-objective')
+  }
+
+  // `graph_navigation_stopped` is the HEALTHY stop: an authored success edge saying "the objective
+  // resolves here". One per objective is normal. Many more than that means a node keeps reporting
+  // the objective finished while the objective stays open - the party arrives at the same
+  // non-decision repeatedly, which is precisely how the null-target dead end presented before it
+  // was diagnosed (six stops, three objectives, one of them hit three times).
+  // One stop per objective is the healthy shape; one spare absorbs a legitimate retry.
+  const stopped = count('graph_navigation_stopped')
+  if (stopped >= 3 && stopped > completed + 1) {
+    violations.push(
+      `${stopped} navigation stops against ${completed} completed objective(s) - a node keeps ` +
+      'reporting its objective resolved while the objective stays open')
   }
 
   return { ok: violations.length === 0, violations, warnings }

@@ -8,7 +8,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { dialogueGateActive, dmSettings } from '../_shared/play/index.ts'
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
-import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions } from './agents.ts'
+import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions, runOutcomeClaimCheck } from './agents.ts'
 import type { AgentEnv, NarrationStyle } from './agents.ts'
 import { buildCanon } from './canon.ts'
 import { retrieveMemories } from './memory.ts'
@@ -81,6 +81,51 @@ async function claimGuard(
   return retry.violations.length === 0 ? second : draft
 }
 
+/**
+ * Premature-resolution guard (2026-07-26). While an encounter is OPEN its outcome belongs to the
+ * engine - the tier the party plays to, and the outcome map that tier selects. Prose that
+ * declares the goal already won or lost puts the transcript ahead of the state, and every line
+ * after it inherits the contradiction.
+ *
+ * Only runs while something is actually open, so a cutscene (where narration SHOULD move things
+ * along) is untouched. One constrained regeneration; a second claim keeps the prose and logs -
+ * same trade the consistency pass settled on, for the same reason (guaranteed-bad canned text is
+ * worse than a slightly over-eager sentence).
+ */
+async function outcomeGuard(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  draft: string,
+  state: GameState,
+  regenerate: (constraint: string) => Promise<string>,
+): Promise<string> {
+  const encounter = state.encounter
+  if (OUTCOME_CLAIM_CHECK === 'off' || !encounter) return draft
+  const goal = `${encounter.label}${encounter.stakes ? ` (at stake: ${encounter.stakes})` : ''}`
+  if (!(await runOutcomeClaimCheck(env, draft, goal))) return draft
+
+  await logEvent(service, env.adventureId, sessionId, 'outcome_claim_blocked', {
+    enforced: OUTCOME_CLAIM_CHECK === 'enforce', label: encounter.label, draft: draft.slice(0, 400),
+  }).catch(() => {})
+  if (OUTCOME_CLAIM_CHECK !== 'enforce') return draft
+
+  const second = await regenerate(
+    `NEVER state or imply that "${encounter.label}" has already been achieved, won, failed or ` +
+    'otherwise settled - it is still being played and only the engine decides how it ends. ' +
+    'Write the tension and the attempt, and stop short of the outcome.',
+  ).catch(() => draft)
+  return (await runOutcomeClaimCheck(env, second, goal)) ? draft : second
+}
+
+/**
+ * Rollout switch for the premature-resolution guard. Starts at 'enforce': unlike the flags
+ * checker this is a closed question against a stated goal with a safe default (false on doubt or
+ * outage), and the failure it prevents - the transcript declaring a win the state never recorded
+ * - poisons every subsequent line rather than merely reading oddly.
+ */
+export const OUTCOME_CLAIM_CHECK: 'off' | 'shadow' | 'enforce' = 'enforce'
+
 function factSheet(state: GameState): string {
   const recent = agentContextLines(state, 6)
   return [
@@ -123,6 +168,34 @@ Not present in the story yet: ${absent.join(', ')} - may be spoken about, but ca
   )
 }
 
+/**
+ * The living cast, spelled exactly as authored.
+ *
+ * `deadRosterLine` lists only the dead and absent, so a narrator that had not seen a name in the
+ * last few lines was reconstructing it from memory - and live 2026-07-26 the foreman Calder became
+ * "Calver's men" mid-scene. A misspelt NPC is not a cosmetic slip: NPC references elsewhere match
+ * by name, so the wrong spelling is a person who does not exist.
+ *
+ * Cheap and bounded (an adventure has a handful of NPCs), and it is the "code supplies the
+ * information" fix rather than an instruction the model has to remember.
+ */
+async function castRosterLine(
+  service: SupabaseClient,
+  adventureId: string,
+  npcStates: Record<string, string>,
+): Promise<string> {
+  const { data } = await service
+    .from('npcs')
+    .select('id, name, initial_state')
+    .eq('adventure_id', adventureId)
+  const living = ((data ?? []) as { id: string; name: string; initial_state: string }[])
+    .filter((n) => (npcStates[n.id] ?? n.initial_state ?? 'alive') === 'alive')
+    .map((n) => n.name)
+    .filter(Boolean)
+  if (living.length === 0) return ''
+  return `\nPeople in this story, spelled EXACTLY as written - never alter or approximate a name: ${living.join(', ')}.`
+}
+
 export const MECHANICAL_FALLBACK = 'The attempt is resolved; the outcome stands.'
 
 /**
@@ -145,7 +218,8 @@ export async function publishNarration(
   // off limits, which is a judgement, so it goes to the checker as a fact rather than a
   // deterministic name-match block (which fell back to mechanical text, live 2026-07-21).
   const preexisting = await deadRosterLine(service, env.adventureId, npcStates)
-  const facts = `${factSheet(state)}${preexisting}`
+  const cast = await castRosterLine(service, env.adventureId, npcStates)
+  const facts = `${factSheet(state)}${preexisting}${cast}`
   // Retrieval memory (Slice 7): long-form cutscenes ground on what past sessions established.
   const memories = style === 'exposition' ? await retrieveMemories(service, env, prompt) : []
   const memoryLines = memories.length > 0
@@ -170,6 +244,8 @@ export async function publishNarration(
   try {
     text = await runNarrator(env, grounded, undefined, style)
     text = await claimGuard(service, env, sessionId, text, canon, (constraint) =>
+      runNarrator(env, grounded, constraint, style))
+    text = await outcomeGuard(service, env, sessionId, text, state, (constraint) =>
       runNarrator(env, grounded, constraint, style))
     let verdict = await runConsistency(env, text, canon.npcs, canon.npcStates, canon.text, { restrictions: canon.restrictions })
     if (!verdict.ok) {

@@ -11,9 +11,10 @@ import { LabTabs } from './lab-tabs'
 import { NarrationView } from './narration-view'
 import { RunForm } from './run-form'
 import { RunsList } from './runs-list'
+import { SummaryView } from './summary-view'
 
 const SIDE_TABS = ['runs', 'generate'] as const
-const MAIN_TABS = ['narration', 'logs', 'guide'] as const
+const MAIN_TABS = ['narration', 'logs', 'summary', 'guide'] as const
 
 export function AdventureLabPage() {
   const { session } = useSession()
@@ -24,6 +25,7 @@ export function AdventureLabPage() {
   const [pickedAdv, setPickedAdv] = useState<string | null>(null)
   const [sideTab, setSideTab] = useState<(typeof SIDE_TABS)[number]>('runs')
   const [mainTab, setMainTab] = useState<(typeof MAIN_TABS)[number]>('logs')
+  const [jumpTurn, setJumpTurn] = useState<number | null>(null)
 
   // Until the user picks one, follow the newest inspectable run - derived, not synced in an effect.
   const selectedAdv = pickedAdv ?? entries.find((e) => e.adventureId)?.adventureId ?? null
@@ -62,8 +64,16 @@ export function AdventureLabPage() {
         {inspectError && <p className="rounded-md border border-destructive p-2 text-sm text-destructive">{inspectError}</p>}
         {!selectedAdv && <p className="p-4 text-sm text-muted-foreground">Pick a run to inspect its playthrough.</p>}
         {selectedAdv && !playthrough && loading && <p className="p-4 text-sm text-muted-foreground">Loading…</p>}
-        {playthrough && mainTab === 'narration' && <NarrationView lines={playthrough.narration} />}
-        {playthrough && mainTab === 'logs' && <LabPlaythrough playthrough={playthrough} />}
+        {playthrough && mainTab === 'narration' && (
+          <NarrationView
+            lines={playthrough.narration}
+            onPickTurn={(turnIndex) => { setJumpTurn(turnIndex); setMainTab('logs') }}
+          />
+        )}
+        {playthrough && mainTab === 'logs' && <LabPlaythrough playthrough={playthrough} jumpTo={jumpTurn} />}
+        {playthrough && mainTab === 'summary' && (
+          <SummaryView playthrough={playthrough} onPickTurn={(turnIndex) => { setJumpTurn(turnIndex); setMainTab('logs') }} />
+        )}
         {playthrough && mainTab === 'guide' && <GuideOverlay guide={playthrough.guide} />}
       </div>
     </div>

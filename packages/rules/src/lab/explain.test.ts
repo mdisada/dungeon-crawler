@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { annotateNarration, buildGuideView, buildPlaythrough, explainEvent } from './index.ts'
+import { annotateNarration, buildGuideView, buildPlaythrough, explainEvent, narrationKey } from './index.ts'
 import type { ExplainContext, PlayEvent } from './index.ts'
 
 const ctx: ExplainContext = {
@@ -80,6 +80,21 @@ describe('annotateNarration', () => {
     expect(out.map((l) => l.flag)).toEqual([null, null, 'fallback', null, 'duplicate'])
     expect(out[0].speaker).toBeNull()
     expect(out[1].speaker).toBe('Bram')
+  })
+
+  it('correlates each line to its Logs turn; NPC lines inherit the surrounding turn', () => {
+    const lines = [
+      { speaker: null, text: 'You stand in Oakhaven.' },
+      { speaker: 'Bram', text: 'I head to the chapel.' },
+      { speaker: null, text: 'The chapel doors groan inward.' },
+      { speaker: 'Old Man Hemlock', text: 'Welcome, traveler.' }, // npc reply — no text anchor
+    ]
+    const anchors = [
+      { turnIndex: 0, text: narrationKey('You stand in Oakhaven.') },
+      { turnIndex: 1, text: narrationKey('I head to the chapel.') },
+      { turnIndex: 1, text: narrationKey('The chapel doors groan inward.') },
+    ]
+    expect(annotateNarration(lines, anchors).map((l) => l.turnIndex)).toEqual([0, 1, 1, 1])
   })
 })
 

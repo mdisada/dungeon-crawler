@@ -58,7 +58,9 @@ type Explainer = (p: Record<string, unknown>, ctx: ExplainContext) => Explained 
 // curated view (still visible in raw). Order is irrelevant; this is a lookup, not a sequence.
 const EXPLAINERS: Record<string, Explainer> = {
   session_started: (p) => ({ icon: '▶️', text: `Session ${n(p.index)} begins`, severity: 'info' }),
-  narration_published: (p) => ({ icon: '📖', text: `DM narrates: "${cut(p.text, 120)}"`, severity: 'info' }),
+  // Full text, not a preview: the Logs tab is the bug-review surface and the whole DM narration
+  // is what a reader needs to judge repetition, contradictions, and off-tone prose.
+  narration_published: (p) => ({ icon: '📖', text: `DM narrates: "${s(p.text)}"`, severity: 'info' }),
 
   // --- the per-reply pipeline the user most wants to read ---
   check_prompted: (p) => ({

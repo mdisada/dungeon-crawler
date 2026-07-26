@@ -19,6 +19,7 @@ import type {
 import type { AgentEnv } from './agents.ts'
 import { minimalSatisfyingAtoms } from '../_shared/guide/guaranteed-route.ts'
 import { parseStoredBeatSpec, runCombatPlaceholderEncounter } from './encounters.ts'
+import { navigateAndOpen } from './graph-navigator.ts'
 import { narrationBeat } from './narration.ts'
 import { loadPartyCharacters, loadPlayContext, partyProfileLines, partySkillList } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
@@ -35,6 +36,15 @@ import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
  * safer than persisting an encounter that can never open).
  */
 export const PLANNER_CREATES_NPCS = true
+
+/**
+ * Authored-story-graph switch (overhaul 2026-07-26). When true, an objective that has authored
+ * `story_nodes` is NAVIGATED - the runtime planner, encounter designer, outcome mapper and
+ * alignment repair never run for it. Guides authored before the graph have no nodes and keep
+ * the planner, so both can coexist during the rollout; the planner is deleted once regeneration
+ * coverage is proven.
+ */
+export const STORY_GRAPH_APPLIES = true
 
 /**
  * Combat budget for one story: every adventure gets ONE major fight, plus up to two smaller
@@ -173,6 +183,35 @@ async function activeObjectiveRow(service: SupabaseClient, state: GameState) {
   } | null
 }
 
+/**
+ * Ladder + combat pacing facts, shared by the authored-graph path and the legacy planner.
+ *
+ * isClimax: the active objective is the LAST one left, so this beat is the set-piece everything
+ * built toward. The `resolvedCount >= 1` clause is load-bearing - without an arc behind it,
+ * `remaining <= 1` is true on turn ONE of a single-objective quest, which flagged the opening
+ * beat as the finale and completed the quest before the party acted ($0 suite, 2026-07-24).
+ */
+async function paceFacts(service: SupabaseClient, adventureId: string, hasObjective: boolean) {
+  const { data: objectiveLadder } = await service
+    .from('objectives').select('id, reveal_state').eq('adventure_id', adventureId)
+  const ladder = (objectiveLadder ?? []) as { id: string; reveal_state: string }[]
+  const remaining = ladder.filter((o) => o.reveal_state === 'hidden' || o.reveal_state === 'active')
+  const resolvedCount = ladder.length - remaining.length
+  const { count: combatRows } = await service
+    .from('event_log').select('id', { count: 'exact', head: true })
+    .eq('adventure_id', adventureId).eq('type', 'encounter_opened').eq('payload->>kind', 'combat')
+  const totalObjectives = ladder.length
+  return {
+    ladder,
+    remaining,
+    resolvedCount,
+    isClimax: hasObjective && remaining.length <= 1 && resolvedCount >= 1,
+    combatCount: combatRows ?? 0,
+    totalObjectives,
+    pastMidpoint: totalObjectives > 0 && remaining.length * 2 <= totalObjectives,
+  }
+}
+
 /** The rescue route's provably-satisfying atoms, for the fail-closed alignment (Phase 4). */
 function guaranteedRouteAtoms(raw: Json): string[] {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return []
@@ -214,6 +253,26 @@ export async function planAndOpenBeat(
     service.from('ingredients').select('id, type, reveals').eq('adventure_id', env.adventureId).eq('discovered', false).limit(6),
     varietyInput(service, env.adventureId, sessionId),
   ])
+  const pace = await paceFacts(service, env.adventureId, Boolean(objective))
+
+  // --- Authored story graph (2026-07-26): navigate, do not plan. ---
+  // When the guide authored a node graph for this objective, the whole two-call planner +
+  // designer + outcome-mapper + alignment-repair sequence below is replaced by opening the node
+  // the graph already points at. Legacy guides (no nodes) fall through to the planner unchanged.
+  if (STORY_GRAPH_APPLIES && objective) {
+    const navigated = await navigateAndOpen(
+      service, env, sessionId, objective.id,
+      {
+        loop, loops, beatCount: (beatRows.data ?? []).length,
+        isClimax: pace.isClimax, combatCount: pace.combatCount, combatBudget: COMBAT_BUDGET,
+        narrationContext, trigger,
+      },
+      (before, after) => persistLoops(service, env.adventureId, before, after),
+      trigger === 'director_replan' ? 'replan_beat' : trigger === 'guaranteed_route' ? 'guaranteed_route' : null,
+    )
+    if (navigated) return navigated
+  }
+
   // The currently-open beat closes below - it belongs to the history the planner plans past.
   const completedBeatNames = ((beatRows.data ?? []) as { name: string; status: string }[])
     .filter((b) => b.status === 'completed' || b.status === 'active')
@@ -256,17 +315,7 @@ export async function planAndOpenBeat(
   // and the last of them is saved for the climax. Nothing capped this before; combat landed
   // wherever the planner felt like it (live 2026-07-23: combat clustered at the START and the
   // ending was a skill check). The cap is enforced structurally below, not just requested.
-  const { data: objectiveLadder } = await service
-    .from('objectives').select('id, reveal_state').eq('adventure_id', env.adventureId)
-  const ladder = (objectiveLadder ?? []) as { id: string; reveal_state: string }[]
-  const remaining = ladder.filter((o) => o.reveal_state === 'hidden' || o.reveal_state === 'active')
-  // A climax needs an ARC behind it, so it also requires that something already finished.
-  // Without that clause `remaining <= 1` is true on turn ONE of any single-objective quest: the
-  // opening beat got flagged as the finale, the combat floor forced it to a fight, the climax
-  // auto-open resolved it, and the whole quest completed before the party acted. Caught by the
-  // $0 suite (2026-07-24: "quest in the journal, active" came back already completed).
-  const resolvedCount = ladder.length - remaining.length
-  const isClimax = Boolean(objective) && remaining.length <= 1 && resolvedCount >= 1
+  const { remaining, isClimax, combatCount, totalObjectives, pastMidpoint } = pace
   const livingBoss = stageableNpcs(
     ((npcRoster ?? []) as { id: string; name: string; initial_state?: string | null; generated?: boolean | null; role?: string | null }[])
       .filter((n) => n.role === 'boss')
@@ -274,14 +323,8 @@ export async function planAndOpenBeat(
     liveNpcStates, { namedOnly: true },
   )[0] ?? null
   const combatGenre = LOOP_TEMPLATES[loop.type].pillars.includes('combat')
-  const { count: combatRows } = await service
-    .from('event_log').select('id', { count: 'exact', head: true })
-    .eq('adventure_id', env.adventureId).eq('type', 'encounter_opened').eq('payload->>kind', 'combat')
-  const combatCount = combatRows ?? 0
   // Past the halfway mark of the objective ladder with no fight yet: this story still owes the
   // party its major fight, and the room to place it well is running out.
-  const totalObjectives = (objectiveLadder ?? []).length
-  const pastMidpoint = totalObjectives > 0 && remaining.length * 2 <= totalObjectives
   const owesMajorFight = combatCount < COMBAT_FLOOR && (pastMidpoint || isClimax)
 
   // The major fight the story still owes the party. Stated first so it outranks the rest.

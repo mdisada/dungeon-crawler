@@ -8,15 +8,18 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { newPuzzle, puzzleSolvedTier, recordPuzzleAttempt } from '../_shared/play/index.ts'
 import type { PuzzleProgress } from '../_shared/play/index.ts'
+import { biasedFailures } from '../_shared/story/index.ts'
 import type { EncounterState, Json } from '../_shared/state/index.ts'
 import { runPuzzleJudge } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import {
   activeEncounter, handleEncounterTalk, newEncounter, openEncounter, resolveOpenEncounter,
   runCombatPlaceholderEncounter,
+  specState,
 } from './encounters.ts'
 import type { StoredBeatSpec } from './encounters.ts'
 import { narrationBeat } from './narration.ts'
+import { pacingFor } from './pacing.ts'
 import { activePcIds, appendLinesDiff, newLine, typingDiff } from './orchestrate.ts'
 import type { CharacterRow } from './orchestrate.ts'
 import { antagonistTurn } from './steward.ts'
@@ -96,15 +99,14 @@ export async function openPuzzleFromSpec(
   spec: StoredBeatSpec,
 ): Promise<EncounterState> {
   const parsed = puzzleSpec(spec.params)
+  const pacing = pacingFor((await loadState(service, env.adventureId)).state)
   const progress = newPuzzle({
     stepsTotal: parsed.steps.length,
-    maxAttempts: parsed.maxAttempts,
+    maxAttempts: biasedFailures(parsed.maxAttempts, pacing),
     activePcIds: await activePcIds(service, env.adventureId),
   })
   const encounter = newEncounter('puzzle', spec.label, spec.stakes, puzzleProgressJson(progress))
-  await openEncounter(service, env.adventureId, sessionId, encounter, {
-    onSuccess: spec.onSuccess, onPartial: spec.onPartial, onFailure: spec.onFailure, params: spec.params,
-  })
+  await openEncounter(service, env.adventureId, sessionId, encounter, specState(spec))
   await commitDiffs(service, env.adventureId, () => [{ domain: 'scene', patch: { mode: 'puzzle' } }])
   return encounter
 }

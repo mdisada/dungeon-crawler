@@ -80,14 +80,16 @@ export interface DigestRefs {
 
 /** Loads every guide entity and numbers them into stable handles (obj#1, npc#1, ...). */
 export async function buildDigest(db: SupabaseClient, adventureId: string): Promise<DigestRefs> {
-  const [chapters, objectives, npcs, locations, ingredients] = await Promise.all([
+  const [chapters, objectives, npcs, locations, ingredients, nodes] = await Promise.all([
     db.from('chapters').select('id, index, title').eq('adventure_id', adventureId).order('index'),
     db.from('objectives').select('id, chapter_id, index, title, hidden_description').eq('adventure_id', adventureId),
     db.from('npcs').select('id, name, role, description, chapter_id').eq('adventure_id', adventureId).order('created_at'),
     db.from('locations').select('id, name, description, chapter_id').eq('adventure_id', adventureId).order('created_at'),
     db.from('ingredients').select('id, type, content, reveals').eq('adventure_id', adventureId).order('created_at'),
+    db.from('story_nodes').select('id, key, kind, label, narration_seed, chapter_id, objective_id')
+      .eq('adventure_id', adventureId).order('key'),
   ])
-  for (const res of [chapters, objectives, npcs, locations, ingredients]) {
+  for (const res of [chapters, objectives, npcs, locations, ingredients, nodes]) {
     if (res.error) throw new Error(`digest load failed: ${res.error.message}`)
   }
 
@@ -100,7 +102,9 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
     (a, b) => (chapterNumber.get(a.chapter_id) ?? 0) - (chapterNumber.get(b.chapter_id) ?? 0) || a.index - b.index,
   )
 
-  const digest: GuideDigest = { objectives: new Map(), npcs: new Map(), locations: new Map(), ingredients: new Map() }
+  const digest: GuideDigest = {
+    objectives: new Map(), npcs: new Map(), locations: new Map(), ingredients: new Map(), nodes: new Map(),
+  }
   const refs = new Map<string, { table: string; id: string }>()
   const objectiveIdByHandle = new Map<string, string>()
   const entryGiverHandles: string[] = []
@@ -127,6 +131,18 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
     const text = (ing.content as { text?: string } | null)?.text ?? ing.reveals
     digest.ingredients.set(handle, `${ing.type}: ${clip(text, 140)}`)
     refs.set(handle, { table: 'ingredients', id: ing.id })
+  })
+  // Authored scenes (2026-07-26). Their prose is the newest thing that can contradict the guide,
+  // and stage 7 is the pass that catches contradictions - so it reads them too.
+  const objectiveTitle = new Map(sortedObjectives.map((o) => [o.id, o.title as string]))
+  ;(nodes.data ?? []).forEach((n, i) => {
+    const handle = `node#${i + 1}`
+    const serves = objectiveTitle.get(n.objective_id as string) ?? '?'
+    digest.nodes!.set(
+      handle,
+      `${n.kind} scene ${chapterTag(n.chapter_id)} serving "${clip(serves, 60)}" - ${clip(n.narration_seed, 160)}`,
+    )
+    refs.set(handle, { table: 'story_nodes', id: n.id })
   })
 
   return {

@@ -79,11 +79,12 @@ export interface Issue {
 
 export type NarrationFlag = 'fallback' | 'duplicate'
 
-/** One player-facing transcript line, annotated for narrative bugs detectable from the prose. */
+/** One player-facing transcript line, annotated for narrative bugs + linked to its Logs turn. */
 export interface NarrationLine {
   speaker: string | null
   text: string
   flag: NarrationFlag | null
+  turnIndex: number
 }
 
 /** The authored guide with a live play-state overlay (Guide tab). */
@@ -95,7 +96,13 @@ export interface GuideView {
   encounters: { kind: string; label: string }[]
   endings: { title: string; tone: string; status: string }[]
   clues: { text: string; type: string; discovered: boolean }[]
-  counts: { objectivesDone: number; objectivesTotal: number; cluesFound: number; cluesTotal: number }
+  /** The authored story graph and which nodes the party actually played (2026-07-26). */
+  nodes: { key: string; kind: string; role: string; label: string; choices: string[]; exits: string[]; played: boolean }[]
+  personalSlots: { key: string; label: string }[]
+  counts: {
+    objectivesDone: number; objectivesTotal: number; cluesFound: number; cluesTotal: number
+    nodesPlayed: number; nodesTotal: number
+  }
 }
 
 export interface Playthrough {

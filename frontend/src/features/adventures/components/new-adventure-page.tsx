@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { useSession } from '@/features/auth'
 import { guideRequirementsMissing } from '../adventure-validation'
 import { useAdventureDraft } from '../hooks/use-adventure-draft'
+import { DifficultySection } from './difficulty-section'
 import { ModeSelectSection } from './mode-select-section'
 import { PlayersSection } from './players-section'
 import { PlotSection } from './plot-section'
@@ -47,6 +48,7 @@ export function NewAdventurePage() {
       </div>
 
       <ModeSelectSection draft={draft} updateDraft={updateDraft} />
+      {draft.mode === 'full_ai' && <DifficultySection draft={draft} updateDraft={updateDraft} />}
       <PlayersSection draft={draft} updateDraft={updateDraft} />
       <TypeSection draft={draft} updateDraft={updateDraft} />
       {adventureId && <PlotSection adventureId={adventureId} draft={draft} updateDraft={updateDraft} />}

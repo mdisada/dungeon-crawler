@@ -594,18 +594,63 @@ describe('stage 7 edit plans (auto-resolve consistency findings)', () => {
     if (result.ok) expect(result.data).toEqual([])
   })
 
-  it('rejects unknown handles, duplicate handles, and off-whitelist fields', () => {
+  it('DROPS an unflagged handle instead of failing the whole plan', () => {
+    // Changed 2026-07-26: hard-failing threw away every valid edit in the same plan. Once the
+    // canon digest listed scenes, the model volunteered fixes for unflagged nodes, so an
+    // 8-edit plan parsed as an error twice and the repair pass reported 0 attempted.
     const unknown = parseStage7EditPlan(
       '{ "edits": [ { "handle": "obj#9", "patch": { "title": "X" }, "note": "" } ] }', HANDLES, 3)
-    expect(unknown.ok).toBe(false)
+    expect(unknown.ok).toBe(true)
+    if (unknown.ok) expect(unknown.data).toHaveLength(0)
 
+    const mixed = parseStage7EditPlan(
+      JSON.stringify({ edits: [
+        { handle: 'obj#9', patch: { title: 'Ignored' }, note: '' },
+        { handle: 'obj#2', patch: { title: 'A Quiet Word' }, note: 'kept' },
+      ] }), HANDLES, 3)
+    expect(mixed.ok).toBe(true)
+    if (mixed.ok) {
+      expect(mixed.data).toHaveLength(1)
+      expect(mixed.data[0].handle).toBe('obj#2')
+    }
+  })
+
+  it('keeps the good edits when one field is bad', () => {
+    // The live failure (2026-07-26): a plan spanning ~10 rows died on one cut-off sentence, so
+    // stage 7 repaired NOTHING three guides running. A bad field now drops; its row keeps the
+    // old text; every other repair still lands.
+    const mixed = parseStage7EditPlan(
+      JSON.stringify({ edits: [
+        { handle: 'obj#2', patch: { hidden_description: 'The nectar is a poten' }, note: 'cut off' },
+        { handle: 'obj#1', patch: { title: 'A Quiet Word' }, note: 'good' },
+      ] }), HANDLES, 3)
+    expect(mixed.ok).toBe(true)
+    if (!mixed.ok) return
+    expect(mixed.data).toHaveLength(1)
+    expect(mixed.data[0].handle).toBe('obj#1')
+  })
+
+  it('reports why when NOTHING in the plan survives, so the retry can improve', () => {
+    const allBad = parseStage7EditPlan(
+      '{ "edits": [ { "handle": "obj#2", "patch": { "hidden_description": "cut off mid" }, "note": "" } ] }',
+      HANDLES, 3)
+    expect(allBad.ok).toBe(false)
+    if (!allBad.ok) expect(allBad.errors.some((e) => e.includes('ends mid-thought'))).toBe(true)
+  })
+
+  it('rejects duplicate handles and off-whitelist fields', () => {
+    // A repeated handle drops the SECOND entry (the first already patches that row) instead of
+    // failing the batch - same drop-and-continue rule as every other repair-plan problem.
     const dupe = parseStage7EditPlan(
       JSON.stringify({ edits: [
         { handle: 'obj#2', patch: { title: 'One' }, note: '' },
         { handle: 'obj#2', patch: { title: 'Two' }, note: '' },
       ] }), HANDLES, 3)
-    expect(dupe.ok).toBe(false)
-    if (!dupe.ok) expect(dupe.errors.some((e) => e.includes('appears twice'))).toBe(true)
+    expect(dupe.ok).toBe(true)
+    if (dupe.ok) {
+      expect(dupe.data).toHaveLength(1)
+      expect(dupe.data[0].patch.title).toBe('One')
+    }
 
     const offWhitelist = parseStage7EditPlan(
       '{ "edits": [ { "handle": "obj#2", "patch": { "completion_predicates": "{}" }, "note": "" } ] }', HANDLES, 3)

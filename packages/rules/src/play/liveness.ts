@@ -1,0 +1,44 @@
+// Table liveness (2026-07-27): is the DM genuinely mid-turn, or has a turn orphaned itself?
+//
+// A worker killed mid-call - WORKER_RESOURCE_LIMIT, or the edge function's own wall clock - never
+// reaches its catch block, so `dialogue.typing` stays raised and every later intent is refused
+// with "The DM is thinking - one moment".
+//
+// The original detector asked whether the EVENT LOG had gone quiet for two minutes. That signal is
+// refreshable by anything writing in the background, so a table could stay locked indefinitely:
+// live 2026-07-26, one turn hit the wall clock at 150s and the next 22 turns were all rejected,
+// because the log never went quiet for two consecutive minutes. The run ended with a dead table
+// and 23 of 45 turns thrown away.
+//
+// Age of `typing` cannot be refreshed by anything, which is the whole point of keying on it.
+
+/**
+ * Longest a turn may legitimately hold `typing`.
+ *
+ * This MUST sit above the edge function's wall clock (a turn died at 150_242ms live). Clearing
+ * earlier would let a second turn start while the first is still running - trading a locked table
+ * for a corrupted one, which is strictly worse. The cost of the margin is that a genuinely dead
+ * table stays locked for the difference; the cost of getting it wrong is concurrent writers.
+ */
+export const TYPING_STALE_MS = 165_000
+
+/** Fallback window for states written before `typingSince` existed - the old, refreshable rule. */
+export const EVENT_SILENCE_MS = 120_000
+
+/**
+ * True when `typing` has been up long enough that no live request can still be behind it.
+ * A missing or unparseable stamp is NOT stale: the caller falls back to the event-log rule rather
+ * than clearing a turn it knows nothing about.
+ */
+export function isTypingStale(typingSince: string | null | undefined, now: Date): boolean {
+  if (!typingSince) return false
+  const raised = Date.parse(typingSince)
+  if (!Number.isFinite(raised)) return false
+  return now.getTime() - raised >= TYPING_STALE_MS
+}
+
+/** True when the event log has been silent long enough to call the pipeline dead. */
+export function isLogSilent(lastEventAt: string | null | undefined, now: Date): boolean {
+  const last = lastEventAt ? Date.parse(lastEventAt) : 0
+  return now.getTime() - (Number.isFinite(last) ? last : 0) >= EVENT_SILENCE_MS
+}

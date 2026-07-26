@@ -147,13 +147,16 @@ export const REACHABILITY_GATE: 'off' | 'warn' | 'fail' = 'fail'
 async function runReachabilityGate(env: StageEnv): Promise<void> {
   if (REACHABILITY_GATE === 'off') return
   const adventureId = env.adventure.id
-  const [chapters, objectives, npcs, encounters, ingredients, endings] = await Promise.all([
+  const [chapters, objectives, npcs, encounters, ingredients, endings, nodes, atoms, slots] = await Promise.all([
     env.db.from('chapters').select('id, index, title').eq('adventure_id', adventureId).order('index'),
     env.db.from('objectives').select('id, chapter_id, index, title, completion_predicates, guaranteed_route').eq('adventure_id', adventureId),
     env.db.from('npcs').select('id, name, chapter_id, initial_state').eq('adventure_id', adventureId),
     env.db.from('encounters').select('id, chapter_id, type, outcome_atoms').eq('adventure_id', adventureId),
     env.db.from('ingredients').select('id, chapter_id, awards_atoms').eq('adventure_id', adventureId),
     env.db.from('endings').select('id, title, trigger_conditions').eq('adventure_id', adventureId),
+    env.db.from('story_nodes').select('id, key, objective_id, kind, role, encounter_spec, transitions').eq('adventure_id', adventureId),
+    env.db.from('story_atoms').select('slug, scope').eq('adventure_id', adventureId),
+    env.db.from('personal_slots').select('id, key, overlay_attachments').eq('adventure_id', adventureId),
   ])
 
   const atomsOf = (raw: unknown): string[] =>
@@ -161,6 +164,10 @@ async function runReachabilityGate(env: StageEnv): Promise<void> {
   const routeAtoms = (raw: unknown): string[] => {
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return []
     return atomsOf((raw as Record<string, unknown>).onSuccess)
+  }
+  const specField = (spec: unknown, key: string): string[] => {
+    if (typeof spec !== 'object' || spec === null) return []
+    return atomsOf((spec as Record<string, unknown>)[key])
   }
 
   const graph: StoryGraph = {
@@ -205,6 +212,46 @@ async function runReachabilityGate(env: StageEnv): Promise<void> {
         }),
       }
     }),
+    nodes: ((nodes.data ?? []) as {
+      id: string; key: string; objective_id: string; kind: string; role: string
+      encounter_spec: unknown; transitions: unknown
+    }[]).map((n) => {
+      const spec = (typeof n.encounter_spec === 'object' && n.encounter_spec !== null ? n.encounter_spec : {}) as Record<string, unknown>
+      const params = (typeof spec.params === 'object' && spec.params !== null ? spec.params : {}) as Record<string, unknown>
+      return {
+        id: n.id, key: n.key, objectiveId: n.objective_id,
+        kind: n.kind as 'skill_challenge' | 'social' | 'puzzle' | 'combat',
+        role: n.role === 'rescue' ? 'rescue' as const : 'route' as const,
+        onSuccess: specField(spec, 'on_success'),
+        onPartial: specField(spec, 'on_partial'),
+        onFailure: specField(spec, 'on_failure'),
+        npcIds: atomsOf(params.npc_ids),
+        transitions: (Array.isArray(n.transitions) ? n.transitions : []).flatMap((t) => {
+          if (typeof t !== 'object' || t === null) return []
+          const tr = t as Record<string, unknown>
+          return [{
+            on: (tr.on === 'partial' ? 'partial' : tr.on === 'failed' ? 'failed' : 'full') as 'full' | 'partial' | 'failed',
+            toNodeKey: typeof tr.to_node_key === 'string' ? tr.to_node_key : null,
+            arrivalContext: typeof tr.arrival_context === 'string' ? tr.arrival_context : '',
+          }]
+        }),
+        minParticipants: typeof params.min_participants === 'number' ? params.min_participants : undefined,
+      }
+    }),
+    registryAtoms: ((atoms.data ?? []) as { slug: string }[]).map((a) => a.slug),
+    minPlayers: env.adventure.min_players,
+    maxPlayers: env.adventure.max_players,
+    personalAtoms: ((atoms.data ?? []) as { slug: string; scope: string }[])
+      .filter((a) => a.scope === 'personal').map((a) => a.slug),
+    personalSlots: ((slots.data ?? []) as { id: string; key: string; overlay_attachments: unknown }[])
+      .map((s) => ({
+        id: s.id, key: s.key,
+        overlayNodeKeys: (Array.isArray(s.overlay_attachments) ? s.overlay_attachments : []).flatMap((o) => {
+          if (typeof o !== 'object' || o === null) return []
+          const ov = o as Record<string, unknown>
+          return typeof ov.node_key === 'string' ? [ov.node_key] : []
+        }),
+      })),
   }
 
   const findings = lintStoryGraph(graph)

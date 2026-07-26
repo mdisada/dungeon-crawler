@@ -5,9 +5,10 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import {
-  canonicalizeAtomSlug, listMilestoneAtoms, resolveAtomText, suggestAtomTexts,
+  canonicalizeAtomSlug, decideCredit, listMilestoneAtoms, resolveAtomText, suggestAtomTexts,
 } from '../_shared/story/index.ts'
 import type { AgentEnv } from './agents.ts'
+import { applyPersonalProgress } from './personal.ts'
 import { commitDiffs, loadState, logEvent } from './util.ts'
 
 /**
@@ -23,6 +24,23 @@ import { commitDiffs, loadState, logEvent } from './util.ts'
 export const ATOM_REGISTRY_ENFORCES = false
 
 /**
+ * Sources allowed to complete an OBJECTIVE (F08 §9.2.4: "outcome maps and in-encounter adjudicator
+ * claims are the only progression writers").
+ *
+ * That rule had drifted. Live 2026-07-26, The Lamplighters' Tithe: the Archivist's scene ledger
+ * credited "party examined the flickering lamps" because someone glanced at a lamp, and the
+ * adjudicator credited "party entered the Drift" because someone walked in. Two objectives - the
+ * whole quest - completed by turn 6 without a single encounter succeeding, the party was PAID for
+ * solving a mystery they had not touched, and the narrator offered to let them leave town while
+ * the actual plot (the foreman, the Final Tally) had never appeared.
+ *
+ * The loose paths stay useful for BEAT atoms and colour; they simply may not finish the spine.
+ * `objective_judge` remains allowed - it is the deliberate recognition path and demands a verbatim
+ * evidence quote about the objective's intent, which is a different thing from noticing a verb.
+ */
+export const OBJECTIVE_ATOMS_OUTCOME_ONLY = true
+
+/**
  * The authored milestone vocabulary: predicate atoms from the active objective's completion
  * predicates plus the open beat's exit conditions.
  */
@@ -35,16 +53,23 @@ export async function milestoneVocabulary(
   facts: string[]
   /** What the current objective is FOR - the atoms alone are identifiers, not meaning. */
   objective: { title: string; hiddenDescription: string } | null
+  /** Lowercased atoms that COMPLETE AN OBJECTIVE (as opposed to a beat exit). These are the
+   *  spine, and §12's rule is that outcome maps own them - see applyMilestones. */
+  objectiveAtoms: string[]
 }> {
   const flags = new Set<string>()
   const events = new Set<string>()
   const facts = new Set<string>()
+  const objectiveAtoms = new Set<string>()
   let objective: { title: string; hiddenDescription: string } | null = null
-  const add = (predicate: unknown) => {
+  const add = (predicate: unknown, spine = false) => {
     const atoms = listMilestoneAtoms(predicate)
     atoms.flags.forEach((f) => flags.add(f))
     atoms.events.forEach((e) => events.add(e))
     atoms.facts.forEach((f) => facts.add(f))
+    if (spine) {
+      for (const a of [...atoms.flags, ...atoms.events, ...atoms.facts]) objectiveAtoms.add(a.toLowerCase())
+    }
   }
   const { data: stateRow } = await service
     .from('adventure_state')
@@ -75,12 +100,12 @@ export async function milestoneVocabulary(
     })
     const at = ordered.findIndex((o) => o.id === currentId)
     if (at >= 0) {
-      add(ordered[at].completion_predicates)
+      add(ordered[at].completion_predicates, true)
       objective = {
         title: ordered[at].title ?? '',
         hiddenDescription: ordered[at].hidden_description ?? '',
       }
-      if (ordered[at + 1]) add(ordered[at + 1].completion_predicates)
+      if (ordered[at + 1]) add(ordered[at + 1].completion_predicates, true)
     }
   }
   // EVERY beat this adventure has authored, not just the open one. The ledger runs at phase
@@ -101,7 +126,7 @@ export async function milestoneVocabulary(
       .in('core_loop_id', loopIds)
     for (const beat of (beats ?? []) as { exit_conditions: unknown }[]) add(beat.exit_conditions)
   }
-  return { flags: [...flags], events: [...events], facts: [...facts], objective }
+  return { flags: [...flags], events: [...events], facts: [...facts], objective, objectiveAtoms: [...objectiveAtoms] }
 }
 
 /**
@@ -121,6 +146,7 @@ export async function applyMilestones(
   const eventByLower = new Map(vocab.events.map((e) => [e.toLowerCase(), e]))
   const factByLower = new Map(vocab.facts.map((f) => [f.toLowerCase(), f]))
   const authoredAll = [...vocab.flags, ...vocab.events, ...vocab.facts]
+  const objectiveAtomSet = new Set(vocab.objectiveAtoms)
   const state = (await loadState(service, env.adventureId)).state
   const flags = state.dm?.facts.flags ?? {}
   const world = state.dm?.facts.world ?? {}
@@ -148,6 +174,23 @@ export async function applyMilestones(
     const flag = flagByLower.get(key)
     const eventTag = eventByLower.get(key)
     const fact = factByLower.get(key)
+
+    // The spine gate. An atom that COMPLETES AN OBJECTIVE may only be credited by the paths that
+    // represent an actual deed - the authored outcome map, or the evidence-quoting recognition
+    // judge. A loose observation ("they looked at it", "they walked in") is still welcome to
+    // credit beat atoms; it just cannot finish the story.
+    const credit = decideCredit({
+      source,
+      isObjectiveAtom: Boolean(flag || eventTag || fact) && objectiveAtomSet.has(key),
+      enforced: OBJECTIVE_ATOMS_OUTCOME_ONLY,
+    })
+    if (!credit.apply) {
+      await logEvent(service, env.adventureId, sessionId, 'objective_credit_blocked', {
+        milestone: flag ?? eventTag ?? fact, source, reason: credit.reason,
+      })
+      continue
+    }
+
     if (flag || fact) {
       // The same atom name can be authored as a beat-exit FLAG and an objective FACT (seen
       // in the story sim: outcome maps fired into flags while the objective read facts).
@@ -190,6 +233,14 @@ export async function applyMilestones(
         suggestions: suggestAtomTexts(canonicalizeAtomSlug(raw), authoredAll),
       })
     }
+  }
+  // Personal arcs read the same committed flags the spine does, so anything just written may have
+  // completed one. Reward-only by construction (the stage-8 lint bars personal atoms from every
+  // structural position), so a failure here can never hold the story up.
+  if (applied.length > 0) {
+    await applyPersonalProgress(service, env, sessionId).catch((err) => {
+      console.error('personal progress pass failed', err)
+    })
   }
   return applied
 }

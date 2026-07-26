@@ -38,10 +38,13 @@ export interface AdventureRow {
   demo: boolean
   party_profile: Json | null
   meta_loop: { premise?: string } | null
+  /** `{ preset, pacing? }` - resolved into dm.settings.pacing at session start (session/pacing.ts). */
+  difficulty_setting: Json | null
 }
 
 export const ADVENTURE_COLUMNS =
-  'id, creator_id, dm_user_id, mode, status, title, min_players, max_players, invite_code, demo, party_profile, meta_loop'
+  'id, creator_id, dm_user_id, mode, status, title, min_players, max_players, invite_code, demo, ' +
+  'party_profile, meta_loop, difficulty_setting'
 
 /** Loads the adventure + the caller's membership; `isDm` covers role='dm' and the creator. */
 export async function loadContext(service: SupabaseClient, adventureId: string, userId: string) {

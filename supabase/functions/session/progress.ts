@@ -22,6 +22,7 @@ import { recordProposal } from './proposals.ts'
 import { beatRouteHealth } from './route-health.ts'
 import { antagonistTurn } from './steward.ts'
 import { maybeCompleteQuestForObjective, maybeReweaveDeclined } from './story.ts'
+import { personalEpilogueLines } from './personal.ts'
 import { runClimaxAuthor } from './story-agents.ts'
 import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
 
@@ -429,8 +430,10 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
   const condensed = ((recent ?? []) as { type: string; payload: Record<string, Json> }[])
     .reverse()
     .map((e) => `${e.type}: ${['text', 'title', 'tag', 'name'].map((k) => e.payload[k]).filter((v) => typeof v === 'string').join(' ')}`)
+  const personalOutcomes = await personalEpilogueLines(service, env.adventureId).catch(() => [])
   let climax = (await runClimaxAuthor(
     env, { title: leading.title, description: leading.description, tone: leading.tone }, condensed,
+    personalOutcomes,
   ).catch(() => '')) || leading.climax_summary || leading.description
 
   // Consistency, cheaply and deterministically. Publishing the climax directly (above) removed
@@ -652,6 +655,7 @@ export async function runStoryProgressTail(
           console.error('beat re-plan failed', err)
           await logEvent(service, env.adventureId, sessionId, 'incident', {
             kind: 'beat_open_failed', trigger,
+            error: String(err instanceof Error ? err.message : err).slice(0, 300),
           })
         }
       }

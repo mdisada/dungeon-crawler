@@ -307,8 +307,16 @@ async function main() {
   ok('hint_given event logged with source', (await eventsOf(advId, 'hint_given')).some((e) => e.payload.source === 'requested'))
   const hint2 = await act(gm, { action: 'hint', adventure_id: advId, requested: true })
   ok('a second ask climbs the ladder', hint2.status === 200 && hint2.body.rung >= hint1.body.rung, hint2.body)
-  const tuneHint = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'dm_command', command: 'set_auto', hint_turns: 5 })
-  ok('hint_turns is DM-configurable via set_auto', tuneHint.status === 200, tuneHint.body)
+  // `hint_turns` was removed 2026-07-27 (it configured the ladder the Progress Director replaced
+  // and nothing read it). The live equivalent is director_thresholds, including the two objective
+  // clocks that were missing from the whitelist until the same day.
+  const tuneHint = await act(gm, {
+    action: 'player_intent', adventure_id: advId, kind: 'dm_command', command: 'set_auto',
+    director_thresholds: { replanBeat: 5, failForwardOnObjective: 33 },
+  })
+  ok('director thresholds are DM-configurable via set_auto', tuneHint.status === 200, tuneHint.body)
+  ok('the objective clock is settable, not just the silence clock',
+    tuneHint.body.settings?.directorThresholds?.failForwardOnObjective === 33, tuneHint.body.settings)
 
   console.log('\n[encounter machine: canned spec -> entry -> attempts -> resolution -> beat exit]')
   const [specBeat] = await serviceRest('GET', `beats?core_loop_id=eq.${loopRow.id}&status=eq.active&select=id,name,encounter_spec`)

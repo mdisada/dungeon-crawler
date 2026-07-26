@@ -32,7 +32,54 @@ export function GuideOverlay({ guide }: { guide: GuideView }) {
       <div className="mx-auto flex max-w-3xl flex-col gap-5">
         <p className="text-sm text-muted-foreground">
           Objectives {guide.counts.objectivesDone}/{guide.counts.objectivesTotal} done · Clues {guide.counts.cluesFound}/{guide.counts.cluesTotal} found
+          {guide.counts.nodesTotal > 0 && ` · Scenes ${guide.counts.nodesPlayed}/${guide.counts.nodesTotal} played`}
         </p>
+
+        {/* The authored story graph. Unplayed nodes are the whole point of showing it: they are
+            the routes the party did not take, and a rescue node that got played is an anomaly. */}
+        {guide.nodes.length > 0 && (
+          <Section title="Story graph (authored scenes)">
+            <ul className="flex flex-col gap-2">
+              {guide.nodes.map((node) => (
+                <li key={node.key} className="rounded border p-2 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 font-medium">{node.label || node.key}</span>
+                    {node.role === 'rescue' && (
+                      <span className={badge('bg-amber-500/15 text-amber-600 dark:text-amber-400')}>rescue</span>
+                    )}
+                    <span className={badge('bg-muted text-muted-foreground')}>{node.kind.replace('_', ' ')}</span>
+                    <span
+                      className={badge(node.played
+                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                        : 'bg-muted text-muted-foreground')}
+                    >
+                      {node.played ? 'played' : 'unplayed'}
+                    </span>
+                  </div>
+                  {node.choices.length > 0 && (
+                    <p className="mt-1 text-xs text-muted-foreground">Choices: {node.choices.join(' · ')}</p>
+                  )}
+                  {node.exits.length > 0 && (
+                    <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{node.exits.join('   ')}</p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
+
+        {guide.personalSlots.length > 0 && (
+          <Section title="Personal stakes (slots)">
+            <ul className="flex flex-col gap-1">
+              {guide.personalSlots.map((slot) => (
+                <li key={slot.key} className="flex items-center gap-2 text-sm">
+                  <span className="min-w-0 flex-1">{slot.label}</span>
+                  <span className={badge('bg-muted text-muted-foreground')}>{slot.key}</span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
 
         <Section title="Objectives (the spine)">
           <ol className="flex flex-col gap-1">

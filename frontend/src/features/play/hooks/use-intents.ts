@@ -38,8 +38,12 @@ export function useIntents() {
     clearError: () => setError(null),
     // Unified input (2026-07-20): everything typed goes as one utterance the server
     // interprets - the old say/do split lives on only in the wire kind for compatibility.
-    say: (text: string, targetId?: string) =>
-      run(() => sendPlayerIntent(adventure.id, { kind: 'say', text, target_id: targetId })),
+    // `affordanceKey` rides along ONLY when the player sent an authored chip untouched - the
+    // caller drops it the moment the prefilled text is edited, so an edited chip is just words.
+    say: (text: string, opts?: { targetId?: string; affordanceKey?: string }) =>
+      run(() => sendPlayerIntent(adventure.id, {
+        kind: 'say', text, target_id: opts?.targetId, affordance_key: opts?.affordanceKey,
+      })),
     roll: (skill: string) => run(() => sendPlayerIntent(adventure.id, { kind: 'roll', skill })),
     rollPending: (promptId: string, skill?: string) => run(() => rollPendingPrompt(adventure.id, promptId, skill)),
     requestHint: () => run(() => requestHint(adventure.id)),

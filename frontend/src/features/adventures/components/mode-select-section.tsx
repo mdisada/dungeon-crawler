@@ -1,22 +1,8 @@
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { DIFFICULTY_PRESETS, type AdventureDraft, type AdventureMode, type DifficultyPreset } from '../types'
+import type { AdventureDraft, AdventureMode } from '../types'
 
 interface ModeSelectSectionProps {
   draft: AdventureDraft
   updateDraft: (patch: Partial<AdventureDraft>) => void
-}
-
-const DIFFICULTY_LABELS: Record<DifficultyPreset, string> = {
-  easy: 'Easy',
-  standard: 'Standard',
-  hard: 'Hard',
-  deadly: 'Deadly',
 }
 
 const CARD_CLASSES =
@@ -71,31 +57,6 @@ export function ModeSelectSection({ draft, updateDraft }: ModeSelectSectionProps
           </span>
         </label>
       </div>
-
-      {draft.mode === 'full_ai' && (
-        <div className="flex items-center gap-3">
-          <span id="difficulty-label" className="text-sm font-medium">
-            Difficulty
-          </span>
-          <Select
-            aria-labelledby="difficulty-label"
-            value={draft.difficultyPreset}
-            onValueChange={(value) => updateDraft({ difficultyPreset: value as DifficultyPreset })}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Choose difficulty" />
-            </SelectTrigger>
-            <SelectContent>
-              {DIFFICULTY_PRESETS.map((preset) => (
-                <SelectItem key={preset} value={preset}>
-                  {DIFFICULTY_LABELS[preset]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <span className="text-sm text-muted-foreground">Fixed once the adventure is created.</span>
-        </div>
-      )}
     </fieldset>
   )
 }

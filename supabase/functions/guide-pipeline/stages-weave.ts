@@ -5,6 +5,8 @@ import {
   REPAIRABLE_FIELDS, validateRegistryCoverage,
 } from '../_shared/guide/stages/stage7.ts'
 import { buildGroupClassifierPrompt, groupNpcIds, parseGroupClassifier } from '../_shared/guide/group-npcs.ts'
+import { buildPersonalSlotsPrompt, parsePersonalSlots, personalAtoms } from '../_shared/guide/personal.ts'
+import { downgradeUnstageableNodes, pruneNodeNpcIds } from '../_shared/guide/nodes.ts'
 import type { EncounterSpec } from '../_shared/guide/group-npcs.ts'
 import type { EntityRef, WarningDraft } from '../_shared/guide/types.ts'
 import { enqueueJob, type StageEnv } from './stage-env.ts'
@@ -153,6 +155,12 @@ export async function runStage6(env: StageEnv): Promise<void> {
   // and objective links must never reference a row that is about to disappear.
   await reclassifyGroupNpcs(env)
 
+  // Those deletions can orphan a social node stage 5 authored against the living roster. Repair
+  // it here rather than letting the stage-8 gate refuse the guide four retries later.
+  await repairOrphanedSocialNodes(env).catch((err) => {
+    console.error('social node repair failed', err)
+  })
+
   const { digest, refs, objectiveIdByHandle, entryGiverHandles } = await buildDigest(env.db, env.adventure.id)
 
   const { hooks, contracts } = await env.generate(
@@ -249,7 +257,132 @@ export async function runStage6(env: StageEnv): Promise<void> {
     assertOk(error, 'objective links update failed')
   }
 
+  // Personal hook slots (2026-07-26): per-player stakes authored against archetypes, bound to
+  // real characters at first session. Additive - a failure here must not cost the whole guide.
+  await authorPersonalSlots(env).catch((err) => {
+    console.error('personal slot authoring failed', err)
+  })
+
   await enqueueJob(env.db, env.adventure.id, 7)
+}
+
+/**
+ * A social node whose staged cast no longer exists becomes a skill challenge carrying the SAME
+ * outcome maps - the runtime's own tier-bridge downgrade, applied at authoring time so the node
+ * never reaches the reachability gate broken.
+ */
+async function repairOrphanedSocialNodes(env: StageEnv): Promise<void> {
+  const [{ data: nodeRows }, { data: npcRows }] = await Promise.all([
+    env.db.from('story_nodes').select('id, key, kind, encounter_spec').eq('adventure_id', env.adventure.id),
+    env.db.from('npcs').select('id, initial_state').eq('adventure_id', env.adventure.id),
+  ])
+  const nodes = ((nodeRows ?? []) as { id: string; key: string; kind: string; encounter_spec: unknown }[])
+  if (nodes.length === 0) return
+  const living = ((npcRows ?? []) as { id: string; initial_state: string | null }[])
+    .filter((n) => (n.initial_state ?? 'alive') !== 'dead' && (n.initial_state ?? 'alive') !== 'absent')
+    .map((n) => n.id)
+
+  const specOf = (raw: unknown) =>
+    (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  const npcIdsOf = (raw: unknown): string[] => {
+    const params = specOf(specOf(raw).params)
+    return Array.isArray(params.npc_ids) ? params.npc_ids.filter((x): x is string => typeof x === 'string') : []
+  }
+
+  // Strike removed cast from every node FIRST, including the ones that keep their kind. A node
+  // staging [alive, deleted] survives the downgrade below with the deleted id still in its spec,
+  // and resolveNpcNames then throws "NPC <uuid> not found" at open time - the beat goes stillborn
+  // and the director burns a rung re-planning it (live 2026-07-26, three times on one node).
+  for (const p of pruneNodeNpcIds(nodes.map((n) => ({ key: n.key, npcIds: npcIdsOf(n.encounter_spec) })), living)) {
+    const row = nodes.find((n) => n.key === p.key)
+    if (!row) continue
+    const spec = specOf(row.encounter_spec)
+    const params = { ...specOf(spec.params), npc_ids: p.npcIds }
+    const { error } = await env.db
+      .from('story_nodes').update({ encounter_spec: { ...spec, params } }).eq('id', row.id)
+    if (error) continue
+    row.encounter_spec = { ...spec, params }
+    await logPipelineEvent(env.db, env.adventure.id, 'story_node_cast_pruned', {
+      node_key: p.key, removed: p.removed, remaining: p.npcIds.length,
+    })
+  }
+
+  const downgrades = downgradeUnstageableNodes(
+    nodes.map((n) => ({ key: n.key, kind: n.kind as 'social', npcIds: npcIdsOf(n.encounter_spec) })),
+    living,
+  )
+  for (const d of downgrades) {
+    const row = nodes.find((n) => n.key === d.key)
+    if (!row) continue
+    const spec = { ...specOf(row.encounter_spec), kind: d.to }
+    const { error } = await env.db
+      .from('story_nodes').update({ kind: d.to, encounter_spec: spec }).eq('id', row.id)
+    if (error) continue
+    await logPipelineEvent(env.db, env.adventure.id, 'story_node_downgraded', {
+      node_key: d.key, from: d.from, to: d.to, reason: d.reason,
+    })
+  }
+}
+
+/**
+ * Author `max_players + 1` personal slots and register their atoms at PERSONAL scope, which is
+ * what lets the stage-8 lint prove no private arc ever sits in a structural position.
+ */
+async function authorPersonalSlots(env: StageEnv): Promise<void> {
+  const { data: nodeRows } = await env.db
+    .from('story_nodes')
+    .select('key, label, narration_seed')
+    .eq('adventure_id', env.adventure.id)
+    .eq('role', 'route')
+    .order('key')
+  const nodes = ((nodeRows ?? []) as { key: string; label: string; narration_seed: string }[])
+    .map((n) => ({ key: n.key, summary: `${n.label} - ${String(n.narration_seed).slice(0, 120)}` }))
+  // No authored graph (legacy guide): overlays would have nowhere to attach.
+  if (nodes.length === 0) return
+
+  const meta = (env.adventure.meta_loop ?? {}) as { premise?: string; arc?: string }
+  const wanted = Math.min((env.adventure.max_players ?? 4) + 1, 8)
+  const ctx = { nodeKeys: nodes.map((n) => n.key), wanted }
+  const slots = await env.generate(
+    'hook_weaver',
+    buildPersonalSlotsPrompt({ premise: meta.premise ?? '', arc: meta.arc ?? '', wanted, nodes }),
+    (raw) => parsePersonalSlots(raw, ctx),
+  )
+  if (slots.length === 0) return
+
+  const { error: delError } = await env.db
+    .from('personal_slots').delete().eq('adventure_id', env.adventure.id).eq('human_edited', false)
+  assertOk(delError, 'personal_slots delete failed')
+
+  const { error: insertError } = await env.db.from('personal_slots').insert(
+    slots.map((s) => ({
+      adventure_id: env.adventure.id,
+      key: s.key,
+      archetype: {
+        background_tags: s.archetype.backgroundTags,
+        class_keys: s.archetype.classKeys,
+        themes: s.archetype.themes,
+      },
+      intro_seed: s.introSeed,
+      objective_template: { label: s.objective.label, predicate: s.objective.predicate, reward: s.objective.reward },
+      overlay_attachments: s.overlays.map((o) => ({ node_key: o.nodeKey, overlay_seed: o.overlaySeed })),
+    })),
+  )
+  assertOk(insertError, 'personal_slots insert failed')
+
+  // Registry rows at PERSONAL scope - the marker the lint and applyMilestones both key off.
+  const atomRows = slots.flatMap((s) =>
+    personalAtoms(s).map((slug) => ({
+      adventure_id: env.adventure.id, slug, kind: 'flag', scope: 'personal',
+      label: slug, source_table: 'personal_slots', source_id: null,
+    })),
+  )
+  if (atomRows.length > 0) {
+    const { error } = await env.db
+      .from('story_atoms').upsert(atomRows, { onConflict: 'adventure_id,slug', ignoreDuplicates: true })
+    assertOk(error, 'personal atom registration failed')
+  }
+  await logPipelineEvent(env.db, env.adventure.id, 'personal_slots_authored', { count: slots.length })
 }
 
 /**
@@ -274,6 +407,7 @@ async function loadRepairFields(
     npcs: 'description, chapter_id, human_edited',
     locations: 'description, chapter_id, human_edited',
     ingredients: 'content, reveals, human_edited',
+    story_nodes: 'narration_seed, label, human_edited',
   }
   const { data, error } = await env.db.from(table).select(columns[table]).eq('id', id).maybeSingle()
   if (error || !data) return null

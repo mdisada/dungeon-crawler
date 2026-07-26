@@ -21,32 +21,75 @@ export type AgentRole =
   | 'summarizer'
   | 'user_direct'
 
+/**
+ * Tiering principle (2026-07-26, measured): spend on BLAST RADIUS, not on volume.
+ *
+ * A guide's real cost sat on output tokens from `deepseek-v4-pro`, while the biggest consumer of
+ * INPUT tokens (`consistency_checker`, 41% of them) cost 7% of the money. So the rule is not
+ * "important vs unimportant" but **how much surrounding code validates the answer**:
+ *
+ * - The strongest model goes where output is open-ended, hard to validate, and inherited by
+ *   everything downstream - the Story Director (premise, arc, objectives, endings). Called ~5
+ *   times per guide; a weak premise cannot be linted back into a good one.
+ * - Cheap models go where code owns the structure and a wrong answer is caught for free: the
+ *   Beat Planner now authors story nodes whose success atoms are DERIVED, whose transitions are
+ *   coerced, whose NPCs are enum'd, and which the stage-8 reachability gate must pass. That is a
+ *   menu-picking job, and it was the second-most expensive call in the pipeline on a pro model.
+ * - The cheap tier also REPAIRS the expensive tier: the stage-7 consistency pass reads what the
+ *   Story Director wrote and rewrites contradictions, at 1/8th the price per token.
+ */
 export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
-  narrator: 'xiaomi/mimo-v2.5',
-  npc_agent: 'xiaomi/mimo-v2.5',
-  adjudicator: 'deepseek/deepseek-v4-flash',
-  loop_classifier: 'deepseek/deepseek-v4-flash',
-  encounter_designer: 'deepseek/deepseek-v4-flash',
-  npc_tactician: 'deepseek/deepseek-v4-flash',
-  story_director: 'deepseek/deepseek-v4-pro',
-  // Not in MAIN-SPEC SS4.7's table (a gap - the Ingredient Generator agent exists in SS4 but was
-  // never given a row); grouped with the other guide-generation creative roles. Added Phase 3b.
-  ingredient_generator: 'deepseek/deepseek-v4-pro',
-  beat_planner: 'deepseek/deepseek-v4-pro',
-  hook_weaver: 'deepseek/deepseek-v4-pro',
-  meta_loop_steward: 'deepseek/deepseek-v4-pro',
+  // --- Cheap tier: gemini-2.5-flash-lite ($0.100/$0.400 per M, 1M context) --------------------
+  // Everything whose output is consumed by CODE, not read by a person.
+  //
+  // NOTE the family naming trap: `gemini-2.5-flash` (no -lite) is $0.300/$2.500 - a HIGHER output
+  // price than the premium seat below. "flash" is not a synonym for cheap on OpenRouter.
+  adjudicator: 'google/gemini-2.5-flash-lite',
+  loop_classifier: 'google/gemini-2.5-flash-lite',
+  encounter_designer: 'google/gemini-2.5-flash-lite',
+  npc_tactician: 'google/gemini-2.5-flash-lite',
+  // Story-node authoring: schema-constrained, code-derived outcomes, lint-gated. Demoted from a
+  // pro model 2026-07-26 - it was ~22% of guide cost for what is menu-picking work, and flash-lite
+  // parsed the node schema first try with no retry.
+  beat_planner: 'google/gemini-2.5-flash-lite',
   consistency_checker: 'google/gemini-2.5-flash-lite',
   summarizer: 'google/gemini-2.5-flash-lite',
   // Not a Story agent -- direct user-triggered calls (e.g. the Settings test box). Cheap default.
   user_direct: 'google/gemini-2.5-flash-lite',
+
+  // --- Premium tier: z-ai/glm-5.2 ($0.711/$2.235, 1M ctx) ------------------------------------
+  // Output no code can validate: either a person READS it directly, or everything downstream
+  // inherits it.
+  //
+  // Narration was cheap until an A/B settled it (2026-07-26, same plot + same fixes, only the
+  // narrator swapped): flash-lite ignored the contract's "no formulaic closing line" ban 3 times
+  // and wrote 38 thin beats; glm-5.2 broke it 0 times in 23 denser ones, held per-character
+  // continuity across beats, and stopped falsely declaring quests resolved. Progression was
+  // identical (1 objective each), so this buys prose, not pacing. ~+$0.045 per 26-turn session.
+  narrator: 'z-ai/glm-5.2',
+  npc_agent: 'z-ai/glm-5.2',
+  story_director: 'z-ai/glm-5.2',
+  // Not in MAIN-SPEC SS4.7's table (a gap - the Ingredient Generator agent exists in SS4 but was
+  // never given a row); grouped with the other guide-generation creative roles. Added Phase 3b.
+  // Authors the entire cast and the clue pool: one call per chapter, enormous blast radius.
+  ingredient_generator: 'z-ai/glm-5.2',
+  // Hooks, the entry contract, and the personal-stake slots - the connective tissue the whole
+  // guide hangs off. Two calls per guide.
+  hook_weaver: 'z-ai/glm-5.2',
+  // Antagonist turns and, critically, the CLIMAX author - the prose the player reads as the
+  // ending. Rare calls, and the last thing anyone experiences.
+  meta_loop_steward: 'z-ai/glm-5.2',
 }
 
+/**
+ * Two models, on purpose (2026-07-26). Every role is either "code validates this" (flash-lite) or
+ * "nothing downstream can fix this" (glm-5.2); a middle tier only blurred that line. An override
+ * stored in `user_settings.model_map` still resolves even if it names a model absent here - this
+ * list is the picker's menu, not a whitelist.
+ */
 export const CURATED_TEXT_MODELS = [
-  'xiaomi/mimo-v2.5',
-  'deepseek/deepseek-v4-flash',
-  'deepseek/deepseek-v4-pro',
   'google/gemini-2.5-flash-lite',
-  'mistralai/mistral-nemo',
+  'z-ai/glm-5.2',
 ] as const
 
 export function isAgentRole(value: string): value is AgentRole {

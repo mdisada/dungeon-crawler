@@ -13,6 +13,14 @@ export interface GuideInput {
   ingredients: { type: string; reveals: string; content: Record<string, unknown> | null; discovered: boolean }[]
   npcStates: Record<string, string>
   currentLocationId: string | null
+  /** Authored story graph (2026-07-26) - what the runtime now navigates instead of planning. */
+  nodes?: {
+    key: string; kind: string; role: string; label: string
+    affordances: unknown; transitions: unknown
+  }[]
+  /** Node keys the party has actually played, from beats.node_id. */
+  playedNodeKeys?: string[]
+  personalSlots?: { key: string; objective_template: Record<string, unknown> | null }[]
 }
 
 export interface GuideView {
@@ -23,7 +31,14 @@ export interface GuideView {
   encounters: { kind: string; label: string }[]
   endings: { title: string; tone: string; status: string }[]
   clues: { text: string; type: string; discovered: boolean }[]
-  counts: { objectivesDone: number; objectivesTotal: number; cluesFound: number; cluesTotal: number }
+  /** The authored graph, with which nodes actually got played - the fastest read on whether the
+   *  story went the way it was written. */
+  nodes: { key: string; kind: string; role: string; label: string; choices: string[]; exits: string[]; played: boolean }[]
+  personalSlots: { key: string; label: string }[]
+  counts: {
+    objectivesDone: number; objectivesTotal: number; cluesFound: number; cluesTotal: number
+    nodesPlayed: number; nodesTotal: number
+  }
 }
 
 // Info toys worth surfacing as "clues" (vs mechanical items); each shows discovered-or-not.
@@ -41,6 +56,29 @@ export function buildGuideView(input: GuideInput): GuideView {
     .filter((i) => CLUE_TYPES.has(i.type))
     .map((i) => ({ text: i.reveals || String((i.content ?? {}).text ?? '(unnamed clue)'), type: i.type, discovered: i.discovered }))
 
+  const played = new Set(input.playedNodeKeys ?? [])
+  const labels = (raw: unknown, field: string): string[] =>
+    (Array.isArray(raw) ? raw : []).flatMap((entry) => {
+      if (typeof entry !== 'object' || entry === null) return []
+      const value = (entry as Record<string, unknown>)[field]
+      return typeof value === 'string' && value ? [value] : []
+    })
+  const nodes = (input.nodes ?? []).map((n) => ({
+    key: n.key,
+    kind: n.kind,
+    role: n.role,
+    label: n.label,
+    choices: labels(n.affordances, 'label'),
+    // "full -> next_key" style edges, so a reader can trace the route the party actually took.
+    exits: (Array.isArray(n.transitions) ? n.transitions : []).flatMap((t) => {
+      if (typeof t !== 'object' || t === null) return []
+      const tr = t as Record<string, unknown>
+      const on = typeof tr.on === 'string' ? tr.on : '?'
+      return [`${on} -> ${typeof tr.to_node_key === 'string' ? tr.to_node_key : 'done'}`]
+    }),
+    played: played.has(n.key),
+  }))
+
   return {
     chapters: byIndex(input.chapters),
     objectives,
@@ -49,11 +87,18 @@ export function buildGuideView(input: GuideInput): GuideView {
     encounters: input.encounters.map((e) => ({ kind: e.type, label: String((e.spec ?? {}).label ?? e.type) })),
     endings: byIndex(input.endings).map((e) => ({ title: e.title, tone: e.tone, status: e.status })),
     clues,
+    nodes,
+    personalSlots: (input.personalSlots ?? []).map((s) => ({
+      key: s.key,
+      label: String((s.objective_template ?? {}).label ?? s.key),
+    })),
     counts: {
       objectivesDone: objectives.filter((o) => o.state === 'completed').length,
       objectivesTotal: objectives.length,
       cluesFound: clues.filter((c) => c.discovered).length,
       cluesTotal: clues.length,
+      nodesPlayed: nodes.filter((n) => n.played).length,
+      nodesTotal: nodes.length,
     },
   }
 }

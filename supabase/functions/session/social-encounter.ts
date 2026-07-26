@@ -12,6 +12,7 @@ import { runSocialExitJudge } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import {
   activeEncounter, newEncounter, openEncounter, resolveOpenEncounter,
+  specState,
 } from './encounters.ts'
 import type { ResolutionTier, StoredBeatSpec } from './encounters.ts'
 import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
@@ -139,9 +140,7 @@ export async function openSocialEncounter(
   }
   const goal = typeof spec.params.goal === 'string' ? spec.params.goal : ''
   const encounter = newEncounter('social', spec.label, spec.stakes, { goal, exchanges: 0 })
-  await openEncounter(service, env.adventureId, sessionId, encounter, {
-    onSuccess: spec.onSuccess, onPartial: spec.onPartial, onFailure: spec.onFailure, params: spec.params,
-  })
+  await openEncounter(service, env.adventureId, sessionId, encounter, specState(spec))
   return encounter
 }
 

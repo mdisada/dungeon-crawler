@@ -37,29 +37,35 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   user_direct: 'Direct requests (e.g. this test box)',
 }
 
+// Tiering principle (2026-07-26): spend on BLAST RADIUS, not volume. The strongest model sits
+// where output is open-ended and inherited by everything downstream (Story Director); cheap models
+// sit where surrounding code validates the answer (node authoring is schema-constrained and
+// lint-gated) or where volume is high and quality is judged live (narration).
+// NOTE: `gemini-2.5-flash` (no -lite) is NOT the cheap one - $0.300/$2.500 per M, a higher output
+// price than the premium glm-5.2 seat. The cheap tier is flash-LITE at $0.100/$0.400.
 export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
-  narrator: 'xiaomi/mimo-v2.5',
-  npc_agent: 'xiaomi/mimo-v2.5',
-  adjudicator: 'deepseek/deepseek-v4-flash',
-  loop_classifier: 'deepseek/deepseek-v4-flash',
-  encounter_designer: 'deepseek/deepseek-v4-flash',
-  npc_tactician: 'deepseek/deepseek-v4-flash',
-  story_director: 'deepseek/deepseek-v4-pro',
-  ingredient_generator: 'deepseek/deepseek-v4-pro',
-  beat_planner: 'deepseek/deepseek-v4-pro',
-  hook_weaver: 'deepseek/deepseek-v4-pro',
-  meta_loop_steward: 'deepseek/deepseek-v4-pro',
+  narrator: 'z-ai/glm-5.2',
+  npc_agent: 'z-ai/glm-5.2',
+  adjudicator: 'google/gemini-2.5-flash-lite',
+  loop_classifier: 'google/gemini-2.5-flash-lite',
+  encounter_designer: 'google/gemini-2.5-flash-lite',
+  npc_tactician: 'google/gemini-2.5-flash-lite',
+  story_director: 'z-ai/glm-5.2',
+  ingredient_generator: 'z-ai/glm-5.2',
+  beat_planner: 'google/gemini-2.5-flash-lite',
+  hook_weaver: 'z-ai/glm-5.2',
+  meta_loop_steward: 'z-ai/glm-5.2',
   consistency_checker: 'google/gemini-2.5-flash-lite',
   summarizer: 'google/gemini-2.5-flash-lite',
   user_direct: 'google/gemini-2.5-flash-lite',
 }
 
+// Two models, on purpose: every role is either "code validates this" (flash-lite) or "nothing
+// downstream can fix this" (glm-5.2). This is the picker's menu, not a whitelist - a stored
+// override naming another model still resolves.
 export const CURATED_TEXT_MODELS = [
-  'xiaomi/mimo-v2.5',
-  'deepseek/deepseek-v4-flash',
-  'deepseek/deepseek-v4-pro',
   'google/gemini-2.5-flash-lite',
-  'mistralai/mistral-nemo',
+  'z-ai/glm-5.2',
 ] as const
 
 export function isAgentRole(value: string): value is AgentRole {

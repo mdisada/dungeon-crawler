@@ -8,7 +8,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { AgentCallError, callAgentText, callAgentTextWithMeta } from '../_shared/llm.ts'
 import {
-  CLAIM_ROLES, claimViolations, decideCanonization, extractJson, parseAdjudication,
+  clampDc, CLAIM_ROLES, claimViolations, decideCanonization, extractJson, parseAdjudication,
   parseConsistency, parseEntityClaims, parseGists, parseGrounding, parseNarrationOptions,
   parseNpcOutput, parseSocialClassification, suspectEntities,
 } from '../_shared/play/index.ts'
@@ -218,6 +218,46 @@ export async function runClaimCheck(
 }
 
 /**
+ * Does this draft declare the OPEN encounter already won?
+ *
+ * The graph moved structure to authoring time, which leaves prose as the last place the story can
+ * assert something the state does not hold. The dangerous shape is premature resolution: the
+ * party is mid-encounter and the narration says they slipped past the guards. State says
+ * unresolved, transcript says resolved, and every later line inherits the contradiction.
+ *
+ * Same discipline as the speaking-corpse check: the model PERCEIVES one narrow thing (does the
+ * passage show the goal achieved?), code decides what to do about it. A closed yes/no against a
+ * stated goal, not an open "is this consistent?" - the question that cannot fail.
+ */
+const OUTCOME_CLAIM_SYSTEM =
+  'A tabletop RPG scene is IN PROGRESS and its outcome has NOT been decided yet. You are given ' +
+  'the goal of that scene and a passage of narration. Answer one question: does the passage ' +
+  'show or state that the goal has ALREADY been ACHIEVED or DEFINITIVELY FAILED? Building ' +
+  'tension, describing attempts, partial progress, obstacles, or near-misses are all NOT ' +
+  'resolutions - answer false for those. Only an accomplished or conclusively lost goal is ' +
+  'true. When in doubt, answer false. Reply with ONLY JSON: {"resolved": true|false}'
+
+export async function runOutcomeClaimCheck(
+  env: AgentEnv,
+  draft: string,
+  goal: string,
+): Promise<boolean> {
+  if (env.demo || !goal.trim() || !draft.trim()) return false
+  try {
+    const raw = await agentJson(
+      env, 'consistency_checker', OUTCOME_CLAIM_SYSTEM,
+      `Scene goal (undecided): ${goal}\n\nPassage:\n${draft}`,
+      120,
+      { name: 'outcome_claim', schema: obj({ resolved: { type: 'boolean' } }) },
+    )
+    const obj_ = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    return obj_.resolved === true
+  } catch {
+    return false // a checker outage must never silence the narrator
+  }
+}
+
+/**
  * Theory grounding: which of the party's own lines asserts this claim, if any?
  *
  * Not "is this consistent?" - the question canonization used to ask, which cannot fail. This one
@@ -295,6 +335,12 @@ export interface AdjudicatorContext {
   knownNpcs: string[]
   /** Authored milestone vocabulary (objective + open-beat predicate atoms, exact text). */
   milestones: string[]
+  /**
+   * The adventure's difficulty shift, applied to whatever DC the model returns. Kept OUT of the
+   * prompt on purpose: telling the model "this is a hard adventure" makes it inflate its own DCs
+   * and the shift then lands twice. The model judges the fiction; the profile does the arithmetic.
+   */
+  dcShift?: number
 }
 
 /** World-movement proposal riding on the Adjudicator's ruling; server-validated before applying. */
@@ -534,7 +580,12 @@ export async function runAdjudicator(
   const raw = await agentJson(env, 'adjudicator', ADJUDICATOR_SYSTEM, user, 1000, sceneEffectsSchema(ctx))
   const parsed = parseAdjudication(raw, ctx.partySkills)
   if (!parsed.ok) throw new AgentCallError(`Adjudicator output invalid: ${parsed.errors.join('; ')}`)
-  return { ...parsed.data, sceneEffects: extractSceneEffects(raw) }
+  const data = parsed.data
+  const shift = ctx.dcShift ?? 0
+  const shifted = shift !== 0 && data.check
+    ? { ...data, check: { ...data.check, dc: clampDc(data.check.dc + shift) } }
+    : data
+  return { ...shifted, sceneEffects: extractSceneEffects(raw) }
 }
 
 function cannedClassification(text: string): SocialClassification {
@@ -777,13 +828,19 @@ export interface EntryMapping {
   interpretation: string
   /** Scene movement riding on the reply (travel/staging/time) - validated server-side. */
   sceneEffects: SceneEffects | null
+  /** Which authored affordance the reply matched, when the node offered a menu (2026-07-26).
+   *  Null on legacy guides, or when the reply fits none of them. */
+  affordanceKey?: string | null
 }
 
 const ENTRY_SYSTEM =
   'A tabletop RPG is in a CUTSCENE: the narrator just delivered a hook toward the next ' +
   'encounter. Classify the party\'s reply. Reply with ONLY JSON: {"entry": ' +
-  '"offered"|"adhoc"|"fold_in", "interpretation": string, "scene_effects"?: ' +
+  '"offered"|"adhoc"|"fold_in", "interpretation": string, "affordance_key"?: string, ' +
+  '"scene_effects"?: ' +
   '{"travel_location"?: string, "stage_npcs"?: [1-3 names], "advance_day"?: boolean}}. ' +
+  'When the scene lists authored ways in, FIRST try to match the reply to one of their keys and ' +
+  'return it as "affordance_key" - that match settles the classification. ' +
   '"offered": the reply engages or MOVES TOWARD the offered encounter in any way - attempting ' +
   'it, approaching its site, walking/climbing/riding onward, picking a direction the hook laid ' +
   'out, or agreeing to face it. Committing to move IS engagement ("I walk forward", "I follow ' +
@@ -816,6 +873,11 @@ export interface EntryContext {
   recentEvents: string[]
   /** Recently folded-in replies - a repeat/continuation of one of these must not fold again. */
   recentFolds: string[]
+  /**
+   * The authored node's affordances (2026-07-26). When present the mapper's job shrinks from
+   * open judgment to MATCHING against a closed menu: which authored way in is this, or none.
+   */
+  affordances?: { key: string; hint: string }[]
 }
 
 export async function runEntryMapper(env: AgentEnv, ctx: EntryContext): Promise<EntryMapping> {
@@ -833,10 +895,23 @@ export async function runEntryMapper(env: AgentEnv, ctx: EntryContext): Promise<
     ctx.recentFolds.length > 0
       ? `Already folded in (a repeat or continuation of these is COMMITMENT - never fold_in again): ${ctx.recentFolds.map((f) => `"${f}"`).join(' | ')}`
       : '',
+    // The closed menu. Matching an authored way in is a far narrower question than judging
+    // engagement in the abstract, and every option here is one the scene was BUILT to handle.
+    (ctx.affordances?.length ?? 0) > 0
+      ? `Authored ways into this scene (match the reply to ONE of these keys and return it as ` +
+        `"affordance_key", or omit it if the reply fits none):\n` +
+        ctx.affordances!.map((a) => `- ${a.key}: ${a.hint}`).join('\n')
+      : '',
   ].filter(Boolean).join('\n')
   const raw = await agentJson(env, 'adjudicator', ENTRY_SYSTEM, user, 300)
   const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
-  const entry = (['offered', 'adhoc', 'fold_in'] as const).find((e) => e === obj.entry) ?? 'fold_in'
+  let entry = (['offered', 'adhoc', 'fold_in'] as const).find((e) => e === obj.entry) ?? 'fold_in'
+  // A reply that matched an authored affordance IS engagement, whatever the model then called
+  // it: the menu is the ground truth and the label is commentary.
+  const matchedKey = typeof obj.affordance_key === 'string'
+    ? ctx.affordances?.find((a) => a.key === obj.affordance_key)?.key ?? null
+    : null
+  if (matchedKey) entry = 'offered'
   const effects = extractSceneEffects(raw)
   return {
     // "offered" with nothing on offer is a model error - degrade to fold_in, never a crash.
@@ -848,6 +923,7 @@ export async function runEntryMapper(env: AgentEnv, ctx: EntryContext): Promise<
     sceneEffects: effects
       ? { ...effects, milestones: [], markEvent: null, encounter: null }
       : null,
+    affordanceKey: matchedKey,
   }
 }
 

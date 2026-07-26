@@ -101,6 +101,9 @@ export interface IntentPayload {
   text?: string
   skill?: string
   target_id?: string
+  /** Set only when an authored choice chip was submitted UNEDITED (2026-07-26) - lets the server
+   *  engage that affordance directly instead of interpreting the text. */
+  affordance_key?: string
 }
 
 export function sendPlayerIntent(
@@ -229,7 +232,7 @@ export function decideReview(
 
 export function setAutoSettings(
   adventureId: string,
-  patch: { autoDialogue?: boolean; autoChecks?: boolean; nudgeMinutes?: number; hintTurns?: number },
+  patch: { autoDialogue?: boolean; autoChecks?: boolean; nudgeMinutes?: number },
 ): Promise<{ settings: { autoDialogue: boolean; autoChecks: boolean } }> {
   return callSession({
     action: 'player_intent',
@@ -239,6 +242,5 @@ export function setAutoSettings(
     ...(patch.autoDialogue !== undefined ? { auto_dialogue: patch.autoDialogue } : {}),
     ...(patch.autoChecks !== undefined ? { auto_checks: patch.autoChecks } : {}),
     ...(patch.nudgeMinutes !== undefined ? { nudge_minutes: patch.nudgeMinutes } : {}),
-    ...(patch.hintTurns !== undefined ? { hint_turns: patch.hintTurns } : {}),
   })
 }
