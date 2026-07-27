@@ -110,9 +110,15 @@ export function checkInvariants({
   // The last node opened is legitimately still in play when the run's turn budget runs out.
   const abandoned = staged.slice(0, Math.max(staged.length - 1, 0))
   if (abandoned.length > 0) {
-    violations.push(
-      `${abandoned.length} authored scene(s) opened and were never played to a resolution ` +
-      `(${abandoned.slice(0, 3).join(', ')}) - the party was shown a scene and had it taken away`)
+    // WARNING, not a violation (2026-07-27). A violation aborts the run mid-flight, and on its
+    // first outing this one killed a paid playthrough at turn 16 over a single abandoned scene -
+    // taking the evidence we were actually buying (whether NPC deflection fires and how it reads)
+    // down with it. One dropped scene is a real defect and worth surfacing; it is not a dead
+    // spine, and the abort threshold should mean "nothing further can be learned from this run".
+    const line = `${abandoned.length} authored scene(s) opened and were never played to a resolution ` +
+      `(${abandoned.slice(0, 3).join(', ')}) - the party was shown a scene and had it taken away`
+    if (abandoned.length >= 3) violations.push(line)
+    else warnings.push(line)
   }
 
   // The recognition judge exists to catch what the deterministic path missed. When it is

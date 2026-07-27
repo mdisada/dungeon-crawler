@@ -126,6 +126,35 @@ export async function milestoneVocabulary(
       .in('core_loop_id', loopIds)
     for (const beat of (beats ?? []) as { exit_conditions: unknown }[]) add(beat.exit_conditions)
   }
+
+  // THE REGISTRY IS THE VOCABULARY (2026-07-27).
+  //
+  // Everything above reconstructs the legitimate atom list from wherever predicates happened to
+  // live in the LEGACY model: objective predicates, plus `beats.exit_conditions`. The authored
+  // graph moved that information - a node exits through its transitions, so its
+  // `exit_conditions` is deliberately `[]`, and its setbacks live in `story_nodes.local_atoms`
+  // and the spec's `on_failure`. The vocabulary was never taught to follow.
+  //
+  // The result was silent and total: on every graph-bearing adventure, EVERY setback a node
+  // wrote on failure was rejected here as unauthored. Losing a scene changed nothing in the
+  // world, which is the exact "a failure must cost something" rule the guide lints for at
+  // authoring time - enforced there, discarded here. Found by the first run of graph-live.mjs.
+  //
+  // `story_atoms` already exists to be the authoritative list of atoms this guide authored, so
+  // read it rather than inferring the list from tables that may move again. Registry rows widen
+  // what may be WRITTEN; they deliberately do not touch `objectiveAtoms`, which gates who may
+  // complete an objective and stays derived from the objective's own predicate.
+  const { data: registry } = await service
+    .from('story_atoms')
+    .select('slug, kind')
+    .eq('adventure_id', adventureId)
+  for (const row of (registry ?? []) as { slug: string; kind: string }[]) {
+    if (!row.slug) continue
+    if (row.kind === 'event') events.add(row.slug)
+    else if (row.kind === 'fact') facts.add(row.slug)
+    else flags.add(row.slug)
+  }
+
   return { flags: [...flags], events: [...events], facts: [...facts], objective, objectiveAtoms: [...objectiveAtoms] }
 }
 

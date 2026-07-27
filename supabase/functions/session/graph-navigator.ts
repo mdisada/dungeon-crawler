@@ -16,6 +16,7 @@ import type { CoreLoop } from '../_shared/story/index.ts'
 import type { Json } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { parseStoredBeatSpec, runCombatPlaceholderEncounter } from './encounters.ts'
+import { applyMilestones } from './milestones.ts'
 import { graphDecision } from './graph-read.ts'
 import type { AuthoredNodeRow } from './graph-read.ts'
 import { narrationBeat } from './narration.ts'
@@ -34,6 +35,75 @@ export interface OpenNodeContext {
 }
 
 /**
+ * A NODE THAT OPENS ALWAYS RESOLVES (2026-07-27).
+ *
+ * `beats.node_id` was carrying two meanings on two different clocks: "never re-open this scene",
+ * which is true the moment the beat is inserted, and "this route is spent", which is only true
+ * once the scene has been played. Wherever a beat was closed without a resolution the second
+ * meaning became a lie - a route consumed for free, no setback written, no transition recorded,
+ * and the node unofferable forever after.
+ *
+ * The fix is not to split the two meanings but to make them COINCIDE. Every path that replaces
+ * the live beat funnels through the single close below, so recording the outgoing node's loss
+ * here makes "a beat row exists" and "the scene was played" the same statement - for all seven
+ * callers of planAndOpenBeat and any future one, rather than seven separate guards that each have
+ * to remember.
+ *
+ * Live 2026-07-27: node #n0 opened and narrated, the party never engaged it, the director's rung 3
+ * replanned past it, and it vanished with no event at all. Rung 4 is worse - it is gated on
+ * `!state.encounter`, so it hits this case BY CONSTRUCTION every single time it fires.
+ */
+async function closeOutgoingNode(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  loopId: string,
+  incomingNodeId: string,
+  trigger: string,
+): Promise<void> {
+  const { data: outgoing } = await service
+    .from('beats')
+    .select('id, node_id, encounter_spec')
+    .eq('core_loop_id', loopId)
+    .eq('status', 'active')
+    .not('node_id', 'is', null)
+    .limit(1)
+  const beat = (outgoing ?? [])[0] as { node_id: string; encounter_spec: Record<string, Json> | null } | undefined
+  if (!beat || beat.node_id === incomingNodeId) return
+
+  const spec = beat.encounter_spec ?? null
+  const nodeKey = typeof spec?.node_key === 'string' ? spec.node_key : null
+  if (!nodeKey) return
+
+  // Already played out on its own terms - nothing to record.
+  const { data: resolved } = await service
+    .from('event_log')
+    .select('id')
+    .eq('adventure_id', env.adventureId)
+    .eq('type', 'encounter_resolved')
+    .eq('payload->>node_key', nodeKey)
+    .limit(1)
+  if ((resolved ?? []).length > 0) return
+
+  // The setback fires. A scene the party loses - by failing it OR by walking away from it long
+  // enough that the story moved on - must cost them something, or "losing" is free.
+  const onFailure = Array.isArray(spec?.on_failure)
+    ? (spec.on_failure as unknown[]).filter((a): a is string => typeof a === 'string')
+    : []
+  const applied = onFailure.length > 0
+    ? await applyMilestones(service, env, sessionId, onFailure, 'encounter_outcome').catch(() => [])
+    : []
+
+  // Logged as a real resolution so the NAVIGATOR sees it: `lastResolvedNode` reads this, and the
+  // node's authored failure edge is followed exactly as it would be after a lost roll. An
+  // abandonment is a transition, not a hole.
+  await logEvent(service, env.adventureId, sessionId, 'encounter_resolved', {
+    node_key: nodeKey, tier: 'failed', abandoned: true, trigger,
+    milestones: applied as unknown as Json,
+  }).catch(() => {})
+}
+
+/**
  * Instantiate an authored node as the live beat: same `beats` row shape the planner produced
  * (so route-health, the lab inspector and openBeatSpec need no changes), plus `node_id` linking
  * back to what authored it.
@@ -47,6 +117,7 @@ export async function openAuthoredNode(
   ctx: OpenNodeContext,
   persist: (before: CoreLoop[], after: CoreLoop[]) => Promise<void>,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+  await closeOutgoingNode(service, env, sessionId, ctx.loop.id, node.id, ctx.trigger)
   const { error: closeError } = await service
     .from('beats').update({ status: 'completed' }).eq('core_loop_id', ctx.loop.id).eq('status', 'active')
   assertOk(closeError, 'beat close failed')
