@@ -17,7 +17,9 @@ import {
   runTheoryGrounding,
 } from './agents.ts'
 import type { AgentEnv, NpcContext } from './agents.ts'
-import { activeLoop, addressedNpcId } from '../_shared/story/index.ts'
+import {
+  activeLoop, addressedNpcId, deflectDirective, deflectLevel, resolveAddressed,
+} from '../_shared/story/index.ts'
 import { loadLoops } from './beats.ts'
 import { buildCanon } from './canon.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
@@ -30,6 +32,7 @@ import {
   pcLineCounts, pendingDiffs, typingDiff,
 } from './orchestrate.ts'
 import { retrieveMemories } from './memory.ts'
+import { pacingFor } from './pacing.ts'
 import { evaluateStoryProgress } from './progress.ts'
 import { recordProposal } from './proposals.ts'
 import { applySceneEffects } from './scene-director.ts'
@@ -84,6 +87,8 @@ async function loadNpcBundle(
   npcId: string,
   utterance: SayUtterance,
   checkResult: (CheckResult & { skill: string }) | null,
+  absentNote?: string,
+  deflectNote?: string,
 ): Promise<NpcBundle> {
   const npc = await loadNpc(service, env.adventureId, npcId)
   if (!npc) throw new Error('staged NPC row missing')
@@ -159,6 +164,8 @@ async function loadNpcBundle(
     offerTerms,
     constraint,
     direction,
+    absentNote,
+    deflectNote,
   })
 
   return { npc, state, sessionId: state.session.id, buildContext, knowledge, dispositions }
@@ -177,9 +184,11 @@ export async function npcReply(
   utterance: SayUtterance,
   checkResult: (CheckResult & { skill: string }) | null,
   direction?: string,
+  absentNote?: string,
+  deflectNote?: string,
 ): Promise<void> {
   const { npc, state, sessionId, buildContext, knowledge, dispositions } = await loadNpcBundle(
-    service, env, npcId, utterance, checkResult,
+    service, env, npcId, utterance, checkResult, absentNote, deflectNote,
   )
 
   let output = await runNpcAgent(env, buildContext(undefined, direction))
@@ -450,6 +459,19 @@ export async function npcReply(
   }
 }
 
+/** Named cast NOT currently on stage - dead, departed, or simply elsewhere in the story. */
+async function offstageNpcs(
+  service: SupabaseClient,
+  adventureId: string,
+  state: GameState,
+): Promise<{ name: string }[]> {
+  const staged = new Set(state.dialogue.speakers.map((sp) => sp.npcId))
+  const { data } = await service.from('npcs').select('id, name').eq('adventure_id', adventureId)
+  return ((data ?? []) as { id: string; name: string }[])
+    .filter((n) => n.name && !staged.has(n.id))
+    .map((n) => ({ name: n.name }))
+}
+
 /**
  * The say pipeline entry (F10 SS3.1-3.2): append the player's line, classify, then either
  * reply directly (plain conversation) or post a check prompt with a table-derived DC,
@@ -465,10 +487,51 @@ export async function handleSay(
   const state = (await loadState(service, env.adventureId)).state
   // Address the NPC the party actually named. Falls back to speakers[0] when nobody is named or
   // two staged NPCs both are - the historical behaviour, which is only wrong when it is confident.
+  // Naming someone who is NOT on stage used to fall through to speakers[0] in silence, so the
+  // wrong NPC answered as if they were the natural respondent. Live 2026-07-27: the player asked
+  // Dessa Mol a question and Warden Karthen answered it, twice, then told them eight lines later
+  // that Dessa was not there. The system knew the whole time and never said so.
+  //
+  // Deliberately NOT a control-flow interception. Diverting the turn broke player-theory
+  // canonization on the first run - "I think Old Tobbin was the killer" names an offstage NPC
+  // without addressing them, and mentioning someone in the third person is not talking to them.
+  // Telling those apart is a language judgement this layer should not be making. So the reply
+  // still comes from whoever is present; they are just told who was asked for, and answer it in
+  // character the way the Warden eventually did on his own.
+  const offstage = !targetNpcId ? await offstageNpcs(service, env.adventureId, state) : []
+  const addressed = targetNpcId
+    ? ({ kind: 'unclear' } as const)
+    : resolveAddressed(utterance.text, state.dialogue.speakers, offstage)
   const npcId = targetNpcId ??
-    addressedNpcId(utterance.text, state.dialogue.speakers) ??
+    (addressed.kind === 'staged' ? addressed.npcId : null) ??
     state.dialogue.speakers[0]?.npcId
   if (!npcId) return { status: 409, body: { error: 'No NPC in this scene' } }
+  const absentNote = addressed.kind === 'offstage'
+    ? `The player named ${addressed.name}, who is NOT here. You are not them and cannot speak for ` +
+      'them: if the reply touches on it at all, say plainly that they are gone before answering ' +
+      'as yourself.'
+    : undefined
+
+  // OFF-SPINE CONVERSATION LIMIT (owner-directed, 2026-07-27). A party can talk forever without
+  // the story moving and nothing pushed back: live, 23 turns produced 14 `say` events, 11 social
+  // encounters and ONE beat. The spine was reachable the whole time; play just never went there.
+  //
+  // The counter is the director's own `turnsSinceProgress`, so this reads exactly the same signal
+  // the rest of the pacing ladder does - no new bookkeeping, and nothing that inspects what the
+  // player actually SAID. Code picks the rung; the NPC Agent writes it in this NPC's voice from
+  // the personality and wants already in its context, so a smuggler and a grieving tavernkeeper
+  // brush the party off differently.
+  const level = deflectLevel({
+    turnsOffSpine: state.dm?.story?.director?.turnsSinceProgress ?? 0,
+    threshold: pacingFor(state).deflect,
+  })
+  const goal = state.objectives?.list?.find((o) => o.id === state.objectives?.currentId)?.title ?? ''
+  const deflectNote = deflectDirective(level, goal) || undefined
+  if (deflectNote) {
+    await logEvent(service, env.adventureId, sessionId, 'npc_deflected', {
+      level, npc_id: npcId, turns_off_spine: state.dm?.story?.director?.turnsSinceProgress ?? 0,
+    }).catch(() => {})
+  }
   const npc = await loadNpc(service, env.adventureId, npcId)
   if (!npc) return { status: 404, body: { error: 'NPC not found' } }
 
@@ -502,7 +565,7 @@ export async function handleSay(
       return { status: 200, body: { ok: true, resolved: 'ask_dm' } }
     }
     if (classification.kind === 'conversation') {
-      const resolved = await npcBeat(service, env, npcId, utterance, null)
+      const resolved = await npcBeat(service, env, npcId, utterance, null, absentNote, deflectNote)
       return { status: 200, body: { ok: true, resolved } }
     }
 
@@ -637,13 +700,15 @@ export async function npcBeat(
   npcId: string,
   utterance: SayUtterance,
   checkResult: (CheckResult & { skill: string }) | null,
+  absentNote?: string,
+  deflectNote?: string,
 ): Promise<'conversation' | 'review_staged'> {
   const state = (await loadState(service, env.adventureId)).state
   if (dialogueGateActive({ mode: env.mode, autoDialogue: dmSettings(state).autoDialogue })) {
     await stageReview(service, env, npcId, utterance, checkResult)
     return 'review_staged'
   }
-  await npcReply(service, env, npcId, utterance, checkResult)
+  await npcReply(service, env, npcId, utterance, checkResult, undefined, absentNote, deflectNote)
   return 'conversation'
 }
 

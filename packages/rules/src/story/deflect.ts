@@ -1,0 +1,69 @@
+// Off-spine conversation limiting (owner-directed, 2026-07-27).
+//
+// THE PROBLEM. A party can talk indefinitely without the story moving, and nothing in the loop
+// pushed back. Live: 23 turns, 14 `say` events, 11 social encounters opened, ONE beat, ZERO
+// objectives. The spine was reachable the whole time and play simply never reached it - the
+// conversation was more inviting than the task, so the run drained into it.
+//
+// WHY THE NPC IS THE RIGHT VEHICLE. The alternatives are all worse for the player: a system
+// message breaks fiction, forcing the scene closed confiscates their turn, and the Progress
+// Director's rungs are heavy machinery aimed at a party that is STUCK - this party is not stuck,
+// it is chatting. An NPC declining to follow the tangent is what a real person at the table does,
+// and it costs the player nothing but a beat.
+//
+// THE DIVISION OF LABOUR. Code decides WHEN and HOW HARD from a counter it already keeps
+// (`turnsSinceProgress`). The NPC Agent writes the line, from the personality, wants and voice its
+// row already carries - so the brush-off sounds like that specific person and not a stock refusal.
+// Nothing here inspects what the player SAID; the trigger is structural, never a word signal.
+
+/**
+ * How firmly the NPC should steer back. Escalating, because a single deflection that goes
+ * unheeded and never hardens is just a speed bump - and because a party that takes the hint on
+ * the first nudge must never see the blunt version.
+ */
+export type DeflectLevel = 'none' | 'soft' | 'firm' | 'shut'
+
+export interface DeflectInput {
+  /** Turns since the spine last moved - the Progress Director's own counter. */
+  turnsOffSpine: number
+  /** Pacing threshold: turns of drift the difficulty allows before an NPC starts steering. */
+  threshold: number
+}
+
+/**
+ * Three rungs above the threshold, one turn wide each, then it stays at `shut`.
+ *
+ * Deliberately shallow. By the time a party has ignored `shut` the Progress Director's own ladder
+ * (reveal, replan, rescue) is already climbing, and stacking a fourth deflection on top would
+ * just be the DM nagging.
+ */
+export function deflectLevel(input: DeflectInput): DeflectLevel {
+  const over = input.turnsOffSpine - Math.max(input.threshold, 1)
+  if (over < 0) return 'none'
+  if (over === 0) return 'soft'
+  if (over === 1) return 'firm'
+  return 'shut'
+}
+
+/**
+ * The directive handed to the NPC Agent. It says what to DO, never what to say - the words are the
+ * NPC's, drawn from the personality and wants already in its context, so a gruff smuggler and a
+ * grieving tavernkeeper brush the party off in recognisably different ways.
+ */
+export function deflectDirective(level: DeflectLevel, goal: string): string {
+  if (level === 'none') return ''
+  const task = goal.trim() ? `what actually needs doing: ${goal.trim()}` : 'what actually needs doing'
+  if (level === 'soft') {
+    return 'STEER BACK. This has drifted off what matters. Give the tangent no more than a passing ' +
+      `word - you do not know, you would rather not, it is not the moment - and turn to ${task}. ` +
+      'Stay warm and in character; you are redirecting, not scolding.'
+  }
+  if (level === 'firm') {
+    return 'STEER BACK, PLAINLY. The drift has gone on. Decline the tangent outright in your own ' +
+      `manner and say what you want to happen next, naming ${task}. One or two sentences. Do not ` +
+      'answer the question they asked.'
+  }
+  return 'YOU ARE DONE TALKING. Say almost nothing - a few words, a look, a gesture, a trailing ' +
+    `"..." - and put ${task} in front of them. No explanation, no new information, no invitation ` +
+    'to keep the conversation going. This must read as the moment for talk closing, in your voice.'
+}

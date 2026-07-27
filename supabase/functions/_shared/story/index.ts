@@ -61,10 +61,12 @@ export {
 } from './offers.ts'
 export { corpsePropText, scenePropsAt } from './props.ts'
 export type { PropRow, ScenePropView } from './props.ts'
-export { addressedNpcId, isStageable, npcStateOf, resolveNpcNames, stageableNpcs } from './staging.ts'
+export { deflectDirective, deflectLevel } from './deflect.ts'
+export type { DeflectLevel } from './deflect.ts'
+export { addressedNpcId, isStageable, npcStateOf, resolveAddressed, resolveNpcNames, stageableNpcs } from './staging.ts'
 export { annotateStaleMemories } from './memory-staleness.ts'
 export type { MemorySubject } from './memory-staleness.ts'
-export type { NpcLiveState, NpcStageRow } from './staging.ts'
+export type { AddressedNpc, NpcLiveState, NpcStageRow } from './staging.ts'
 export {
   ENCOUNTER_TEMPLATES, pickTemplate, templateByKey, templateGuidance, templateMenu,
   templatesForKind, TWIST_AXES,

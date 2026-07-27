@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { addressedNpcId, isStageable, npcStateOf, resolveNpcNames, stageableNpcs } from './staging'
+import { addressedNpcId, isStageable, npcStateOf, resolveAddressed, resolveNpcNames, stageableNpcs } from './staging'
 import type { NpcStageRow } from './staging'
 
 const cast: NpcStageRow[] = [
@@ -106,5 +106,42 @@ describe('addressedNpcId - who the party is talking to (2026-07-23)', () => {
     const odd = [{ npcId: 'a', name: 'Mr. O(1)' }, { npcId: 'b', name: 'Kestrel' }]
     expect(addressedNpcId('I nod at Kestrel.', odd)).toBe('b')
     expect(() => addressedNpcId('anything', odd)).not.toThrow()
+  })
+})
+
+describe('resolveAddressed - naming someone who is not here (2026-07-27)', () => {
+  const staged = [{ npcId: 'k', name: 'Warden Sef Karthen' }]
+  const offstage = [{ name: 'Dessa Mol' }, { name: 'Cael Vesht' }]
+
+  it('reports the named NPC as offstage instead of substituting whoever is present', () => {
+    // The live failure: this exact utterance was answered by Karthen, twice.
+    expect(resolveAddressed('I ask Dessa Mol what she thinks is moving on the ships', staged, offstage))
+      .toEqual({ kind: 'offstage', name: 'Dessa Mol' })
+  })
+
+  it('resolves a staged NPC even when only one is on stage', () => {
+    // addressedNpcId returns null below two staged NPCs, so naming the one present person never
+    // resolved - it only ever worked by falling through to speakers[0].
+    expect(resolveAddressed('Karthen, what is in the office?', staged, offstage))
+      .toEqual({ kind: 'staged', npcId: 'k' })
+  })
+
+  it('treats a mention of an absent person as talk ABOUT them, not TO them', () => {
+    expect(resolveAddressed('I ask Karthen where Dessa Mol went', staged, offstage))
+      .toEqual({ kind: 'staged', npcId: 'k' })
+  })
+
+  it('stays unclear when two offstage names appear', () => {
+    expect(resolveAddressed('what happened to Dessa Mol and Cael Vesht', staged, offstage))
+      .toEqual({ kind: 'unclear' })
+  })
+
+  it('stays unclear when nobody is named', () => {
+    expect(resolveAddressed('I look around', staged, offstage)).toEqual({ kind: 'unclear' })
+  })
+
+  it('does not match a name inside a longer word', () => {
+    expect(resolveAddressed('I check the vestibule', staged, [{ name: 'Vest' }]))
+      .toEqual({ kind: 'unclear' })
   })
 })

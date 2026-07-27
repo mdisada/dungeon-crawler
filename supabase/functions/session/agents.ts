@@ -656,6 +656,17 @@ export interface NpcContext {
   constraint?: string
   /** DM-chosen gist (Slice 2 review console): the reply must follow this direction. */
   direction?: string
+  /**
+   * The party addressed someone who is not in this scene (2026-07-27). Not a direction and not a
+   * constraint - just the fact that the question was aimed elsewhere, so this NPC can say so
+   * instead of quietly answering on a missing person's behalf.
+   */
+  absentNote?: string
+  /**
+   * Steer the conversation back on task (2026-07-27). Code decides when and how hard from the
+   * no-progress counter; the words are this NPC's, out of the personality and wants already above.
+   */
+  deflectNote?: string
 }
 
 function cannedNpcOutput(ctx: NpcContext): unknown {
@@ -796,6 +807,8 @@ export async function runNpcAgent(env: AgentEnv, ctx: NpcContext): Promise<NpcAg
       ? `Their ${ctx.checkResult.skill} check ${ctx.checkResult.success ? 'SUCCEEDED' : 'FAILED'} (margin ${ctx.checkResult.margin}).`
       : 'No check involved - plain conversation.',
     ctx.direction ? `The DM chose this direction for your reply - follow it closely: "${ctx.direction}"` : '',
+    ctx.absentNote ?? '',
+    ctx.deflectNote ?? '',
     ctx.constraint ? `HARD CONSTRAINTS - the previous draft violated these facts. ${ctx.constraint}` : '',
   ].filter(Boolean).join('\n')
   const attempt = async () => {
@@ -959,6 +972,19 @@ export async function runReplyGists(env: AgentEnv, ctx: NpcContext, rejected?: s
   return parseGists(await agentJson(env, 'npc_agent', GIST_SYSTEM, user, 200))
 }
 
+/**
+ * How to read the labelled fact block every narration call carries (2026-07-27).
+ *
+ * These are constants, so they belong here - sent once as system, not re-explained inside every
+ * user message. That move is what paid for the goal, cast identities and story-so-far the block was
+ * missing: same prompt size, three gaps closed.
+ */
+const NARRATOR_CONTEXT_KEY =
+  ' Labelled facts follow. GOAL: never state as a task. HERE: who is in this scene and who they ' +
+  'ARE - hold every detail true, their role and their gender included. CAST: exist, but elsewhere. ' +
+  'GONE: discuss freely, never stage or voice. FORCES/DONE/CLOCK/PROPS: established - build on, ' +
+  'never redefine. Spell names EXACTLY. Unnamed newcomers are always allowed.'
+
 const NARRATOR_BASE =
   'You narrate a tabletop RPG. Second person, present tense, 2-4 sentences, vivid but concise. ' +
   'Never invent facts about named NPCs/items/places beyond the given context. Never mention ' +
@@ -966,7 +992,7 @@ const NARRATOR_BASE =
   'party\'s motivation or feelings; motivation belongs to the players. When a party member\'s ' +
   'described traits or quirks bear on the moment (a dwarf\'s Darkvision in the dark, a ' +
   'sailor\'s eye for rigging), let the narration notice it - personal, never generic. ' +
-  'Output only narration text.'
+  'Output only narration text.' + NARRATOR_CONTEXT_KEY
 
 /**
  * 'beat' opens situations and must end on a choice; 'outcome' resolves and may settle;
@@ -1001,7 +1027,7 @@ const NARRATOR_SYSTEMS: Record<NarrationStyle, string> = {
     'their answer, a visible approach, a pressing danger. Never re-offer a direction the ' +
     'party already chose, and never pad a single obvious path into a menu: if one way onward ' +
     'exists, carry them down it and end at what it reveals. The players\' reply enters the ' +
-    'next encounter. Output only narration text.',
+    'next encounter. Output only narration text.' + NARRATOR_CONTEXT_KEY,
 }
 
 export async function runNarrator(

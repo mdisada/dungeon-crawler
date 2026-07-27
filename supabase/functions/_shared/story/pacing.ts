@@ -29,6 +29,14 @@ export interface PacingProfile {
   guaranteedRoute: number
   failForward: number
   offerPressure: number
+  /**
+   * Turns of drift an NPC will tolerate before starting to steer the conversation back (2026-07-27).
+   *
+   * The first rung of the whole pacing ladder and the gentlest thing on it - one person declining
+   * to follow a tangent, in character. It sits BELOW `nudge` deliberately: a party that is merely
+   * chatting should meet an in-fiction shrug long before the DM starts narrating hints at them.
+   */
+  deflect: number
   // --- the second clock: plain turns on one objective, which player churn cannot reset ---
   guaranteedRouteOnObjective: number
   failForwardOnObjective: number
@@ -53,21 +61,25 @@ export interface PacingProfile {
  */
 export const DIFFICULTY_PROFILES: Record<DifficultyPreset, PacingProfile> = {
   easy: {
+    deflect: 4,
     nudge: 2, reveal: 3, replanBeat: 4, guaranteedRoute: 7, failForward: 12, offerPressure: 3,
     guaranteedRouteOnObjective: 18, failForwardOnObjective: 50,
     dcShift: -2, successBias: -1, failureBias: 1, dangerBias: -2,
   },
   standard: {
+    deflect: 3,
     nudge: 2, reveal: 4, replanBeat: 6, guaranteedRoute: 9, failForward: 15, offerPressure: 3,
     guaranteedRouteOnObjective: 25, failForwardOnObjective: 40,
     dcShift: 0, successBias: 0, failureBias: 0, dangerBias: 0,
   },
   hard: {
+    deflect: 3,
     nudge: 3, reveal: 6, replanBeat: 8, guaranteedRoute: 14, failForward: 18, offerPressure: 4,
     guaranteedRouteOnObjective: 26, failForwardOnObjective: 35,
     dcShift: 2, successBias: 0, failureBias: -1, dangerBias: 1,
   },
   deadly: {
+    deflect: 2,
     nudge: 4, reveal: 8, replanBeat: 10, guaranteedRoute: 20, failForward: 22, offerPressure: 5,
     guaranteedRouteOnObjective: 24, failForwardOnObjective: 30,
     dcShift: 3, successBias: 1, failureBias: -1, dangerBias: 2,
@@ -114,6 +126,10 @@ export const PACING_GROUP_LABELS: Record<PacingGroup, { title: string; blurb: st
  * They still move with the preset, and `resolvePacing` keeps them consistent with any override.
  */
 export const PACING_KNOBS: readonly PacingKnob[] = [
+  {
+    key: 'deflect', group: 'pressure', label: 'Small-talk allowance', min: 1, max: 15, unit: 'turns',
+    help: 'Turns the party can spend off-task before NPCs start steering the conversation back - in character, in their own words. The gentlest nudge there is.',
+  },
   {
     key: 'nudge', group: 'pressure', label: 'Hint delay', min: 1, max: 20, unit: 'turns',
     help: 'Turns without progress before the DM re-frames what is already in front of the party. No new information is given.',
@@ -199,6 +215,10 @@ export function resolvePacing(
   // The silence ladder, weakest rung first: each rung must be reachable, so each threshold is
   // pushed to at least its predecessor. Editing "hint delay" upward therefore drags the rungs
   // above it rather than silently disabling them.
+  // `deflect` is deliberately NOT on this ladder. The rungs below are the DM's escalating
+  // interventions and each must stay reachable above the last; an NPC declining to follow a
+  // tangent is a different mechanism that happens to read the same counter, and forcing it into
+  // the ordering dragged `nudge` up to meet it and corrupted every preset.
   const ladder: PacingKnobKey[] = ['nudge', 'reveal', 'replanBeat', 'guaranteedRoute', 'failForward']
   for (let i = 1; i < ladder.length; i++) {
     const prev = merged[ladder[i - 1]]
