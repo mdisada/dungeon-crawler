@@ -12,15 +12,13 @@
 // setbacks a failure costs, and how the party moves between nodes.
 
 import { Check } from '../json.ts'
-import { listMilestoneAtoms } from '../../story/evaluate.ts'
 import { minimalSatisfyingAtoms } from '../guaranteed-route.ts'
 import type { GuaranteedRoute } from '../guaranteed-route.ts'
 import { ENCOUNTER_KINDS } from '../../story/beats.ts'
 import type { BeatEncounterKind } from '../../story/beats.ts'
 import { affordanceLabel, nodeKeyFor, validateNodeGraph } from '../nodes.ts'
-import type { NodeAffordance, NodeTransition, StoryNodeSpec, TransitionTier } from '../nodes.ts'
-import { TRANSITION_TIERS } from '../nodes.ts'
-import { canonicalizeAtomSlug, MAX_LOCAL_ATOMS_PER_BEAT, resolveAtomText } from '../../story/atoms.ts'
+import type { NodeAffordance, NodeTransition, StoryNodeSpec } from '../nodes.ts'
+import { canonicalizeAtomSlug, MAX_LOCAL_ATOMS_PER_BEAT } from '../../story/atoms.ts'
 import type { AtomKind, AtomProposal } from '../../story/atoms.ts'
 import type { Json, ParseResult } from '../types.ts'
 
@@ -106,11 +104,6 @@ export function buildRescueNode(objectiveId: string, route: GuaranteedRoute): St
   }
 }
 
-function objectiveAtomNames(predicate: unknown): string[] {
-  const atoms = listMilestoneAtoms(predicate)
-  return [...atoms.flags, ...atoms.events, ...atoms.facts]
-}
-
 export function buildStage5NodesPrompt(ctx: Stage5NodesContext): { system: string; user: string; maxTokens: number } {
   const system = `You are the Story Architect for a tabletop RPG platform. For one chapter, author the playable NODE GRAPH: the concrete scenes the party moves through to achieve each objective.
 
@@ -118,10 +111,11 @@ Rules:
 - For EACH objective, author at least ${MIN_ROUTE_NODES} DISTINCT route nodes - genuinely different ways to achieve it (a stealth route AND a social route; a clever route AND a forceful route). This is the Three-Clue Rule: a party that flubs one way still has another.
 - Each node has ONE kind: "skill_challenge", "social", "puzzle", or "combat". Vary them - do not make every route a skill_challenge. At least one combat somewhere in the adventure.
 - A "social" node MUST name at least one living NPC by key from the list.
-- You do NOT author what a success awards - the engine derives that from the objective. You author what a SETBACK costs: declare up to ${MAX_LOCAL_ATOMS_PER_BEAT} local atoms (flags/events) per node and reference them in on_failure. A failure must change something.
+- You do NOT author outcomes, edges, or what a success awards. The engine derives every one of those. You write the FICTION and pick from the menus.
 - narration_seed: 1-2 sentences the narrator opens the scene on, ending on a hook. stakes: one line - what is at risk.
 - affordances: 2-3 short player options {key, hint}. The hint is the flavor; the app prefixes the mechanic.
-- transitions: an outcome is PASS or FAIL, never anything in between. Every node needs a "full" transition, and a full success ALWAYS resolves the objective - so its "to" is always "done". A "failed" outcome NEVER resolves the objective: its "to" must be the index of a DIFFERENT node in THIS objective (never "done", never its own index) - a setback sends the party somewhere else to try again. Every failed edge MUST carry an "arrival_context": one line describing how the party arrives THERE having just fallen short - never phrased as a success.
+- setback: the ONE thing that changes when the party falls short here - a short flag name and a kind. Name the consequence, not the failure ("warden_suspicious", not "check_failed"). It must be specific to THIS scene, never the objective's own goal.
+- setback_line: one line describing how the party arrives at their next attempt having just fallen short here. Never phrase it as a success.
 
 Respond with ONLY a JSON object:
 {
@@ -130,10 +124,8 @@ Respond with ONLY a JSON object:
       { "kind": "social", "narration_seed": "...", "stakes": "...",
         "npc_keys": ["npc:..."],
         "affordances": [ { "key": "press", "hint": "press her on the ledger" } ],
-        "local_atoms": [ { "name": "warden_suspicious", "kind": "flag" } ],
-        "on_failure": ["warden_suspicious"],
-        "transitions": [ { "on": "full", "to": "done", "arrival_context": "" },
-                         { "on": "failed", "to": 1, "arrival_context": "Shut out, the party must try the cellar instead." } ] }
+        "setback": { "name": "warden_suspicious", "kind": "flag" },
+        "setback_line": "Shut out, the party must try the cellar instead." }
     ] }
   ]
 }`
@@ -184,8 +176,6 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
       c.errors.push(`$.objectives[${bi}]: objective "${objective.title}" has no writable completion atom`)
       continue
     }
-    const menu = objectiveAtomNames(objective.completionPredicates)
-
     const rawNodes = c.arr(block.nodes, `$.objectives[${bi}].nodes`, MIN_ROUTE_NODES, 5)
     const nodeCount = rawNodes.length
 
@@ -200,8 +190,18 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
       const kind = (ENCOUNTER_KINDS.find((k) => k === n.kind) ?? 'skill_challenge') as BeatEncounterKind
       const stakes = c.str(n.stakes ?? '', `${path}.stakes`, { allowEmpty: true })
 
-      // Declared setback atoms - the menu for on_failure = objective atoms + these.
-      const declared: AtomProposal[] = c.arr(n.local_atoms ?? [], `${path}.local_atoms`, 0, MAX_LOCAL_ATOMS_PER_BEAT)
+      // ONE setback per node. The model used to declare up to four local atoms and separately
+      // choose which of them `on_failure` spent - two fields, and every way of getting the pairing
+      // wrong was a node whose failure cost nothing (or, worse, awarded the objective itself).
+      // With `partial` gone a node needs exactly one consequence, so asking for exactly one makes
+      // "a failure must change something" true by construction rather than by repair.
+      //
+      // `local_atoms` is still read as a fallback: a model that reverts to the old shape gets its
+      // first declared atom used rather than a rejected chapter.
+      const setbackObj = (typeof n.setback === 'object' && n.setback !== null && !Array.isArray(n.setback)
+        ? n.setback
+        : null) as Record<string, unknown> | null
+      const legacyAtoms = c.arr(n.local_atoms ?? [], `${path}.local_atoms`, 0, MAX_LOCAL_ATOMS_PER_BEAT)
         .flatMap((a, ai) => {
           const at = c.obj(a, `${path}.local_atoms[${ai}]`)
           const name = typeof at.name === 'string' ? at.name.trim() : ''
@@ -210,6 +210,10 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
           const akind: AtomKind = at.kind === 'event' ? 'event' : 'flag'
           return name ? [{ name, kind: akind }] : []
         })
+      const setbackName = typeof setbackObj?.name === 'string' ? setbackObj.name.trim() : ''
+      const declared: AtomProposal[] = setbackName
+        ? [{ name: setbackName, kind: setbackObj?.kind === 'event' ? 'event' : 'flag' }]
+        : legacyAtoms.slice(0, 1)
       localAtoms.push(...declared)
       // A SETBACK MAY ONLY SPEND LOCAL ATOMS. The failure menu deliberately excludes the
       // objective's own spine atoms: awarding one on failure means losing the scene COMPLETES the
@@ -219,38 +223,21 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
       // the party could never reach. Nothing structural could see it: the failure map was
       // non-empty, the transitions were valid, and the atom was registered. The playability
       // prover found it by walking the paths.
-      const failureMenu = declared.map((a) => a.name)
-      const resolveAtoms = (key: 'on_failure'): string[] => {
-        const list = Array.isArray(n[key]) ? (n[key] as unknown[]) : []
-        const out: string[] = []
-        for (const entry of list) {
-          if (typeof entry !== 'string' || !entry.trim()) continue
-          const res = resolveAtomText(entry, failureMenu)
-          if (res.ok && !out.includes(res.text)) out.push(res.text)
-        }
-        return out
-      }
-
-      // A SETBACK MUST COST SOMETHING. The prompt asks for it and the model routinely skips it -
-      // live 2026-07-26, three of five encounter resolutions came in failed or partial and every
-      // one awarded zero atoms, so the world recorded nothing about a party that kept losing.
-      // The model already declared its setback atoms; if it forgot to reference one, code does.
-      const onFailure = resolveAtoms('on_failure')
-      let repairedFailure = onFailure
+      // The failure map is now DERIVED, not chosen. The node's one declared setback is what it
+      // costs - there is no separate reference for the model to get wrong, and no way to name the
+      // objective's own goal here, which is how "Breach the Harbourmaster's Office" ended up
+      // completing itself on failure (2026-07-27; found by the playability prover, invisible to
+      // every structural rule because the map was non-empty and the atom was registered).
+      let repairedFailure = declared.map((a) => a.name)
       if (repairedFailure.length === 0) {
-        if (declared.length > 0) {
-          repairedFailure = [declared[0].name]
-        } else {
-          // The model declared nothing to spend. Synthesize one readable, deterministic setback
-          // and register it, rather than letting the node ship with a free loss - which the
-          // stage-8 `failure_writes_nothing` gate would (correctly) refuse, taking the whole
-          // guide down over an omission code can fill in perfectly.
-          const synthetic = canonicalizeAtomSlug(`${objective.title} attempt ${ni + 1} failed`)
-          if (synthetic) {
-            const atom: AtomProposal = { name: synthetic, kind: 'flag' }
-            localAtoms.push(atom)
-            repairedFailure = [synthetic]
-          }
+        // Nothing declared. Synthesize one readable, deterministic setback and register it, rather
+        // than shipping a node with a free loss - which the stage-8 gate would (correctly) refuse,
+        // taking the whole guide down over an omission code can fill in perfectly.
+        const synthetic = canonicalizeAtomSlug(`${objective.title} attempt ${ni + 1} failed`)
+        if (synthetic) {
+          const atom: AtomProposal = { name: synthetic, kind: 'flag' }
+          localAtoms.push(atom)
+          repairedFailure = [synthetic]
         }
       }
 
@@ -277,55 +264,32 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
         ? parsedAffordances
         : [{ key: 'engage', label: affordanceLabel(resolvedKind, objective.title), hint: objective.title }]
 
-      const transitions: NodeTransition[] = c.arr(n.transitions, `${path}.transitions`, 1, 6).flatMap((t, ti) => {
-        const tr = c.obj(t, `${path}.transitions[${ti}]`)
-        const on = (TRANSITION_TIERS.find((x) => x === tr.on) ?? 'full') as TransitionTier
-        let toNodeKey: string | null = null
-        // A full success on a ROUTE node always completes the objective - its on_success IS the
-        // objective's minimal satisfying set (derived above, property-tested in guaranteed-route).
-        // So a `full -> sibling` edge is dead by construction: the objective resolves, progress
-        // evaluation moves the ladder on, and the sibling never plays. Authored ones were shipping
-        // (2026-07-26); code decides this rather than hoping the prompt is obeyed.
-        if (on === 'full') return [{ on, toNodeKey: null, arrivalContext: '' } as NodeTransition]
-        if (tr.to !== 'done' && tr.to != null) {
-          const idx = typeof tr.to === 'number' ? tr.to : Number(tr.to)
-          // Out of range, or pointing at itself (a self-loop the party just replays): fall to the
-          // deterministic ladder below rather than failing the chapter over one bad index.
-          if (Number.isInteger(idx) && idx >= 0 && idx < nodeCount && idx !== ni) {
-            toNodeKey = nodeKeyFor(objKey, 'route', idx)
-          }
-        }
-        // A SETBACK MAY NEVER RESOLVE THE OBJECTIVE. `to: "done"` on a failed/partial edge produced
-        // a node that opened nothing next and credited nothing, leaving the objective open with the
-        // party in a finished scene - and the model reached for it constantly, because the prompt
-        // used to permit it: 68 such edges across 11 of 11 guides authored before 2026-07-27.
-        //
-        // So code decides where a setback goes, the same way it already decides that a full success
-        // resolves the objective. The ladder preserves the Three-Clue shape - fail route 0 and you
-        // get route 1, fail the last route and the rescue is what is left - instead of handing over
-        // the guaranteed route on the party's first stumble.
-        if (!toNodeKey) {
-          toNodeKey = ni + 1 < nodeCount
+      // TRANSITIONS ARE DERIVED. The model no longer authors edges at all - it writes the setback
+      // line and nothing else. Every edge shape it used to be able to express was a way to break
+      // the graph: 68 `failed -> done` dead ends across 11 of 11 guides, self-loops that replayed
+      // the same scene, indices pointing at nodes that did not exist.
+      //
+      // The ladder is the Three-Clue shape: a full success always resolves the objective (its
+      // on_success IS the objective's minimal satisfying set), and a failure hands the party the
+      // next route, or the rescue once the routes are spent. Deterministic, and provable - the
+      // stage-8 prover walks exactly these edges.
+      const setbackLine = typeof n.setback_line === 'string' ? n.setback_line.trim() : ''
+      const legacyArrival = (Array.isArray(n.transitions) ? n.transitions : [])
+        .flatMap((t) => (typeof t === 'object' && t !== null ? [t as Record<string, unknown>] : []))
+        .find((t) => t.on === 'failed' && typeof t.arrival_context === 'string')
+      const arrivalContext = setbackLine ||
+        (typeof legacyArrival?.arrival_context === 'string' ? legacyArrival.arrival_context.trim() : '') ||
+        'That attempt fails, and the party is forced to look for another way.'
+      const transitions: NodeTransition[] = [
+        { on: 'full', toNodeKey: null, arrivalContext: '' },
+        {
+          on: 'failed',
+          toNodeKey: ni + 1 < nodeCount
             ? nodeKeyFor(objKey, 'route', ni + 1)
-            : nodeKeyFor(objKey, 'rescue', 0)
-        }
-        let arrivalContext = typeof tr.arrival_context === 'string' ? tr.arrival_context.trim() : ''
-        // A setback edge MUST say how the party arrives, or the destination's neutral seed narrates
-        // a failure as a success. If the author left it blank, code writes the honest minimum
-        // rather than dropping the edge (which would strand the failure tier).
-        if (toNodeKey && !arrivalContext) {
-          arrivalContext = on === 'failed'
-            ? 'That attempt fails, and the party is forced to look for another way.'
-            : 'That gets them only part of the way, and they must press on from a worse position.'
-        }
-        return [{ on, toNodeKey, arrivalContext }]
-      })
-      // Every node needs a full-success exit, and there is exactly one right answer for a route
-      // node (the objective resolves). Supplying it beats rejecting the chapter for an omission
-      // code can fill in perfectly.
-      if (!transitions.some((t) => t.on === 'full')) {
-        transitions.unshift({ on: 'full', toNodeKey: null, arrivalContext: '' })
-      }
+            : nodeKeyFor(objKey, 'rescue', 0),
+          arrivalContext,
+        },
+      ]
 
       // A missing seed is thin, not fatal: stage 7 reads node prose and can rewrite it, and the
       // narrator still has the objective and stakes to open on. Failing here cost a whole guide.

@@ -252,6 +252,59 @@ async function resyncAwardAtoms(db: SupabaseClient, adventureId: string): Promis
       .in('id', stale)
     assertOk(updateError, 'award atom resync failed')
   }
+
+  await resyncNodeAwards(db, adventureId)
+}
+
+/**
+ * The same resync for the authored graph: a node's `on_success` and an objective's
+ * `guaranteed_route.onSuccess` are both `minimalSatisfyingAtoms(predicate)`, derived once and then
+ * left behind when stage 7 rewrites the predicate.
+ *
+ * Both were added in the 2026-07-26 graph overhaul and neither was wired into this resync, so they
+ * drifted exactly the way `encounters.outcome_atoms` used to. Live 2026-07-27, "Cross Mirehaven's
+ * Harbour Front": the predicate became `mother_ettel_met | driftwood_yard_reached` while all three
+ * of its nodes and its rescue still awarded `ettel_guidance_won`. Nothing could complete the
+ * objective, and the playability prover reported it unwinnable on every path.
+ */
+async function resyncNodeAwards(db: SupabaseClient, adventureId: string): Promise<void> {
+  const [{ data: objectives, error: objError }, { data: nodes, error: nodeError }] = await Promise.all([
+    db.from('objectives').select('id, completion_predicates, guaranteed_route').eq('adventure_id', adventureId),
+    db.from('story_nodes').select('id, objective_id, encounter_spec').eq('adventure_id', adventureId),
+  ])
+  assertOk(objError, 'node award resync objectives load failed')
+  assertOk(nodeError, 'node award resync nodes load failed')
+  if ((nodes ?? []).length === 0) return
+
+  const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+  const asRecord = (v: unknown) =>
+    (typeof v === 'object' && v !== null && !Array.isArray(v) ? v : {}) as Record<string, unknown>
+
+  for (const objective of (objectives ?? []) as {
+    id: string; completion_predicates: unknown; guaranteed_route: unknown
+  }[]) {
+    const derived = minimalSatisfyingAtoms(objective.completion_predicates)
+    if (derived === null) continue
+
+    for (const node of (nodes ?? []) as { id: string; objective_id: string; encounter_spec: unknown }[]) {
+      if (node.objective_id !== objective.id) continue
+      const spec = asRecord(node.encounter_spec)
+      if (same(spec.on_success, derived)) continue
+      const { error } = await db
+        .from('story_nodes')
+        .update({ encounter_spec: { ...spec, on_success: derived } as unknown as Json })
+        .eq('id', node.id)
+      assertOk(error, 'node award resync failed')
+    }
+
+    const route = asRecord(objective.guaranteed_route)
+    if (Object.keys(route).length === 0 || same(route.onSuccess, derived)) continue
+    const { error } = await db
+      .from('objectives')
+      .update({ guaranteed_route: { ...route, onSuccess: derived } as unknown as Json })
+      .eq('id', objective.id)
+    assertOk(error, 'guaranteed route award resync failed')
+  }
 }
 
 /**

@@ -150,6 +150,82 @@ describe('parseStage5Nodes', () => {
     })
   })
 
+  describe('the model writes fiction and picks menus, nothing structural (2026-07-27)', () => {
+    // The new contract: no transitions, no on_failure, no local_atoms array. Just prose, a kind,
+    // npc keys, chips, one setback and one setback line.
+    const proseOnly = {
+      objectives: [{ objective_number: 1, nodes: [
+        { kind: 'social', narration_seed: 'Mara guards the strongbox.', stakes: 'She can call the watch.',
+          npc_keys: ['npc:mara'], affordances: [{ key: 'press', hint: 'talk her round' }],
+          setback: { name: 'watch_alerted', kind: 'flag' },
+          setback_line: 'Rebuffed, the party eyes the cellar hatch.' },
+        { kind: 'skill_challenge', narration_seed: 'The hatch is barred.', stakes: 'Noise carries.',
+          affordances: [{ key: 'force', hint: 'force it quietly' }],
+          setback: { name: 'timbers_splintered', kind: 'flag' },
+          setback_line: 'The hatch holds; only the front way is left.' },
+      ] }],
+    }
+    const parsed = () => {
+      const r = parseStage5Nodes(rawOutput(proseOnly), ctx)
+      expect(r.ok).toBe(true)
+      if (!r.ok) throw new Error(r.errors.join('; '))
+      return r.data
+    }
+
+    it('parses a node that authors no structure at all', () => {
+      const { nodes } = parsed()
+      expect(nodes).toHaveLength(2)
+      expect(nodes[0].node.narrationSeed).toContain('Mara')
+    })
+
+    it('derives the full-success edge as resolving the objective', () => {
+      const full = parsed().nodes[0].node.transitions.find((t) => t.on === 'full')
+      expect(full).toEqual({ on: 'full', toNodeKey: null, arrivalContext: '' })
+    })
+
+    it('derives the failure ladder: route 0 -> route 1 -> rescue', () => {
+      const [first, last] = parsed().nodes.map((n) => n.node)
+      const key = objectiveKeyOf('o1')
+      expect(first.transitions.find((t) => t.on === 'failed')?.toNodeKey).toBe(`${key}#n1`)
+      expect(last.transitions.find((t) => t.on === 'failed')?.toNodeKey).toBe(`${key}#r0`)
+    })
+
+    it('carries the setback line onto the failure edge', () => {
+      const failed = parsed().nodes[0].node.transitions.find((t) => t.on === 'failed')
+      expect(failed?.arrivalContext).toBe('Rebuffed, the party eyes the cellar hatch.')
+    })
+
+    it('spends exactly the declared setback on failure', () => {
+      expect(parsed().nodes[0].node.encounter.onFailure).toEqual(['watch_alerted'])
+      expect(parsed().nodes[0].node.localAtoms.map((a) => a.name)).toEqual(['watch_alerted'])
+    })
+
+    it('emits exactly two edges - there is no third outcome to author', () => {
+      for (const { node } of parsed().nodes) {
+        expect(node.transitions.map((t) => t.on).sort()).toEqual(['failed', 'full'])
+      }
+    })
+
+    it('supplies an honest default when the setback line is missing', () => {
+      const noLine = JSON.parse(JSON.stringify(proseOnly))
+      delete noLine.objectives[0].nodes[0].setback_line
+      const r = parseStage5Nodes(rawOutput(noLine), ctx)
+      expect(r.ok).toBe(true)
+      if (!r.ok) return
+      const failed = r.data.nodes[0].node.transitions.find((t) => t.on === 'failed')
+      expect(failed?.arrivalContext).toContain('fails')
+    })
+
+    it('still accepts the old shape, so a model reverting to it does not fail a chapter', () => {
+      const r = parseStage5Nodes(rawOutput(), ctx)
+      expect(r.ok).toBe(true)
+      if (!r.ok) return
+      expect(r.data.nodes[0].node.encounter.onFailure).toEqual(['watch_alerted'])
+      expect(r.data.nodes[0].node.transitions.find((t) => t.on === 'failed')?.arrivalContext)
+        .toContain('cellar')
+    })
+  })
+
   describe('a setback must cost something (2026-07-27)', () => {
     const withFailureMap = (onFailure: unknown, localAtoms: unknown) => ({
       objectives: [{ objective_number: 1, nodes: [
