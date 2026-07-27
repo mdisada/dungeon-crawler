@@ -11,20 +11,32 @@
 //
 // Usage: node tests/lab/narration-audit.mjs            (transcripts only)
 //        node tests/lab/narration-audit.mjs --atoms    (also queries live atom sources)
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 
 const LOGS = 'tests/lab/logs'
 const FALLBACK = 'The attempt is resolved; the outcome stands.'
 /** NARRATOR_BASE asks for "2-4 sentences, vivid but concise". ~400 chars is a generous 4. */
 const LENGTH_BRIEF = 400
 
+/**
+ * Newest last, so `--latest N` can slice off the tail.
+ *
+ * A before/after on the whole corpus is useless for judging a change: one new run is ~40 lines
+ * against ~3000, so any real improvement rounds to zero in the aggregate. Comparing the runs made
+ * SINCE a change against everything before it is the only way this instrument answers the question
+ * it exists for.
+ */
 function loadRuns() {
-  return readdirSync(LOGS).filter((f) => f.endsWith('.summary.json')).flatMap((f) => {
-    try {
-      const s = JSON.parse(readFileSync(`${LOGS}/${f}`, 'utf8'))
-      return Array.isArray(s.transcript) && s.transcript.length > 0 ? [{ id: f.slice(0, 8), s }] : []
-    } catch { return [] }
-  })
+  return readdirSync(LOGS)
+    .filter((f) => f.endsWith('.summary.json'))
+    .map((f) => ({ f, mtime: statSync(`${LOGS}/${f}`).mtimeMs }))
+    .sort((a, b) => a.mtime - b.mtime)
+    .flatMap(({ f }) => {
+      try {
+        const s = JSON.parse(readFileSync(`${LOGS}/${f}`, 'utf8'))
+        return Array.isArray(s.transcript) && s.transcript.length > 0 ? [{ id: f.slice(0, 8), s }] : []
+      } catch { return [] }
+    })
 }
 
 const sentences = (t) => t.split(/(?<=[.!?])\s+/).filter((x) => x.trim())
@@ -105,12 +117,12 @@ function auditRun({ s }) {
   }
 }
 
-function report(runs) {
+function report(runs, title = 'narration audit') {
   const a = runs.map(auditRun)
   const sum = (k) => a.reduce((x, r) => x + r[k], 0)
   const lines = sum('lines')
   const pct = (n) => `${((n / Math.max(lines, 1)) * 100).toFixed(1)}%`
-  console.log(`\n=== narration audit: ${runs.length} runs, ${lines} narration lines ===\n`)
+  console.log(`\n=== ${title}: ${runs.length} runs, ${lines} narration lines ===\n`)
   console.log(`  avg length          ${Math.round(a.reduce((x, r) => x + r.avgChars * r.lines, 0) / Math.max(lines, 1))} chars`)
   console.log(`  avg sentences       ${(a.reduce((x, r) => x + r.avgSentences * r.lines, 0) / Math.max(lines, 1)).toFixed(1)}  (brief asks 2-4)`)
   console.log(`  over ${LENGTH_BRIEF} chars     ${sum('overLong')}  ${pct(sum('overLong'))} of lines`)
@@ -144,5 +156,13 @@ async function atomSources() {
 }
 
 const runs = loadRuns()
-report(runs)
+const latestIdx = process.argv.indexOf('--latest')
+if (latestIdx !== -1) {
+  // Split at the boundary so the two halves are directly comparable on the same checks.
+  const n = Number(process.argv[latestIdx + 1] ?? 1)
+  report(runs.slice(0, -n), 'BEFORE (everything earlier)')
+  report(runs.slice(-n), `AFTER (latest ${n})`)
+} else {
+  report(runs)
+}
 if (process.argv.includes('--atoms')) await atomSources()

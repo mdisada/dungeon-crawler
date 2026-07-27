@@ -31,21 +31,27 @@ export interface DeflectInput {
   turnsOffSpine: number
   /** Pacing threshold: turns of drift the difficulty allows before an NPC starts steering. */
   threshold: number
+  /** Deflections already delivered in THIS stretch of no progress. */
+  priorDeflections: number
 }
 
 /**
- * Three rungs above the threshold, one turn wide each, then it stays at `shut`.
+ * The counter decides WHEN; how many brush-offs the party has already had decides HOW HARD.
+ *
+ * Both came off the turn counter at first, and the first live run showed why that is wrong: the
+ * counter advances whether or not anyone is speaking, so a party that talks intermittently gets
+ * `firm` as its opening contact and may never hear `soft` at all. Observed 2026-07-27 - three
+ * deflections, two `firm` and one `shut`, not a single `soft` among them. The escalation is
+ * supposed to be a conversation getting shorter, and that only works if the first one is gentle
+ * no matter which turn it happens to land on.
  *
  * Deliberately shallow. By the time a party has ignored `shut` the Progress Director's own ladder
- * (reveal, replan, rescue) is already climbing, and stacking a fourth deflection on top would
- * just be the DM nagging.
+ * (reveal, replan, rescue) is already climbing, and a fourth rung would just be the DM nagging.
  */
 export function deflectLevel(input: DeflectInput): DeflectLevel {
-  const over = input.turnsOffSpine - Math.max(input.threshold, 1)
-  if (over < 0) return 'none'
-  if (over === 0) return 'soft'
-  if (over === 1) return 'firm'
-  return 'shut'
+  if (input.turnsOffSpine < Math.max(input.threshold, 1)) return 'none'
+  if (input.priorDeflections <= 0) return 'soft'
+  return input.priorDeflections === 1 ? 'firm' : 'shut'
 }
 
 /**

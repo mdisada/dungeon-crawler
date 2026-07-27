@@ -380,7 +380,10 @@ export async function publishNarration(
     appendLinesDiff(s, [newLine(null, null, text)]),
     typingDiff(false),
   ])
-  await logEvent(service, env.adventureId, sessionId, 'narration_published', { text })
+  // `style` rides along so length can be judged per style (2026-07-27). Without it the measured
+  // 868-char median mixes 2-4-sentence beats with 4-8-sentence cutscenes, and "are beats too long?"
+  // has no answer - which is precisely why a length ceiling could not be set responsibly.
+  await logEvent(service, env.adventureId, sessionId, 'narration_published', { text, style })
   return text
 }
 

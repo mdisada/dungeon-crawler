@@ -425,7 +425,12 @@ async function main() {
   // of the predicate, so completion still lands here where the rest of the section expects it.
   const setFlag = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'dm_command', command: 'set_flag', flag: 'shore_secured', value: true })
   ok('set_flag accepted', setFlag.status === 200, setFlag.body)
-  ok('objective completed by predicate evaluation', (await eventsOf(advId, 'objective_completed')).length === 1)
+  const completedEvents = await eventsOf(advId, 'objective_completed')
+  ok('objective completed by predicate evaluation', completedEvents.length === 1, {
+    completed: completedEvents.map((e) => e.payload.title),
+    flags: (await resyncState(gm, advId)).dm?.facts?.flags ?? {},
+    encounterOpen: Boolean((await resyncState(gm, advId)).encounter),
+  })
   const [objRow2] = await serviceRest('GET', `objectives?id=eq.${objective.id}&select=reveal_state`)
   ok('objective row completed', objRow2.reveal_state === 'completed')
   state = await resyncState(gm, advId)

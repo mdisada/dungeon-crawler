@@ -459,6 +459,38 @@ export async function npcReply(
   }
 }
 
+/**
+ * How many brush-offs the party has already had in this stretch of no progress.
+ *
+ * `turns_off_spine` only ever rises within one stretch and resets to zero when the spine moves, so
+ * walking the log newest-first and stopping at the first value ABOVE the one before it lands
+ * exactly on the reset boundary. No extra state to keep in step, and it is self-correcting: if the
+ * events are ever missing the party simply gets a gentle deflection again, which is the safe way
+ * to be wrong.
+ */
+async function deflectionsThisStretch(
+  service: SupabaseClient,
+  adventureId: string,
+  turnsOffSpine: number,
+): Promise<number> {
+  const { data } = await service
+    .from('event_log')
+    .select('payload')
+    .eq('adventure_id', adventureId)
+    .eq('type', 'npc_deflected')
+    .order('id', { ascending: false })
+    .limit(6)
+  let count = 0
+  let previous = turnsOffSpine
+  for (const row of (data ?? []) as { payload: Record<string, Json> }[]) {
+    const at = Number(row.payload?.turns_off_spine ?? -1)
+    if (at < 0 || at > previous) break // the counter reset between here and there - older stretch
+    previous = at
+    count++
+  }
+  return count
+}
+
 /** Named cast NOT currently on stage - dead, departed, or simply elsewhere in the story. */
 async function offstageNpcs(
   service: SupabaseClient,
@@ -521,9 +553,11 @@ export async function handleSay(
   // player actually SAID. Code picks the rung; the NPC Agent writes it in this NPC's voice from
   // the personality and wants already in its context, so a smuggler and a grieving tavernkeeper
   // brush the party off differently.
+  const turnsOffSpine = state.dm?.story?.director?.turnsSinceProgress ?? 0
   const level = deflectLevel({
-    turnsOffSpine: state.dm?.story?.director?.turnsSinceProgress ?? 0,
+    turnsOffSpine,
     threshold: pacingFor(state).deflect,
+    priorDeflections: await deflectionsThisStretch(service, env.adventureId, turnsOffSpine),
   })
   const goal = state.objectives?.list?.find((o) => o.id === state.objectives?.currentId)?.title ?? ''
   const deflectNote = deflectDirective(level, goal) || undefined

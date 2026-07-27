@@ -377,8 +377,23 @@ export async function runEncounterDesigner(
           }
         : {}
   if (env.demo) {
+    // `max_failures` is deliberately unreachable in demo (2026-07-27). The $0 suites drive this
+    // challenge with REAL server-side dice and then assert the success path - the outcome map
+    // crediting its spine atom, the objective completing, the quest paying out, the ending
+    // scoring. At 1 success before 3 failures roughly one run in eight rolls three failures first,
+    // resolves `failed`, credits the failure map instead, and every later assertion collapses on
+    // a red herring.
+    //
+    // It only became reachable when `partial` was removed earlier today: this challenge used to
+    // resolve partial in every fixture and could not truly fail. The suite has a 2026-07-21
+    // comment about "unlucky dice" from the same class, patched then by allowing more attempts -
+    // which does not help, because the encounter closes the moment failures run out.
+    //
+    // Demo-only, and it makes the fixture test what it means to test: the machinery after a
+    // success, not the odds of getting one. A suite that fails 12% of the time teaches everyone
+    // to re-run instead of read, which is exactly how this hid behind the word "flake" all day.
     return spec.kind === 'skill_challenge'
-      ? { needed_successes: 1, max_failures: 3, suggested_skills: party.skills.slice(0, 2) }
+      ? { needed_successes: 1, max_failures: 99, suggested_skills: party.skills.slice(0, 2) }
       : fallback
   }
   try {

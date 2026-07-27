@@ -122,8 +122,25 @@ async function completeObjective(
   ordered: ObjectiveRow[],
   world: WorldFacts,
 ): Promise<boolean> {
+  // CLAIM the transition atomically (2026-07-27). Several progress passes legitimately overlap -
+  // the inline head, the tail in its own worker, and the director each run one - and they all read
+  // the objective as `active` before any of them writes. Unguarded, every one of them completes it
+  // and logs `objective_completed`, so the party is told twice and the quest ladder advances on a
+  // duplicate. `updateEndings` already learned this exact lesson (live 2026-07-24, one ending
+  // published three times) and claims `committed_ending_id` the same way.
+  //
+  // Intermittent by nature, which is what made it so easy to wave off: story-live failed on it
+  // twice, passed three times, and I called it a flake before looking. Today's completion path
+  // added DB round-trips ahead of this write, widening the window rather than causing it.
+  const { data: claimedObjective } = await service
+    .from('objectives')
+    .update({ reveal_state: 'completed' })
+    .eq('id', completed.id)
+    .eq('reveal_state', 'active')
+    .select('id')
+  if (!claimedObjective || claimedObjective.length === 0) return false // another pass got there first
+
   await recordSceneLedger(service, env, sessionId, 'objective', completed.title)
-  await service.from('objectives').update({ reveal_state: 'completed' }).eq('id', completed.id)
   await logEvent(service, env.adventureId, sessionId, 'objective_completed', {
     objective_id: completed.id, title: completed.title, evaluated: true,
   })
@@ -141,7 +158,10 @@ async function completeObjective(
   const silentlyCompleted: ObjectiveRow[] = []
   let next = ordered.find((o) => o.reveal_state === 'hidden')
   while (next && evaluatePredicate(next.completion_predicates, world)) {
-    await service.from('objectives').update({ reveal_state: 'completed' }).eq('id', next.id)
+    const { data: claimedNext } = await service
+      .from('objectives').update({ reveal_state: 'completed' })
+      .eq('id', next.id).eq('reveal_state', 'hidden').select('id')
+    if (!claimedNext || claimedNext.length === 0) break // a concurrent pass collapsed it already
     await logEvent(service, env.adventureId, sessionId, 'objective_completed', {
       objective_id: next.id, title: next.title, evaluated: true, presatisfied: true,
     })
@@ -256,7 +276,10 @@ export async function failObjective(
     return false
   }
 
-  await service.from('objectives').update({ reveal_state: 'completed', outcome: 'failed' }).eq('id', current.id)
+  const { data: claimedFail } = await service
+    .from('objectives').update({ reveal_state: 'completed', outcome: 'failed' })
+    .eq('id', current.id).eq('reveal_state', 'active').select('id')
+  if (!claimedFail || claimedFail.length === 0) return false // another pass retired it first
   await logEvent(service, env.adventureId, sessionId, 'objective_failed', {
     objective_id: current.id, title: current.title, reason, cause,
   })

@@ -985,8 +985,25 @@ const NARRATOR_CONTEXT_KEY =
   'GONE: discuss freely, never stage or voice. FORCES/DONE/CLOCK/PROPS: established - build on, ' +
   'never redefine. Spell names EXACTLY. Unnamed newcomers are always allowed.'
 
+/**
+ * LENGTH, IN WORDS (2026-07-27). The old brief said "2-4 sentences, vivid but concise" and could
+ * not bind: it constrains the sentence COUNT, so four 120-word sentences comply, and measured runs
+ * came in at 7.2 sentences and 868 characters anyway. "Vivid but concise" is also two adjectives
+ * pulling opposite ways, and vivid is the one that invites elaboration.
+ *
+ * A word budget is countable, which a sentence count and an adjective are not, and the REASON is
+ * stated because a bound with a rationale is followed more often than a bare number. Vividness is
+ * redirected rather than dropped - it comes from specifics, which is what actually made the
+ * premium narrator worth buying, and specifics are short.
+ *
+ * This is a soft instruction, not a wall (see NARRATION_MAX_TOKENS for why no hard cap). Whether
+ * it worked is measurable: `narration_published` now records `style`, so narration-audit.mjs can
+ * compare beats against beats.
+ */
 const NARRATOR_BASE =
-  'You narrate a tabletop RPG. Second person, present tense, 2-4 sentences, vivid but concise. ' +
+  'You narrate a tabletop RPG. Second person, present tense. THREE sentences, 70 words at most - ' +
+  'the player is waiting to act, and length is the main thing that makes a turn drag. Be vivid ' +
+  'through specifics, never through volume: one exact detail beats three general ones. ' +
   'Never invent facts about named NPCs/items/places beyond the given context. Never mention ' +
   'dice, rolls, checks, or game mechanics - translate outcomes into fiction. Never presume the ' +
   'party\'s motivation or feelings; motivation belongs to the players. When a party member\'s ' +
@@ -1018,8 +1035,8 @@ const NARRATOR_SYSTEMS: Record<NarrationStyle, string> = {
     'sound, a detail worth a closer look) so they always know what they could engage with next.',
   exposition:
     'You narrate a tabletop RPG. Second person, present tense. This is a CUTSCENE between ' +
-    'encounters: 4-8 sentences of vivid exposition that carries consequences forward and sets ' +
-    'the next situation. Never invent facts about named NPCs/items/places beyond the given ' +
+    'encounters: FIVE sentences, 130 words at most, carrying consequences forward and setting ' +
+    'the next situation. It is the longest thing the player reads, so earn every line. Never invent facts about named NPCs/items/places beyond the given ' +
     'context. Never mention dice, rolls, checks, or game mechanics. Never presume the party\'s ' +
     'motivation or feelings. Let the party members\' described traits, backgrounds, and quirks ' +
     'color what each of them would notice or be drawn toward. END with an explicit in-fiction ' +
@@ -1031,28 +1048,27 @@ const NARRATOR_SYSTEMS: Record<NarrationStyle, string> = {
 }
 
 /**
- * Length ceilings, PROVIDER-ENFORCED (2026-07-27).
+ * Enough room that the narrator's natural output always FINISHES (2026-07-27).
  *
- * "2-4 sentences, vivid but concise" constrains the sentence COUNT and nothing else, so a model
- * satisfies it with four 120-word sentences and no rule is broken. Measured across 2967 published
- * lines: median 421 chars but p90 1027, p99 1785, max 3280 - and `maxTokens: 500` cuts around
- * 2000, which is where 63 lines ended mid-sentence. The brief permitted prose the cap could not
- * hold; those two numbers had never been reconciled.
+ * 63 published lines ended mid-sentence. The cause is this number: 500 tokens cuts at roughly 2000
+ * characters, and on the current narrator (glm-5.2, premium since 2026-07-26) that is exactly p95.
+ * The style brief permitted prose the cap could not hold, and the two had never been reconciled.
  *
- * An instruction would not fix it - the old one was an instruction. `maxLength` in the schema is
- * enforced by the provider, and the NPC agent already demonstrated in this codebase what that
- * changes: the model PLANS a line that fits instead of overrunning and being chopped.
+ * NO `maxLength` ACCOMPANIES THIS, on purpose. A schema ceiling is also a hard cut - under
+ * constrained decoding the string must close when it is reached - so it does not fix truncation,
+ * it relocates it to a lower threshold. Adding a second cut to fix the first is not a fix, and the
+ * failure mode is one I could not verify in advance. The defect here is "prose gets chopped"; the
+ * remedy is room, not another wall.
  *
- * This is also the cheapest thing we can do about cost. The narrator's own prompt is ~94%
- * transcript window, and the window is large because the lines in it are large - so every line
- * shortened here is paid back on each of the next six turns.
+ * A first attempt capped beats at 600 chars. That was calibrated against a 421-char median from
+ * the whole stored corpus - which is mostly older flash-lite runs. The current narrator's real
+ * distribution is p50 868, p75 1275, p90 1675, so 600 would have bound 66% of lines: a 30% cut to
+ * typical output shipped as a bug fix. Whether beats SHOULD be shorter is a pacing decision that
+ * deserves evidence, and the evidence does not exist yet - published lines do not record which
+ * style wrote them, so that 868 median mixes 2-4-sentence beats with 4-8-sentence cutscenes.
+ * `narration_published` now carries `style` so a later audit can separate them and settle it.
  */
-const NARRATION_MAX_CHARS: Record<NarrationStyle, number> = {
-  beat: 600,
-  outcome: 600,
-  // Cutscenes are legitimately longer - the style asks for 4-8 sentences.
-  exposition: 1100,
-}
+const NARRATION_MAX_TOKENS = 900
 
 export async function runNarrator(
   env: AgentEnv,
@@ -1061,27 +1077,17 @@ export async function runNarrator(
   style: NarrationStyle = 'beat',
 ): Promise<string> {
   if (env.demo) return `[demo narration] ${prompt.slice(0, 140)}`
-  const limit = NARRATION_MAX_CHARS[style]
-  const system = `${NARRATOR_SYSTEMS[style]} Keep it under ${limit} characters - write to fit, never trail off.` +
-    (constraint ? `\nHard constraints: ${constraint}` : '')
-  const call = { serviceClient: env.service, openRouterApiKey: OPENROUTER_API_KEY,
-    userId: env.creatorId, adventureId: env.adventureId, agentRole: 'narrator', system, user: prompt }
-  try {
-    const parsed = await agentJson(env, 'narrator', system, prompt, 500, {
-      name: 'narration',
-      schema: obj({ narration: { type: 'string', maxLength: limit } }, ['narration']),
-    })
-    const text = typeof (parsed as { narration?: unknown })?.narration === 'string'
-      ? (parsed as { narration: string }).narration.trim()
-      : ''
-    if (text) return text
-  } catch (err) {
-    console.error('narrator structured output failed, falling back to text', err)
-  }
-  // Narration MUST land. A structured-output failure that produced no prose would fall through to
-  // publishNarration's mechanical stand-in, and guaranteed-bad canned text is worse for the player
-  // than an over-long paragraph - the same trade the consistency pass settled on.
-  return await callAgentText({ ...call, maxTokens: 500 })
+  const system = NARRATOR_SYSTEMS[style]
+  return await callAgentText({
+    serviceClient: env.service,
+    openRouterApiKey: OPENROUTER_API_KEY,
+    userId: env.creatorId,
+    adventureId: env.adventureId,
+    agentRole: 'narrator',
+    system: constraint ? `${system}\nHard constraints: ${constraint}` : system,
+    user: prompt,
+    maxTokens: NARRATION_MAX_TOKENS,
+  })
 }
 
 export async function runNarratorOptions(env: AgentEnv, contextPrompt: string): Promise<string[]> {
