@@ -93,7 +93,21 @@ export async function openEncounter(
   })
 }
 
-export type ResolutionTier = 'full' | 'partial' | 'failed'
+/**
+ * Pass or fail (owner decision, 2026-07-27). `partial` is gone from every engine: the guide
+ * authored zero partial outcome maps across eight nodes and zero partial transitions, so the tier
+ * only ever meant "credit nothing and route the party on as though they had lost".
+ *
+ * An imperfect win is still expressible - `alsoAward` carries the cost. A social encounter forced
+ * out at the disposition floor resolves as a PASS whose setback atoms fire alongside the success,
+ * which is what "you got what you came for, and it cost you" should have meant all along.
+ */
+export type ResolutionTier = 'full' | 'failed'
+
+export interface ResolveOptions {
+  /** Extra atoms applied on top of the tier's own map - a pass that carried a price. */
+  alsoAward?: string[]
+}
 
 /**
  * Deterministic resolution: tier -> outcome map -> applyMilestones (validated), close the
@@ -107,12 +121,18 @@ export async function resolveOpenEncounter(
   sessionId: string,
   tier: ResolutionTier,
   narrationContext: string,
+  opts: ResolveOptions = {},
 ): Promise<void> {
   const state = (await loadState(service, env.adventureId)).state
   const encounter = activeEncounter(state)
   if (!encounter) return
   const spec = state.dm?.encounterSpec ?? { onSuccess: [], onPartial: [], onFailure: [] }
-  const mapped = tier === 'failed' ? spec.onFailure : tier === 'partial' ? spec.onPartial : spec.onSuccess
+  // Binary map, plus whatever price the caller attached. `onPartial` is no longer written by
+  // authoring and is deliberately not read - stored rows from before the change keep it, harmless.
+  const mapped = [...new Set([
+    ...(tier === 'failed' ? spec.onFailure : spec.onSuccess),
+    ...(opts.alsoAward ?? []),
+  ])]
   const applied = mapped.length > 0
     ? await applyMilestones(service, env, sessionId, mapped, 'encounter_outcome')
     : []
@@ -153,15 +173,16 @@ export async function resolveOpenEncounter(
   // Memory write path (Slice 7): the resolution becomes a retrievable fragment.
   await writeMemoryFragment(
     service, env, 'encounter',
-    `${encounter.kind.replaceAll('_', ' ')} "${encounter.label}" ended in ${tier === 'failed' ? 'failure' : `${tier} success`}` +
+    `${encounter.kind.replaceAll('_', ' ')} "${encounter.label}" ended in ${
+      tier === 'failed' ? 'failure' : (opts.alsoAward ?? []).length > 0 ? 'costly success' : 'success'}` +
       (encounter.stakes ? ` (stakes: ${encounter.stakes})` : '') + `. ${narrationContext}`,
   )
 
   const tierText = tier === 'failed'
     ? 'The party has FAILED it - narrate the fail-forward consequences; the story moves on, worse.'
-    : tier === 'partial'
-      ? 'The party succeeded, but only just - narrate success with a visible cost or complication.'
-      : 'The party succeeded fully, together - narrate a clean, earned success.'
+    : (opts.alsoAward ?? []).length > 0
+      ? 'The party succeeded, but it cost them - narrate the win and the price together.'
+      : 'The party succeeded - narrate a clean, earned success.'
   // The resolution cutscene (exposition voice): consequences forward, next hook at the end.
   await narrationBeat(
     service, env, sessionId,

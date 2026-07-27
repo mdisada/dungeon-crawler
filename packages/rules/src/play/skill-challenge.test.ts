@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { challengeStatus, escalatedDc, newSkillChallenge, recordAttempt } from './skill-challenge.ts'
+import { challengeStatus, escalatedDc, majorityContributed, newSkillChallenge, recordAttempt } from './skill-challenge.ts'
 import type { SkillChallengeState } from './skill-challenge.ts'
 
 const seed = (overrides?: Partial<SkillChallengeState>): SkillChallengeState => ({
@@ -61,21 +61,69 @@ describe('terminal tiers', () => {
     expect(out.status).toBe('full')
   })
 
-  it('partial when successes arrive without full participation', () => {
+  // Pass or fail from 2026-07-27 - there is no middle tier. `partial` used to fire on both of the
+  // cases below; it credited nothing and routed the party onward as though they had lost.
+
+  it('one PC carrying the whole challenge still passes it', () => {
+    // Regression: gating resolution on participation blocked the scene forever, because a party
+    // that keeps SUCCEEDING never accumulates the failures that were the only way out of the hold.
+    // Live in the $0 suite - a solo PC passed a 1-success challenge four times over, the scene
+    // refused to close, and the encounter it had interrupted was never restored.
     let out = recordAttempt(seed(), 'a', 'athletics', true)
     out = recordAttempt(out.state, 'a', 'survival', true)
     out = recordAttempt(out.state, 'a', 'perception', true)
-    expect(out.status).toBe('partial')
+    expect(out.status).toBe('full')
   })
 
-  it('partial when the party scrapes through exactly at the failure edge', () => {
-    // failures === maxFailures - 1 === 2 when the final success lands.
+  it('overshooting the requirement never leaves a challenge open', () => {
+    const s = newSkillChallenge({
+      neededSuccesses: 1, maxFailures: 2, suggestedSkills: [], activePcIds: ['a', 'b'],
+    })
+    let out = recordAttempt(s, 'a', 'athletics', true)
+    for (let i = 0; i < 3; i++) {
+      out = recordAttempt(out.state, 'a', 'athletics', true)
+      expect(out.status).toBe('full')
+    }
+  })
+
+  it('scraping through at the failure edge is a clean pass', () => {
+    // failures === maxFailures - 1 === 2 when the final success lands. Winning by a hair is
+    // winning; the cost belongs in the fiction, not in a tier that credits nothing.
     let out = recordAttempt(seed(), 'a', 'athletics', false)
     out = recordAttempt(out.state, 'b', 'survival', false)
     out = recordAttempt(out.state, 'a', 'perception', true)
     out = recordAttempt(out.state, 'b', 'stealth', true)
     out = recordAttempt(out.state, 'a', 'arcana', true)
-    expect(out.status).toBe('partial')
+    expect(out.status).toBe('full')
+  })
+
+  it('reports majority participation without gating on it', () => {
+    // Kept for the Variety Manager and narration ("only one of you pitched in"), deliberately not
+    // wired into challengeStatus. At-least-half, matching groupOutcome: 1 of 2, 2 of 3, 2 of 4.
+    const s = newSkillChallenge({
+      neededSuccesses: 2, maxFailures: 3, suggestedSkills: [], activePcIds: ['a', 'b', 'c'],
+    })
+    let out = recordAttempt(s, 'a', 'athletics', true)
+    expect(majorityContributed(out.state)).toBe(false)
+    out = recordAttempt(out.state, 'b', 'survival', true)
+    expect(majorityContributed(out.state)).toBe(true)
+    expect(out.status).toBe('full')
+  })
+
+  it('at-least-half matches the SRD group-check standard for a duo', () => {
+    const s = newSkillChallenge({
+      neededSuccesses: 1, maxFailures: 2, suggestedSkills: [], activePcIds: ['a', 'b'],
+    })
+    const out = recordAttempt(s, 'a', 'athletics', true)
+    expect(majorityContributed(out.state)).toBe(true)
+  })
+
+  it('never returns partial for any sequence of attempts', () => {
+    let out = recordAttempt(seed(), 'a', 'athletics', true)
+    for (const [pc, ok] of [['b', false], ['a', true], ['b', true], ['a', false]] as const) {
+      out = recordAttempt(out.state, pc, 'skill', ok)
+      expect(['ongoing', 'full', 'failed']).toContain(out.status)
+    }
   })
 
   it('a clean run is never "at the edge" even when maxFailures is 1', () => {

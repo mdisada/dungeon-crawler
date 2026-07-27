@@ -64,10 +64,11 @@ describe('nextNode', () => {
   })
 
   it('a tier with no authored edge falls through to an unused route, never strands', () => {
-    const result = nextNode({ nodes: graph, fromKey: 'n0', tier: 'partial', usedKeys: ['n0'] })
+    // n1 authors only a `full` edge, so resolving it as failed has nothing to follow.
+    const result = nextNode({ nodes: graph, fromKey: 'n1', tier: 'failed', usedKeys: ['n1'] })
     expect(result).toMatchObject({ action: 'open', reason: 'alternate' })
     if (result.action !== 'open') return
-    expect(result.node.key).toBe('n1')
+    expect(result.node.key).toBe('n0')
   })
 
   it('reports exhaustion when every node has played', () => {
@@ -100,7 +101,6 @@ describe('null targets on failure tiers (2026-07-27 regression)', () => {
     node({ key: 'n0', index: 0, transitions: [
       { on: 'full', toNodeKey: null, arrivalContext: '' },
       { on: 'failed', toNodeKey: null, arrivalContext: '' },
-      { on: 'partial', toNodeKey: null, arrivalContext: '' },
     ] }),
     node({ key: 'n1', index: 1 }),
     node({ key: 'r0', index: 0, role: 'rescue' }),
@@ -111,11 +111,6 @@ describe('null targets on failure tiers (2026-07-27 regression)', () => {
     expect(r).toMatchObject({ action: 'open', reason: 'alternate' })
     if (r.action !== 'open') return
     expect(r.node.key).toBe('n1')
-  })
-
-  it('does NOT stop the objective on a partial tier pointing nowhere', () => {
-    const r = nextNode({ nodes: deadEnd, fromKey: 'n0', tier: 'partial', usedKeys: ['n0'] })
-    expect(r).toMatchObject({ action: 'open', reason: 'alternate' })
   })
 
   it('reaches the rescue rather than stopping when routes are spent', () => {
@@ -134,11 +129,9 @@ describe('null targets on failure tiers (2026-07-27 regression)', () => {
   })
 
   it('never returns objective_done for a failure tier, whatever has been played', () => {
-    for (const tier of ['failed', 'partial'] as const) {
-      for (const used of [[], ['n0'], ['n0', 'n1'], ['n0', 'n1', 'r0']]) {
-        const r = nextNode({ nodes: deadEnd, fromKey: 'n0', tier, usedKeys: used })
-        if (r.action === 'none') expect(r.reason).toBe('exhausted')
-      }
+    for (const used of [[], ['n0'], ['n0', 'n1'], ['n0', 'n1', 'r0']]) {
+      const r = nextNode({ nodes: deadEnd, fromKey: 'n0', tier: 'failed', usedKeys: used })
+      if (r.action === 'none') expect(r.reason).toBe('exhausted')
     }
   })
 })

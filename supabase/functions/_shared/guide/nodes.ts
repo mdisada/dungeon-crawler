@@ -24,7 +24,8 @@ export type NodeRole = 'route' | 'rescue'
 
 /** The resolution tiers an encounter ends on - the exact strings resolveOpenEncounter selects a
  *  map with, so a transition keys straight off the outcome. */
-export const TRANSITION_TIERS = ['full', 'partial', 'failed'] as const
+/** Pass or fail (owner decision, 2026-07-27) - see story/navigate.ts for why `partial` went. */
+export const TRANSITION_TIERS = ['full', 'failed'] as const
 export type TransitionTier = (typeof TRANSITION_TIERS)[number]
 
 export interface NodeAffordance {

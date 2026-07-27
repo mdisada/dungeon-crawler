@@ -34,8 +34,10 @@ export interface AuthoredNodeRow {
   transitions: { on: NavTier; toNodeKey: string | null; arrivalContext: string }[]
 }
 
+/** Pass or fail. A `partial` on a row written before 2026-07-27 reads as a pass, matching the
+ *  social collapse - a partial was always a win that cost something. */
 function asTier(raw: unknown): NavTier {
-  return raw === 'partial' ? 'partial' : raw === 'failed' ? 'failed' : 'full'
+  return raw === 'failed' ? 'failed' : 'full'
 }
 
 /** Every authored node serving one objective. Empty for legacy guides - the caller then falls

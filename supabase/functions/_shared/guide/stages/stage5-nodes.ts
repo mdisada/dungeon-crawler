@@ -118,10 +118,10 @@ Rules:
 - For EACH objective, author at least ${MIN_ROUTE_NODES} DISTINCT route nodes - genuinely different ways to achieve it (a stealth route AND a social route; a clever route AND a forceful route). This is the Three-Clue Rule: a party that flubs one way still has another.
 - Each node has ONE kind: "skill_challenge", "social", "puzzle", or "combat". Vary them - do not make every route a skill_challenge. At least one combat somewhere in the adventure.
 - A "social" node MUST name at least one living NPC by key from the list.
-- You do NOT author what a success awards - the engine derives that from the objective. You author what a SETBACK costs: declare up to ${MAX_LOCAL_ATOMS_PER_BEAT} local atoms (flags/events) per node and reference them in on_partial/on_failure. A failure must change something.
+- You do NOT author what a success awards - the engine derives that from the objective. You author what a SETBACK costs: declare up to ${MAX_LOCAL_ATOMS_PER_BEAT} local atoms (flags/events) per node and reference them in on_failure. A failure must change something.
 - narration_seed: 1-2 sentences the narrator opens the scene on, ending on a hook. stakes: one line - what is at risk.
 - affordances: 2-3 short player options {key, hint}. The hint is the flavor; the app prefixes the mechanic.
-- transitions: what happens on each outcome tier. Every node needs a "full" transition, and a full success ALWAYS resolves the objective - so its "to" is always "done". A partial or failed outcome NEVER resolves the objective: its "to" must be the index of a DIFFERENT node in THIS objective (never "done", never its own index) - a setback sends the party somewhere else to try again. Every partial/failed edge MUST carry an "arrival_context": one line describing how the party arrives THERE having just fallen short - never phrased as a success.
+- transitions: an outcome is PASS or FAIL, never anything in between. Every node needs a "full" transition, and a full success ALWAYS resolves the objective - so its "to" is always "done". A "failed" outcome NEVER resolves the objective: its "to" must be the index of a DIFFERENT node in THIS objective (never "done", never its own index) - a setback sends the party somewhere else to try again. Every failed edge MUST carry an "arrival_context": one line describing how the party arrives THERE having just fallen short - never phrased as a success.
 
 Respond with ONLY a JSON object:
 {
@@ -131,7 +131,7 @@ Respond with ONLY a JSON object:
         "npc_keys": ["npc:..."],
         "affordances": [ { "key": "press", "hint": "press her on the ledger" } ],
         "local_atoms": [ { "name": "warden_suspicious", "kind": "flag" } ],
-        "on_partial": [], "on_failure": ["warden_suspicious"],
+        "on_failure": ["warden_suspicious"],
         "transitions": [ { "on": "full", "to": "done", "arrival_context": "" },
                          { "on": "failed", "to": 1, "arrival_context": "Shut out, the party must try the cellar instead." } ] }
     ] }
@@ -200,7 +200,7 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
       const kind = (ENCOUNTER_KINDS.find((k) => k === n.kind) ?? 'skill_challenge') as BeatEncounterKind
       const stakes = c.str(n.stakes ?? '', `${path}.stakes`, { allowEmpty: true })
 
-      // Declared setback atoms - the menu for on_partial/on_failure = objective atoms + these.
+      // Declared setback atoms - the menu for on_failure = objective atoms + these.
       const declared: AtomProposal[] = c.arr(n.local_atoms ?? [], `${path}.local_atoms`, 0, MAX_LOCAL_ATOMS_PER_BEAT)
         .flatMap((a, ai) => {
           const at = c.obj(a, `${path}.local_atoms[${ai}]`)
@@ -212,7 +212,7 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
         })
       localAtoms.push(...declared)
       const outcomeMenu = [...menu, ...declared.map((a) => a.name)]
-      const resolveAtoms = (key: 'on_partial' | 'on_failure'): string[] => {
+      const resolveAtoms = (key: 'on_failure'): string[] => {
         const list = Array.isArray(n[key]) ? (n[key] as unknown[]) : []
         const out: string[] = []
         for (const entry of list) {
@@ -227,7 +227,6 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
       // live 2026-07-26, three of five encounter resolutions came in failed or partial and every
       // one awarded zero atoms, so the world recorded nothing about a party that kept losing.
       // The model already declared its setback atoms; if it forgot to reference one, code does.
-      // (Only the failure tier is repaired: a partial that awards nothing is thin, not broken.)
       const onFailure = resolveAtoms('on_failure')
       let repairedFailure = onFailure
       if (repairedFailure.length === 0) {
@@ -341,7 +340,9 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
           kind: resolvedKind, label: objective.title, stakes, rationale: '',
           params: {} as Json,
           onSuccess, // DERIVED - code owns completion.
-          onPartial: resolveAtoms('on_partial'),
+          // Pass or fail (2026-07-27): nothing authors or reads a partial map any more. The field
+          // stays on the type so stored rows still parse; it is always empty going forward.
+          onPartial: [],
           onFailure: repairedFailure,
         },
         affordances,

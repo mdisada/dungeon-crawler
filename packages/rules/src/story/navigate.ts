@@ -6,7 +6,13 @@
 // invention, no repair. The director still decides WHEN to intervene (its rung ladder is
 // unchanged); this decides WHERE that intervention lands.
 
-export type NavTier = 'full' | 'partial' | 'failed'
+/**
+ * Pass or fail (owner decision, 2026-07-27). `partial` is gone: the guide authored zero partial
+ * outcome maps and zero partial edges, so the tier only ever meant "credit nothing and route on".
+ * Stored rows from before the change may still carry `partial` edges; they are simply never
+ * matched, and the fall-through below handles them exactly as an unauthored tier.
+ */
+export type NavTier = 'full' | 'failed'
 
 export interface NavTransition {
   on: NavTier

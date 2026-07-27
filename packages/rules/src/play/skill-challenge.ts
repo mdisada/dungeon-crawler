@@ -4,7 +4,7 @@
 // every active PC to have made at least one attempt, and leaning on the same skill again
 // escalates its DC.
 
-export type ChallengeStatus = 'ongoing' | 'full' | 'partial' | 'failed'
+export type ChallengeStatus = 'ongoing' | 'full' | 'failed'
 
 export interface SkillChallengeState {
   neededSuccesses: number
@@ -58,11 +58,7 @@ export interface AttemptOutcome {
 /**
  * Records one adjudicated attempt. Terminal statuses, encoded precisely:
  * - `failed`: failures reached maxFailures.
- * - success tier once successes reach neededSuccesses:
- *   - `partial` when any active PC never attempted (no full participation), OR when the
- *     party scraped through exactly at the failure edge (failures === maxFailures - 1,
- *     with at least one failure - a clean run is never "at the edge").
- *   - `full` otherwise.
+ * - `full`: successes reached neededSuccesses.
  * Attempts after a terminal state are a caller bug; the state still counts them.
  */
 export function recordAttempt(
@@ -82,10 +78,43 @@ export function recordAttempt(
   return { state: next, status: challengeStatus(next) }
 }
 
+/**
+ * Did at least half the active party pitch in? The SRD group-check standard (`groupOutcome` in
+ * checks.ts), applied to participation.
+ *
+ * REPORTING ONLY - this does not gate resolution. See `challengeStatus`.
+ */
+export function majorityContributed(state: SkillChallengeState): boolean {
+  if (state.activePcIds.length === 0) return true
+  const contributors = state.activePcIds.filter((id) => (state.contributions[id] ?? 0) > 0).length
+  return contributors >= Math.ceil(state.activePcIds.length / 2)
+}
+
+/**
+ * Pass or fail - there is no middle tier (owner decision, 2026-07-27).
+ *
+ * `partial` used to fire whenever ANY active PC had not attempted, or the party scraped through at
+ * the failure edge. Both downgraded a genuine success, and the tier they downgraded into was worse
+ * than either outcome it sat between: the guide authored `on_partial` zero times out of eight
+ * nodes, and the navigator had no partial edges at all, so a partial credited nothing and routed
+ * the party onward as though they had lost. A tier nobody authors for is not a middle ground, it
+ * is a hole.
+ *
+ * Participation does NOT gate the result, and the attempt to make it do so is instructive. Holding
+ * the challenge `ongoing` until a majority pitched in looked like a softer version of the old rule,
+ * but failures were the only way out of that hold - and a party that keeps SUCCEEDING never
+ * accumulates any. The $0 suite caught it immediately: one PC passed a 1-success challenge four
+ * times over while the other never acted, the scene refused to close, and the encounter it had
+ * interrupted was never restored. A gate whose only exit is another player choosing to act can
+ * block a table indefinitely, which is precisely why the original design made non-participation a
+ * soft downgrade rather than a wall. With no middle tier left to downgrade INTO, the gate has
+ * nowhere safe to land, so it goes.
+ *
+ * Spotlight balance stays where it already worked: the Variety Manager flags a dominating player
+ * (`SPOTLIGHT_SHARE`) and the planner opens for the others. That nudges the table without ever
+ * holding a scene hostage.
+ */
 export function challengeStatus(state: SkillChallengeState): ChallengeStatus {
   if (state.failures >= state.maxFailures) return 'failed'
-  if (state.successes < state.neededSuccesses) return 'ongoing'
-  const everyoneContributed = state.activePcIds.every((id) => (state.contributions[id] ?? 0) > 0)
-  const atFailureEdge = state.failures > 0 && state.failures === state.maxFailures - 1
-  return everyoneContributed && !atFailureEdge ? 'full' : 'partial'
+  return state.successes >= state.neededSuccesses ? 'full' : 'ongoing'
 }

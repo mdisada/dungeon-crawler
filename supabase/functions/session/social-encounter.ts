@@ -63,8 +63,18 @@ export function socialExits(params: Record<string, Json>): SocialExit[] {
   }).slice(0, 4)
 }
 
+/**
+ * The designer still authors three exit flavours, because a conversation genuinely has a middle
+ * shape and the disposition floor deliberately reaches for it. What collapsed (2026-07-27) is the
+ * MECHANICAL tier: an authored `partial` exit is a PASS, and the encounter's setback atoms fire
+ * alongside the success rather than instead of it. "You got what you came for, and it cost you" is
+ * what the partial tier was always trying to say - it just used to say it by crediting nothing.
+ */
 const exitTier = (exit: SocialExit | null): ResolutionTier =>
-  exit === null ? 'failed' : exit.tier === 'success' ? 'full' : exit.tier === 'partial' ? 'partial' : 'failed'
+  exit === null || exit.tier === 'failure' ? 'failed' : 'full'
+
+/** True when the win carried a price - drives the `alsoAward` setback and the narration. */
+const exitWasCostly = (exit: SocialExit | null): boolean => exit?.tier === 'partial'
 
 export type StageNpcsHook = (npcIds: string[]) => Promise<{ status: number; body: Record<string, unknown> }>
 
@@ -247,12 +257,16 @@ export async function resolveSocialExit(
   const encounter = activeEncounter(state)
   if (encounter?.kind !== 'social') return
   const outcome = exit?.outcome ?? 'left_unresolved'
+  const costly = exitWasCostly(exit)
   await logEvent(service, env.adventureId, sessionId, 'encounter_exit', {
-    encounter_id: encounter.id, kind: 'social', outcome, forced, tier: exitTier(exit),
+    encounter_id: encounter.id, kind: 'social', outcome, forced,
+    tier: exitTier(exit), costly, authored_tier: exit?.tier ?? null,
   })
   await resolveOpenEncounter(
     service, env, sessionId, exitTier(exit),
     `The conversation concluded: "${outcome}"${exit?.description ? ` - ${exit.description}` : ''}.` +
       (forced ? ' Tempers boiled over - the exit was forced, not chosen.' : ''),
+    // A costly win banks the node's own setback on top of the success.
+    costly ? { alsoAward: (state.dm?.encounterSpec?.onFailure ?? []) } : {},
   )
 }

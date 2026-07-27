@@ -74,10 +74,10 @@ describe('recordPuzzleAttempt', () => {
 })
 
 describe('puzzleSolvedTier', () => {
-  it('full only with every active PC contributing', () => {
-    let out = recordPuzzleAttempt(seed(), 'a', 'advances_step')
-    expect(puzzleSolvedTier(out.state)).toBe('partial')
-    out = recordPuzzleAttempt(out.state, 'b', 'advances_step')
-    expect(puzzleSolvedTier(out.state)).toBe('full')
+  it('a solved puzzle is solved, however many PCs took a turn', () => {
+    // Until 2026-07-27 this returned `partial` unless every active PC had attempted. A puzzle
+    // cannot be "kept working" the way a challenge can - the answer is enacted or it is not - so
+    // the gate could only downgrade a win into a tier that credited nothing.
+    expect(puzzleSolvedTier()).toBe('full')
   })
 })

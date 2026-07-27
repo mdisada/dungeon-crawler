@@ -216,7 +216,7 @@ export async function runBeatOutcomeMapper(env: AgentEnv, ctx: OutcomeMapperCont
   if (env.demo) {
     return parseOutcomeMaps({
       on_success: [...ctx.spineAtoms.slice(0, 1), ...ctx.localAtoms.slice(0, 1)],
-      on_partial: ctx.localAtoms.slice(0, 1),
+      on_partial: [],
       on_failure: ctx.localAtoms.slice(1, 2),
     }, menu)
   }

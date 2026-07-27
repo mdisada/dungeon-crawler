@@ -156,7 +156,17 @@ async function main() {
   const [objective] = await serviceRest('POST', 'objectives', {
     adventure_id: advId, chapter_id: chapter.id, index: 0, title: 'Reach the coast',
     hidden_description: 'The ferry was taken upriver.', reveal_state: 'hidden',
-    completion_predicates: { all: [{ flag: 'coast_reached', eq: true }] },
+    // TWO atoms on purpose. The demo outcome mapper puts the objective's first spine atom in
+    // `on_success`, exactly as a real authored node does - so a one-atom objective is finished by
+    // the first successful encounter, which completes the quest, completes the loop, and leaves
+    // every later section of this suite (pivot, siege beats, ending scoring) with nothing to run
+    // against. That only stayed hidden while the demo could never reach `on_success`: no fixture
+    // has every PC contribute, so every challenge resolved `partial` until the tier was removed
+    // (2026-07-27). Requiring a second flag lets the encounter credit real spine progress without
+    // ending the story on the spot.
+    completion_predicates: {
+      all: [{ flag: 'coast_reached', eq: true }, { flag: 'shore_secured', eq: true }],
+    },
   })
   const [maren] = await serviceRest('POST', 'npcs', {
     adventure_id: advId, chapter_id: chapter.id, name: 'Elder Maren', role: 'npc',
@@ -348,9 +358,26 @@ async function main() {
   ok('resolution carries a tier', ['full', 'partial', 'failed'].includes(challengeResolved?.payload?.tier), challengeResolved)
   if (challengeResolved?.payload?.tier !== 'failed') {
     ok('outcome map applied the beat-exit milestone', (await eventsOf(advId, 'milestone_reached')).some((e) => e.payload.source === 'encounter_outcome'))
-    ok('resolution exited the beat (next beat opened)', (await eventsOf(advId, 'beat_exit_met')).length >= 1)
+    // The resolution must MOVE THE STORY - either the beat exits, or the outcome map completed the
+    // objective outright and the beat-exit block is correctly skipped (progress.ts guards it on
+    // `loop?.currentBeatId`, and a finished quest has no beat left to exit).
+    //
+    // This used to assert beat_exit_met alone, which only held while the demo resolved as
+    // `partial`: the canned mapper is on_success:[spineAtom, localAtom] vs on_partial:[localAtom],
+    // so a partial granted the beat's own exit event and nothing else. With pass/fail (2026-07-27)
+    // a demo success grants the spine atom too and finishes the objective in one go.
+    const exited = (await eventsOf(advId, 'beat_exit_met')).length >= 1
+    const objectiveDone = (await eventsOf(advId, 'objective_completed')).length >= 1
+    ok('resolution moved the story on (beat exit or objective completed)', exited || objectiveDone,
+      { exited, objectiveDone, tier: challengeResolved?.payload?.tier })
     const questBeatsAfter = await serviceRest('GET', `beats?core_loop_id=eq.${loopRow.id}&select=id,status&order=index`)
-    ok('quest loop advanced to its second beat', questBeatsAfter.length === 2 && questBeatsAfter.at(-1).status === 'active', questBeatsAfter)
+    // Either the loop rolled on to a fresh beat, or the objective finished and there is nothing
+    // left to roll on to. Before pass/fail the demo could only ever take the first path, because
+    // its success map was unreachable - which is why this suite had never once exercised
+    // on_success, the single most important path in the product.
+    ok('quest loop rolled on, or the objective it served is done',
+      (questBeatsAfter.length === 2 && questBeatsAfter.at(-1).status === 'active') || objectiveDone,
+      { beats: questBeatsAfter, objectiveDone })
   } else {
     console.log('  note: dice failed the challenge this run - beat stays open (fail-forward)')
   }
@@ -394,7 +421,9 @@ async function main() {
   ok('gold unchanged after the 409', stateAfter.players.gold === state.players.gold)
 
   console.log('\n[objective completion -> ending scoring -> late decisive commitment]')
-  const setFlag = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'dm_command', command: 'set_flag', flag: 'coast_reached', value: true })
+  // `coast_reached` was already credited by the encounter's outcome map; this is the second half
+  // of the predicate, so completion still lands here where the rest of the section expects it.
+  const setFlag = await act(gm, { action: 'player_intent', adventure_id: advId, kind: 'dm_command', command: 'set_flag', flag: 'shore_secured', value: true })
   ok('set_flag accepted', setFlag.status === 200, setFlag.body)
   ok('objective completed by predicate evaluation', (await eventsOf(advId, 'objective_completed')).length === 1)
   const [objRow2] = await serviceRest('GET', `objectives?id=eq.${objective.id}&select=reveal_state`)

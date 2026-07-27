@@ -181,11 +181,11 @@ export async function handlePuzzleIntent(
 
   if (status === 'solved') {
     await resolveOpenEncounter(
-      service, env, sessionId, puzzleSolvedTier(next),
+      service, env, sessionId, puzzleSolvedTier(),
       `${character.name}'s attempt (${text}) cracked it: ${judgment.note || 'the mechanism yields'}. ` +
         'The puzzle is solved - show the solution working now that they have earned it.',
     )
-    return { status: 200, body: { ok: true, resolved: 'puzzle_solved', tier: puzzleSolvedTier(next) } }
+    return { status: 200, body: { ok: true, resolved: 'puzzle_solved', tier: puzzleSolvedTier() } }
   }
 
   // Exhausted: the authored consequence ESCALATES - never "nothing happens".
