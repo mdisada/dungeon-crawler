@@ -581,22 +581,29 @@ async function objectiveOutcome(
   world: WorldFacts,
   encounterOpen: boolean,
 ): Promise<'completed' | 'failed' | null> {
-  // A live scene decides its own outcome. resolveOpenEncounter runs this pass again the moment the
-  // scene lands, so the only cost of waiting is one pass; the director force-fails a scene that
-  // never lands, so it always does land.
-  if (encounterOpen) return null
   const nodes = await loadObjectiveNodes(service, adventureId, current.id)
+
+  // LEGACY GUIDES: the predicate decides, and it is independent of what is on the table. An
+  // objective whose atoms are all true is complete whether or not a scene happens to be open.
   if (nodes.length === 0) {
     return evaluatePredicate(current.completion_predicates, world) ? 'completed' : null
   }
-  // The staged-but-unplayed window. An open beat whose encounter has not opened yet reads as an
-  // empty table to `state.encounter`, and every node looks `used` because used is written when the
-  // beat is inserted. That combination retired a live objective out from under its rescue scene
-  // (2026-07-27) - the scene the ladder exists to reach.
+
+  // GRAPH-BEARING GUIDES: the scene ladder decides, and both guards below belong to it alone.
+  //
+  // They exist for one reason: `used` is written when a beat is INSERTED, so a node the party has
+  // not played yet already looks spent to the navigator. Ask it mid-scene and it reports the
+  // ladder exhausted and retires the objective out from under them.
+  //
+  // These sat above the legacy branch when first written and blocked predicate completion for
+  // every stored adventure whenever any encounter was live - a graph-shaped guard applied to a
+  // model that has no nodes and no `used` to be confused by. story-live caught it twice before I
+  // stopped calling it a flake.
+  if (encounterOpen) return null
   if (await inPlayNodeKey(service, adventureId, nodes)) return null
+
   const read = await graphDecision(service, adventureId, current.id)
-  if (read) return read.decision.action === 'resolve' ? read.decision.outcome : null
-  return evaluatePredicate(current.completion_predicates, world) ? 'completed' : null
+  return read?.decision.action === 'resolve' ? read.decision.outcome : null
 }
 
 /**

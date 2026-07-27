@@ -1030,6 +1030,30 @@ const NARRATOR_SYSTEMS: Record<NarrationStyle, string> = {
     'next encounter. Output only narration text.' + NARRATOR_CONTEXT_KEY,
 }
 
+/**
+ * Length ceilings, PROVIDER-ENFORCED (2026-07-27).
+ *
+ * "2-4 sentences, vivid but concise" constrains the sentence COUNT and nothing else, so a model
+ * satisfies it with four 120-word sentences and no rule is broken. Measured across 2967 published
+ * lines: median 421 chars but p90 1027, p99 1785, max 3280 - and `maxTokens: 500` cuts around
+ * 2000, which is where 63 lines ended mid-sentence. The brief permitted prose the cap could not
+ * hold; those two numbers had never been reconciled.
+ *
+ * An instruction would not fix it - the old one was an instruction. `maxLength` in the schema is
+ * enforced by the provider, and the NPC agent already demonstrated in this codebase what that
+ * changes: the model PLANS a line that fits instead of overrunning and being chopped.
+ *
+ * This is also the cheapest thing we can do about cost. The narrator's own prompt is ~94%
+ * transcript window, and the window is large because the lines in it are large - so every line
+ * shortened here is paid back on each of the next six turns.
+ */
+const NARRATION_MAX_CHARS: Record<NarrationStyle, number> = {
+  beat: 600,
+  outcome: 600,
+  // Cutscenes are legitimately longer - the style asks for 4-8 sentences.
+  exposition: 1100,
+}
+
 export async function runNarrator(
   env: AgentEnv,
   prompt: string,
@@ -1037,17 +1061,27 @@ export async function runNarrator(
   style: NarrationStyle = 'beat',
 ): Promise<string> {
   if (env.demo) return `[demo narration] ${prompt.slice(0, 140)}`
-  const system = NARRATOR_SYSTEMS[style]
-  return await callAgentText({
-    serviceClient: env.service,
-    openRouterApiKey: OPENROUTER_API_KEY,
-    userId: env.creatorId,
-    adventureId: env.adventureId,
-    agentRole: 'narrator',
-    system: constraint ? `${system}\nHard constraints: ${constraint}` : system,
-    user: prompt,
-    maxTokens: 500,
-  })
+  const limit = NARRATION_MAX_CHARS[style]
+  const system = `${NARRATOR_SYSTEMS[style]} Keep it under ${limit} characters - write to fit, never trail off.` +
+    (constraint ? `\nHard constraints: ${constraint}` : '')
+  const call = { serviceClient: env.service, openRouterApiKey: OPENROUTER_API_KEY,
+    userId: env.creatorId, adventureId: env.adventureId, agentRole: 'narrator', system, user: prompt }
+  try {
+    const parsed = await agentJson(env, 'narrator', system, prompt, 500, {
+      name: 'narration',
+      schema: obj({ narration: { type: 'string', maxLength: limit } }, ['narration']),
+    })
+    const text = typeof (parsed as { narration?: unknown })?.narration === 'string'
+      ? (parsed as { narration: string }).narration.trim()
+      : ''
+    if (text) return text
+  } catch (err) {
+    console.error('narrator structured output failed, falling back to text', err)
+  }
+  // Narration MUST land. A structured-output failure that produced no prose would fall through to
+  // publishNarration's mechanical stand-in, and guaranteed-bad canned text is worse for the player
+  // than an over-long paragraph - the same trade the consistency pass settled on.
+  return await callAgentText({ ...call, maxTokens: 500 })
 }
 
 export async function runNarratorOptions(env: AgentEnv, contextPrompt: string): Promise<string[]> {
