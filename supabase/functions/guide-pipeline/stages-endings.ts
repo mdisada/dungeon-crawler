@@ -30,7 +30,7 @@ export async function runStage8(env: StageEnv): Promise<void> {
       .from('objectives')
       .select('id, chapter_id, index, title, hidden_description')
       .eq('adventure_id', env.adventure.id),
-    env.db.from('npcs').select('id, name, role').eq('adventure_id', env.adventure.id).order('created_at'),
+    env.db.from('npcs').select('id, name, role, initial_state').eq('adventure_id', env.adventure.id).order('created_at'),
   ])
   for (const res of [chapters, objectives, npcs]) assertOk(res.error, 'stage-8 load failed')
 
@@ -49,11 +49,18 @@ export async function runStage8(env: StageEnv): Promise<void> {
       title: o.title,
       hiddenDescription: o.hidden_description,
     })),
-    npcs: sortedNpcs.map((n) => ({ name: n.name, role: n.role as 'npc' | 'boss' })),
+    npcs: sortedNpcs.map((n) => ({
+      name: n.name, role: n.role as 'npc' | 'boss', initialState: n.initial_state as string | null,
+    })),
   }
 
+  // Who cannot carry a rapport signal: disposition only ever moves for someone the party can
+  // actually meet. 1-based, matching the numbering the prompt hands the model.
+  const noRapport = new Set(
+    sortedNpcs.map((n, i) => (n.initial_state === 'absent' ? i + 1 : 0)).filter((i) => i > 0),
+  )
   const output = await env.generate('story_director', buildStage8Prompt(ctx), (raw) =>
-    parseStage8(raw, sortedObjectives.length, sortedNpcs.length),
+    parseStage8(raw, sortedObjectives.length, sortedNpcs.length, noRapport),
   )
 
   const objectiveIds = sortedObjectives.map((o) => o.id as string)

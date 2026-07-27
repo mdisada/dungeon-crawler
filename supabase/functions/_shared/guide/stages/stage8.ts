@@ -26,8 +26,12 @@ export interface Stage8Context {
   chapters: { title: string; arcSummary: string }[]
   /** All objectives, chapter-ordered; signals reference them by 1-based position in this list. */
   objectives: { chapterNumber: number; title: string; hiddenDescription: string }[]
-  /** All NPCs; signals reference them by 1-based position in this list. */
-  npcs: { name: string; role: 'npc' | 'boss' }[]
+  /**
+   * All NPCs; signals reference them by 1-based position in this list. `initialState` travels so
+   * the model can see who is never on stage: only a person the party can actually meet can come to
+   * feel allied or hostile toward them (2026-07-28).
+   */
+  npcs: { name: string; role: 'npc' | 'boss'; initialState?: string | null }[]
 }
 
 export interface Stage8Output {
@@ -51,7 +55,7 @@ Rules:
 - Each ending gets ${SIGNALS_PER_ENDING.min}-5 trigger signals. A signal's "when" is EXACTLY one of:
   {"objective": <number from the list>, "outcome": "completed"|"failed"}
   {"npc": <number from the list>, "state": "dead"|"alive"|"allied"|"hostile"}
-    Only the INDIVIDUAL PEOPLE in the NPC list below can carry this signal, and "allied"/"hostile" mean a real person's feelings toward the party. The fate of a FORCE, a curse, a plague or a faction is NOT an npc state - "the Blight is destroyed" is an OBJECTIVE outcome (it is what the climax objective is for), and "the party gave in to the corruption" or "the guild stands with us" is a DIAL. An ending resting on a phenomenon having feelings can never fire, because nothing in play gives a phenomenon feelings.
+    Only the INDIVIDUAL PEOPLE in the NPC list below can carry this signal, and "allied"/"hostile" mean a real person's feelings toward the party. The fate of a FORCE, a curse, a plague or a faction is NOT an npc state - "the Blight is destroyed" is an OBJECTIVE outcome (it is what the climax objective is for), and "the party gave in to the corruption" or "the guild stands with us" is a DIAL. An ending resting on a phenomenon having feelings can never fire, because nothing in play gives a phenomenon feelings. Anyone marked [NEVER APPEARS] cannot carry "allied" or "hostile" either - disposition only moves for someone the party can meet - though they may still be "dead" or "alive".
   {"dial": "<dial key>", "gte" or "lte": <${DIAL_RANGE.min}..${DIAL_RANGE.max}>}
   Nothing else - no free-form flags or facts. "weight" is a signed nonzero number in [-5, 5] (negative = this condition argues AGAINST the ending). Use negative weights as counter-signals.
 - EVERY ending needs at least one positively-weighted OBJECTIVE signal, and it should reference the FINAL objective in the list - the climax. Dials alone must never be able to land an ending: dials describe how the party played, objectives are what they actually did.
@@ -115,6 +119,12 @@ export function parseSignalWhen(
   objectiveCount: number,
   npcCount: number,
   dialKeys: Set<string>,
+  /**
+   * 1-based indices of NPCs authored `absent` - they cannot carry allied/hostile. Defaults to
+   * empty so single-entity regeneration, which has no roster context to hand in, keeps its
+   * previous behaviour rather than silently rejecting valid signals.
+   */
+  noRapport: ReadonlySet<number> = new Set(),
 ): EndingSignalWhenDraft | null {
   const w = c.obj(value, path)
   const keys = Object.keys(w)
@@ -134,6 +144,18 @@ export function parseSignalWhen(
       return null
     }
     const state = c.oneOf(w.state, `${path}.state`, NPC_SIGNAL_STATES) as NpcSignalState
+    // Live 2026-07-28: three of four endings in one guide rested on The Drowned Creditor turning
+    // hostile or allied - an NPC authored `absent`. Nothing in play builds rapport with someone
+    // never present, so those signals could never fire and the endings were kneecapped before a
+    // turn was played. The lint caught it and shipped it as `info`; this refuses it at the parse,
+    // which routes into the same retry the stage already uses for any malformed output.
+    if ((state === 'allied' || state === 'hostile') && noRapport.has(w.npc)) {
+      c.errors.push(
+        `${path}: NPC ${w.npc} never appears, so they cannot become ${state} - ` +
+        'pick someone the party can meet, or use an objective/dial signal',
+      )
+      return null
+    }
     return { npc: w.npc, state }
   }
 
@@ -160,7 +182,13 @@ export function parseSignalWhen(
   return null
 }
 
-export function parseStage8(raw: string, objectiveCount: number, npcCount: number): ParseResult<Stage8Output> {
+export function parseStage8(
+  raw: string,
+  objectiveCount: number,
+  npcCount: number,
+  /** 1-based indices of NPCs authored `absent`. Optional so existing callers keep working. */
+  noRapport: ReadonlySet<number> = new Set(),
+): ParseResult<Stage8Output> {
   const extracted = extractJsonObject(raw)
   if (!extracted.ok) return extracted
 
@@ -196,7 +224,7 @@ export function parseStage8(raw: string, objectiveCount: number, npcCount: numbe
         .map((raw, j) => {
           const sPath = `${path}.trigger_conditions.signals[${j}]`
           const s = c.obj(raw, sPath)
-          const when = parseSignalWhen(c, s.when, `${sPath}.when`, objectiveCount, npcCount, dialKeys)
+          const when = parseSignalWhen(c, s.when, `${sPath}.when`, objectiveCount, npcCount, dialKeys, noRapport)
           const weight = typeof s.weight === 'number' && Number.isFinite(s.weight) ? s.weight : NaN
           if (Number.isNaN(weight) || weight === 0 || Math.abs(weight) > 5) {
             c.errors.push(`${sPath}.weight: expected a nonzero number in [-5, 5]`)

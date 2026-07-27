@@ -962,3 +962,45 @@ describe('lore entities are context, not rows (2026-07-23)', () => {
     expect(reclassifyAsLore).toEqual([])
   })
 })
+
+describe('an absent NPC cannot carry a rapport signal (2026-07-28)', () => {
+  // Live: three of four endings in one guide rested on The Drowned Creditor turning hostile or
+  // allied - an NPC authored `absent`. The lint caught it, recorded it as `info`, and shipped, so
+  // three quarters of the endings were kneecapped before a turn was played.
+  const ending = (title: string, extraSignal: Record<string, unknown> | null) => ({
+    title, tone: 'tragic', description: `${title} resolution.`, climax_summary: `${title} sketch.`,
+    trigger_conditions: {
+      signals: [
+        { when: { objective: 1, outcome: 'completed' }, weight: 5, note: 'the climax' },
+        ...(extraSignal ? [extraSignal] : []),
+      ],
+    },
+  })
+  const body = (state: string) => JSON.stringify({
+    endings: [
+      ending('The Ledger Burns', { when: { npc: 2, state }, weight: 3, note: 'the creditor' }),
+      ending('A New Ledger', null),
+      ending('The Final Tide', null),
+    ],
+    dials: [{ key: 'mercy', name: 'Mercy vs ruthlessness' }, { key: 'debt', name: 'Debt vs freedom' }],
+  })
+
+  it('rejects allied/hostile for someone who never appears', () => {
+    for (const state of ['allied', 'hostile']) {
+      const res = parseStage8(body(state), 1, 2, new Set([2]))
+      if (res.ok) throw new Error(`expected ${state} on an absent NPC to be rejected`)
+      expect(res.errors.join(' ')).toContain('never appears')
+    }
+  })
+
+  it('still allows dead/alive for them - an absent person can die offstage', () => {
+    for (const state of ['dead', 'alive']) {
+      expect(parseStage8(body(state), 1, 2, new Set([2])).ok).toBe(true)
+    }
+  })
+
+  it('leaves present NPCs untouched', () => {
+    expect(parseStage8(body('allied'), 1, 2, new Set()).ok).toBe(true)
+    expect(parseStage8(body('hostile'), 1, 2, new Set([1])).ok).toBe(true)
+  })
+})
