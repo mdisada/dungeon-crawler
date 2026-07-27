@@ -15,6 +15,7 @@ function validDraft(overrides: Partial<AdventureDraft> = {}): AdventureDraft {
     plotIdea: 'A haunted lighthouse hides a smuggling ring.',
     plotHistory: emptyPlotHistory(),
     difficultyPreset: null,
+    pacingOverrides: {},
     ...overrides,
   }
 }

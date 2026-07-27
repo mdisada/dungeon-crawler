@@ -510,6 +510,10 @@ async function acceptOffer(
     console.error('beat open after acceptance failed', err)
     await logEvent(service, env.adventureId, sessionId, 'incident', {
       kind: 'beat_open_failed', trigger: 'quest_accepted', core_loop_id: newLoopId,
+      // The message, not just the fact. Without it a live failure reads only as "no beat opened",
+      // and the actual cause (a NOT NULL violation on the beat insert) was invisible outside the
+      // edge logs (2026-07-26).
+      error: String(err instanceof Error ? err.message : err).slice(0, 300),
     })
     await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
   }
@@ -756,12 +760,42 @@ export async function completeQuest(
   await logEvent(service, env.adventureId, sessionId, 'quest_completed', {
     offer_id: offer.id, core_loop_id: offer.core_loop_id, paid,
   })
+  // The payout narrates the HANDOVER, never "the resolution".
+  //
+  // Asking for a resolution is what broke it (live 2026-07-26, Black Sough): handed only
+  // "the party completes the job - narrate the resolution", the narrator filled the vacuum with a
+  // party action nobody took ("the charges are quiet now - disarmed by Dain's steady hands") and
+  // flipped a giver who had just had them shoved out by men with pick handles into warmly counting
+  // gold into their palm.
+  //
+  // An A/B over the real end-state (tests/lab/ab-payout-prompt.mjs) ruled out the obvious fix:
+  // adding the event log ALONE stopped the fabrication but made the prose recite the log verbatim
+  // and still declare the place "finished". Reframing the ask is what fixes it; the facts are
+  // useful only as a fence around what may be said.
+  const recent = await service
+    .from('event_log')
+    .select('type, payload')
+    .eq('adventure_id', env.adventureId)
+    .in('type', ['encounter_resolved', 'objective_completed'])
+    .order('id', { ascending: false })
+    .limit(6)
+  const deeds = ((recent.data ?? []) as { type: string; payload: Record<string, Json> }[])
+    .reverse()
+    .map((e) => e.type === 'encounter_resolved'
+      ? `- "${String(e.payload.label)}" ended in ${String(e.payload.tier)}`
+      : `- objective completed: ${String(e.payload.title)}`)
+    .join('\n')
   await narrationBeat(
     service, env, sessionId,
-    `The party completes the job "${offer.quest_label}" for ${giver}. ` +
-      (paid ? `${giver} pays the promised ${terms.gold} gp. ` : '') +
-      'Narrate the resolution and end at a concrete decision point about what comes next.',
+    `${giver} settles up with the party for "${offer.quest_label}"` +
+      (paid ? ` and hands over the promised ${terms.gold} gp` : '') + '. ' +
+      (deeds ? `Everything the party actually resolved:\n${deeds}\nThey did nothing beyond this. ` : '') +
+      `Narrate ONLY the handover: the exchange, and ${giver}'s manner while making it - consistent ` +
+      'with how they last treated the party. Do NOT state what the party accomplished, do NOT ' +
+      'describe any action they did not take, and do NOT declare anything solved, safe or over. ' +
+      'Whatever the job left unfinished stays unfinished.',
     'Quest complete',
+    'outcome',
   )
   return { status: 200, body: { ok: true, paid, gold: paid ? terms.gold : 0 } }
 }

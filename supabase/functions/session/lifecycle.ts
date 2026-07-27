@@ -4,11 +4,14 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { bindCoopSet } from '../_shared/guide/affinity.ts'
+import { bindPersonalSlots } from '../_shared/guide/personal.ts'
 import { AgentCallError, callAgentText } from '../_shared/llm.ts'
 import type { DmState, Json, StateDiff } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { applyDialMoves } from './dials.ts'
 import { recomputePartyProfile } from './membership.ts'
+import { profileFromSetting } from './pacing.ts'
+import { runPersonalIntro, runSlotBinder } from './story-agents.ts'
 import { entryContract, journalViews, stageEntryOfferIfNeeded } from './story.ts'
 import { antagonistTurn } from './steward.ts'
 import {
@@ -53,13 +56,30 @@ async function buildRecap(
       : 'Previously: the party drove off the ambushers and earned the village\'s wary trust.'
   }
 
+  // The opening must OPEN WHERE THE ADVENTURE IS SET. The first-session narration used to ground
+  // only on the free-text premise, so it invented a setting ("Oakhaven Village") while the row play
+  // then dropped the party into was "The Grand Bazaar" (live 2026-07-24). buildStartDiffs picks the
+  // starting location the same way (first by created_at); grounding the recap on it too keeps the
+  // opening prose and the scene the party actually stands in from being two different places.
+  const { data: startLocation } = await service
+    .from('locations')
+    .select('name, description')
+    .eq('adventure_id', adventure.id)
+    .order('created_at')
+    .limit(1)
+    .maybeSingle()
+  const setting = startLocation?.name
+    ? `The party begins at "${startLocation.name}"${startLocation.description ? ` - ${startLocation.description}` : ''}. ` +
+      'Open THERE: establish that exact place by name, and do not invent a different town or setting. '
+    : ''
+
   try {
     // Openings stage the offer, never the motivation (F08 SS9.1): scene and atmosphere only,
     // ending where the entry giver seeks the party out - acceptance is what creates purpose.
     const source = lastSummary
       ? `Write a "Previously on..." recap (max 120 words) from this session summary. Second person plural, present tense, no spoilers beyond what players witnessed:\n${JSON.stringify(lastSummary.summary)}`
       : `Write a spoiler-safe opening premise narration (max 120 words) for the players from this pitch. ` +
-        `Second person plural, present tense. Establish the place and atmosphere only. Do NOT presume ` +
+        `Second person plural, present tense. Establish the place and atmosphere only. ${setting}Do NOT presume ` +
         `the party's motivation, purpose, or reasons for being here - they have not chosen anything yet. ` +
         `Do not reveal twists or hidden information. End at a concrete moment facing the players` +
         (entryGiverName
@@ -83,8 +103,104 @@ async function buildRecap(
   }
 }
 
+/**
+ * Bind the guide's personal hook slots to the real party (2026-07-26), once, at first session.
+ *
+ * Generalizes the coop-affinity binding right below it: authored-abstract at guide time, matched
+ * to concrete characters when the party is finally known. Every failure path degrades - the LLM
+ * binder falling over drops to the deterministic matcher, and a failed intro simply leaves the
+ * intro blank - because a personal stake is flavour and session start is not.
+ */
+async function bindPersonalSlotsPass(
+  service: SupabaseClient,
+  env: AgentEnv,
+  characterIds: string[],
+): Promise<void> {
+  if (characterIds.length === 0) return
+  const [{ data: slotRows }, { data: existing }] = await Promise.all([
+    service.from('personal_slots').select('id, key, intro_seed, objective_template').eq('adventure_id', env.adventureId),
+    service.from('personal_bindings').select('character_id').eq('adventure_id', env.adventureId),
+  ])
+  const slots = (slotRows ?? []) as {
+    id: string; key: string; intro_seed: string
+    objective_template: { label?: string; predicate?: unknown; reward?: Record<string, unknown> } | null
+  }[]
+  if (slots.length === 0) return
+  // Idempotent: a re-run (session restart, retry) never re-binds anyone already bound.
+  const bound = new Set(((existing ?? []) as { character_id: string }[]).map((b) => b.character_id))
+  const unbound = characterIds.filter((id) => !bound.has(id))
+  if (unbound.length === 0) return
+
+  const { data: chars } = await service
+    .from('characters')
+    .select('id, name, class_key, background_key, background_narrative, personality, freeform_text')
+    .in('id', unbound)
+  const characters = ((chars ?? []) as Record<string, unknown>[]).map((c) => ({
+    id: c.id as string,
+    name: (c.name as string) ?? '',
+    classKey: (c.class_key as string | null) ?? null,
+    backgroundKey: (c.background_key as string | null) ?? null,
+    text: [c.background_narrative, c.freeform_text, JSON.stringify(c.personality ?? {})]
+      .filter(Boolean).join(' ').slice(0, 600),
+  }))
+  if (characters.length === 0) return
+
+  const slotSummary = (s: typeof slots[number]) =>
+    `${s.objective_template?.label ?? s.key} - ${String(s.intro_seed).slice(0, 160)}`
+  // Menu match first; the pure matcher is the guarantee behind it.
+  const proposed = await runSlotBinder(env, {
+    characters: characters.map((c) => ({ id: c.id, summary: `${c.name}, ${c.classKey ?? 'adventurer'} (${c.backgroundKey ?? 'unknown background'}). ${c.text.slice(0, 240)}` })),
+    slots: slots.map((s) => ({ key: s.key, summary: slotSummary(s) })),
+  })
+  const assignments = proposed.length > 0
+    ? proposed
+    : bindPersonalSlots(characters, slots.map((s) => ({
+      key: s.key,
+      archetype: { backgroundTags: [], classKeys: [], themes: [] },
+      introSeed: s.intro_seed,
+      objective: { label: s.objective_template?.label ?? '', predicate: s.objective_template?.predicate ?? null, reward: {} },
+      overlays: [],
+    })))
+  if (assignments.length === 0) return
+
+  const { data: location } = await service
+    .from('locations').select('name').eq('adventure_id', env.adventureId)
+    .order('created_at').limit(1).maybeSingle()
+  const slotByKey = new Map(slots.map((s) => [s.key, s]))
+  const characterById = new Map(characters.map((c) => [c.id, c]))
+
+  const rows: Record<string, unknown>[] = []
+  for (const assignment of assignments) {
+    const slot = slotByKey.get(assignment.slotKey)
+    const character = characterById.get(assignment.characterId)
+    if (!slot || !character) continue
+    const intro = await runPersonalIntro(env, {
+      characterSummary: `${character.name}, ${character.classKey ?? 'adventurer'} (${character.backgroundKey ?? 'unknown background'}). ${character.text.slice(0, 400)}`,
+      introSeed: slot.intro_seed,
+      openingLocation: (location?.name as string) ?? '',
+    })
+    rows.push({
+      adventure_id: env.adventureId,
+      character_id: character.id,
+      slot_id: slot.id,
+      intro_text: intro,
+      objective: slot.objective_template ?? {},
+      status: 'active',
+    })
+  }
+  if (rows.length === 0) return
+  const { error } = await service.from('personal_bindings').insert(rows)
+  if (error) {
+    console.error('personal_bindings insert failed', error)
+    return
+  }
+  await logEvent(service, env.adventureId, null, 'personal_slots_bound', {
+    count: rows.length, via: proposed.length > 0 ? 'binder' : 'deterministic',
+  }).catch(() => {})
+}
+
 /** First-session deferred pass (F05 SS3): party profile + concrete coop affinity bindings. */
-async function firstSessionPass(service: SupabaseClient, adventureId: string): Promise<void> {
+async function firstSessionPass(service: SupabaseClient, adventureId: string, env: AgentEnv): Promise<void> {
   await recomputePartyProfile(service, adventureId)
 
   const [{ data: members }, { data: coopIngredients }] = await Promise.all([
@@ -93,6 +209,12 @@ async function firstSessionPass(service: SupabaseClient, adventureId: string): P
   ])
 
   const characterIds = (members ?? []).filter((m) => !m.spectator && m.character_id).map((m) => m.character_id as string)
+
+  // Personal stakes bind here for the same reason coop affinities do: the party is finally known.
+  await bindPersonalSlotsPass(service, env, characterIds).catch((err) => {
+    console.error('personal slot binding failed', err)
+  })
+
   if (characterIds.length === 0 || !coopIngredients || coopIngredients.length === 0) return
 
   const { data: chars } = await service
@@ -171,6 +293,34 @@ async function buildStartDiffs(
     ? await service.from('characters').select('id, user_id, name, hp_max, hp_current, hp_temp, persistent_conditions').in('id', characterIds)
     : { data: [] }
 
+  // Personal stakes bound moments ago by firstSessionPass. Party-visible (the client emphasizes
+  // your own) - GameState has no per-user channel, and a table seeing each other's stakes is
+  // right anyway: that is what a party sharing a campfire knows.
+  const { data: bindings } = await service
+    .from('personal_bindings')
+    .select('character_id, intro_text, objective, status')
+    .eq('adventure_id', adventure.id)
+  const personalByCharacter = new Map(
+    ((bindings ?? []) as {
+      character_id: string; intro_text: string
+      objective: { label?: string; reward?: { gold?: number; boon?: string } } | null
+      status: string
+    }[]).map((b) => {
+      const reward = b.objective?.reward ?? {}
+      const bits = [
+        reward.gold ? `${reward.gold} gp` : '',
+        reward.boon ?? '',
+      ].filter(Boolean)
+      return [b.character_id, {
+        intro: b.intro_text ?? '',
+        objectiveLabel: b.objective?.label ?? '',
+        status: (b.status === 'completed' || b.status === 'failed' ? b.status : 'active') as
+          'active' | 'completed' | 'failed',
+        reward: bits.join(', '),
+      }]
+    }),
+  )
+
   const dmObjectives: DmState['objectives'] = (objectives ?? []).map((o) => ({
     id: o.id as string,
     title: o.title as string,
@@ -197,7 +347,18 @@ async function buildStartDiffs(
     {
       domain: 'dialogue',
       patch: asPatch({
-        lines: [{ id: `recap-${sessionId}`, speaker: null, npcId: null, text: recap }],
+        // The shared opening, then each character's own reason for being here. Personal intros
+        // follow the premise so the table hears the scene before their private stake in it.
+        lines: [
+          { id: `recap-${sessionId}`, speaker: null, npcId: null, text: recap },
+          ...(chars ?? [])
+            .map((c) => ({ name: c.name as string, intro: personalByCharacter.get(c.id as string)?.intro ?? '' }))
+            .filter((c) => c.intro)
+            .map((c) => ({
+              id: `intro-${sessionId}-${c.name}`, speaker: null, npcId: null,
+              text: `${c.name}: ${c.intro}`,
+            })),
+        ],
         activeLineId: `recap-${sessionId}`,
         speakers: [],
         typing: false,
@@ -216,6 +377,7 @@ async function buildStartDiffs(
           connected: false,
           hp: { current: c.hp_current ?? c.hp_max ?? 0, max: c.hp_max ?? 0, temp: c.hp_temp ?? 0 },
           conditions: ((c.persistent_conditions as Json[]) ?? []).map((x) => String(typeof x === 'object' && x !== null && 'name' in x ? (x as { name: string }).name : x)),
+          personal: personalByCharacter.get(c.id as string) ?? null,
         })),
       }),
     },
@@ -232,7 +394,17 @@ async function buildStartDiffs(
         ...(await journalViews(service, adventure.id)),
       }),
     },
-    { domain: 'dm', patch: asPatch({ objectives: dmObjectives, proposals: [] }) },
+    {
+      // The creator's difficulty choice, resolved into numbers once here so every hot path (the
+      // director each turn, every encounter seed) is a plain state read. Merged into settings
+      // rather than replacing them: a DM's live set_auto overrides must survive a session restart.
+      domain: 'dm',
+      patch: asPatch({
+        objectives: dmObjectives,
+        proposals: [],
+        settings: { pacing: profileFromSetting(adventure.difficulty_setting) },
+      }),
+    },
   ]
 }
 
@@ -277,7 +449,11 @@ export async function startSession(service: SupabaseClient, adventureId: string,
   assertOk(sessionError, 'session insert failed')
   const sessionId = session.id as string
 
-  if (sessionIndex === 1) await firstSessionPass(service, adventureId)
+  if (sessionIndex === 1) {
+    await firstSessionPass(service, adventureId, {
+      service, adventureId, creatorId: adventure.creator_id, demo: adventure.demo, mode: adventure.mode,
+    })
+  }
 
   // Entry gating (F08 SS2.1/SS9): with an unaccepted entry contract, the first objective stays
   // hidden and the session opens on the giver's offer scene instead.

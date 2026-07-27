@@ -15,6 +15,9 @@ export interface GuideDigest {
   npcs: Map<string, string>
   locations: Map<string, string>
   ingredients: Map<string, string>
+  /** Authored story nodes ("node#1"), present once the graph is authored (2026-07-26). Stage 6
+   *  ignores them; stage 7 scans them for cross-node fiction coherence. */
+  nodes?: Map<string, string>
 }
 
 export const HOOK_KINDS = ['npc_objective', 'location_placement', 'backstory_slot'] as const

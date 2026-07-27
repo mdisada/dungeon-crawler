@@ -10,6 +10,7 @@ import {
   escalatedDc, newSkillChallenge, promptDeadline, recordAttempt, SOLO_PROMPT_WINDOW_S,
 } from '../_shared/play/index.ts'
 import type { CheckResult, SkillChallengeState } from '../_shared/play/index.ts'
+import { biasedFailures, biasedSuccesses } from '../_shared/story/index.ts'
 import type {
   EncounterKind, EncounterSpecState, EncounterState, GameState, Json, PendingPromptState, StateDiff,
 } from '../_shared/state/index.ts'
@@ -22,6 +23,7 @@ import { writeMemoryFragment } from './memory.ts'
 import { recordSceneLedger } from './ledger.ts'
 import { applyMilestones } from './milestones.ts'
 import { narrationBeat } from './narration.ts'
+import { pacingFor } from './pacing.ts'
 import {
   activePcIds, agentContextLines, appendLinesDiff, characterProfiles, loadPartyCharacters,
   newLine, partySkillList, pendingDiffs, typingDiff,
@@ -31,6 +33,10 @@ import { evaluateStoryProgress } from './progress.ts'
 import { recordProposal } from './proposals.ts'
 import type { ChallengeCheckStash } from './stashes.ts'
 import { commitDiffs, loadState, logEvent } from './util.ts'
+import { bossNpcStateForOutcome } from '../_shared/combat/index.ts'
+import { resolveLiveCombat } from './combat.ts'
+import type { LiveCombatResult } from './combat.ts'
+import { applyNpcState, bossReferencedBy } from './npc-state.ts'
 
 export function activeEncounter(state: GameState): EncounterState | null {
   return state.encounter ?? null
@@ -78,13 +84,30 @@ export async function openEncounter(
   await commitDiffs(service, adventureId, () => [
     ...encounterReplaceDiffs(encounter),
     ...specReplaceDiffs(spec),
+    // The node's entry chips have done their job - inside the encounter the pinned frame is what
+    // says how to engage, and stale "ways in" would read as ways out.
+    { domain: 'dialogue' as const, patch: { suggestedChoices: [] } as unknown as Json },
   ])
   await logEvent(service, adventureId, sessionId, 'encounter_opened', {
     encounter_id: encounter.id, kind: encounter.kind, label: encounter.label, stakes: encounter.stakes,
   })
 }
 
-export type ResolutionTier = 'full' | 'partial' | 'failed'
+/**
+ * Pass or fail (owner decision, 2026-07-27). `partial` is gone from every engine: the guide
+ * authored zero partial outcome maps across eight nodes and zero partial transitions, so the tier
+ * only ever meant "credit nothing and route the party on as though they had lost".
+ *
+ * An imperfect win is still expressible - `alsoAward` carries the cost. A social encounter forced
+ * out at the disposition floor resolves as a PASS whose setback atoms fire alongside the success,
+ * which is what "you got what you came for, and it cost you" should have meant all along.
+ */
+export type ResolutionTier = 'full' | 'failed'
+
+export interface ResolveOptions {
+  /** Extra atoms applied on top of the tier's own map - a pass that carried a price. */
+  alsoAward?: string[]
+}
 
 /**
  * Deterministic resolution: tier -> outcome map -> applyMilestones (validated), close the
@@ -98,12 +121,18 @@ export async function resolveOpenEncounter(
   sessionId: string,
   tier: ResolutionTier,
   narrationContext: string,
+  opts: ResolveOptions = {},
 ): Promise<void> {
   const state = (await loadState(service, env.adventureId)).state
   const encounter = activeEncounter(state)
   if (!encounter) return
   const spec = state.dm?.encounterSpec ?? { onSuccess: [], onPartial: [], onFailure: [] }
-  const mapped = tier === 'failed' ? spec.onFailure : tier === 'partial' ? spec.onPartial : spec.onSuccess
+  // Binary map, plus whatever price the caller attached. `onPartial` is no longer written by
+  // authoring and is deliberately not read - stored rows from before the change keep it, harmless.
+  const mapped = [...new Set([
+    ...(tier === 'failed' ? spec.onFailure : spec.onSuccess),
+    ...(opts.alsoAward ?? []),
+  ])]
   const applied = mapped.length > 0
     ? await applyMilestones(service, env, sessionId, mapped, 'encounter_outcome')
     : []
@@ -124,6 +153,8 @@ export async function resolveOpenEncounter(
   await logEvent(service, env.adventureId, sessionId, 'encounter_resolved', {
     encounter_id: encounter.id, kind: encounter.kind, label: encounter.label,
     tier, milestones: applied as unknown as Json,
+    // Which authored node just resolved - the navigator follows THIS node's edge for THIS tier.
+    ...(spec.nodeKey ? { node_key: spec.nodeKey } : {}),
   })
   if (restored) {
     await logEvent(service, env.adventureId, sessionId, 'encounter_restored', {
@@ -142,15 +173,16 @@ export async function resolveOpenEncounter(
   // Memory write path (Slice 7): the resolution becomes a retrievable fragment.
   await writeMemoryFragment(
     service, env, 'encounter',
-    `${encounter.kind.replaceAll('_', ' ')} "${encounter.label}" ended in ${tier === 'failed' ? 'failure' : `${tier} success`}` +
+    `${encounter.kind.replaceAll('_', ' ')} "${encounter.label}" ended in ${
+      tier === 'failed' ? 'failure' : (opts.alsoAward ?? []).length > 0 ? 'costly success' : 'success'}` +
       (encounter.stakes ? ` (stakes: ${encounter.stakes})` : '') + `. ${narrationContext}`,
   )
 
   const tierText = tier === 'failed'
     ? 'The party has FAILED it - narrate the fail-forward consequences; the story moves on, worse.'
-    : tier === 'partial'
-      ? 'The party succeeded, but only just - narrate success with a visible cost or complication.'
-      : 'The party succeeded fully, together - narrate a clean, earned success.'
+    : (opts.alsoAward ?? []).length > 0
+      ? 'The party succeeded, but it cost them - narrate the win and the price together.'
+      : 'The party succeeded - narrate a clean, earned success.'
   // The resolution cutscene (exposition voice): consequences forward, next hook at the end.
   await narrationBeat(
     service, env, sessionId,
@@ -224,9 +256,10 @@ export function spawnInstantiator(service: SupabaseClient, env: AgentEnv, sessio
     }
 
     const num = (v: Json | undefined, fallback: number) => (typeof v === 'number' ? v : fallback)
+    const pacing = pacingFor(state)
     const challenge = newSkillChallenge({
-      neededSuccesses: num(params.needed_successes, 2),
-      maxFailures: num(params.max_failures, 2),
+      neededSuccesses: biasedSuccesses(num(params.needed_successes, 2), pacing),
+      maxFailures: biasedFailures(num(params.max_failures, 2), pacing),
       suggestedSkills: Array.isArray(params.suggested_skills)
         ? (params.suggested_skills as Json[]).filter((s): s is string => typeof s === 'string')
         : [],
@@ -258,6 +291,8 @@ export interface StoredBeatSpec {
   onSuccess: string[]
   onPartial: string[]
   onFailure: string[]
+  /** Set when this spec came from an authored story node (2026-07-26). */
+  nodeKey?: string
 }
 
 export function parseStoredBeatSpec(raw: Json): StoredBeatSpec | null {
@@ -276,11 +311,22 @@ export function parseStoredBeatSpec(raw: Json): StoredBeatSpec | null {
     onSuccess: strings(obj.on_success),
     onPartial: strings(obj.on_partial),
     onFailure: strings(obj.on_failure),
+    ...(typeof obj.node_key === 'string' ? { nodeKey: obj.node_key } : {}),
   }
 }
 
-function specState(spec: StoredBeatSpec): EncounterSpecState {
-  return { onSuccess: spec.onSuccess, onPartial: spec.onPartial, onFailure: spec.onFailure, params: spec.params }
+/**
+ * The ONE place a stored beat spec becomes the hidden encounter state. Exported because the
+ * puzzle and social openers each rebuilt this by hand and silently dropped `nodeKey` - so their
+ * resolutions carried no node, the navigator could not find the node that just resolved, and it
+ * fell back to "next unused route node". The authored transitions (and their arrival_context)
+ * were being discarded on every non-skill encounter (live 2026-07-26).
+ */
+export function specState(spec: StoredBeatSpec): EncounterSpecState {
+  return {
+    onSuccess: spec.onSuccess, onPartial: spec.onPartial, onFailure: spec.onFailure, params: spec.params,
+    ...(spec.nodeKey ? { nodeKey: spec.nodeKey } : {}),
+  }
 }
 
 /** Instantiates a skill-challenge frame from a stored spec (authored or ad-hoc). */
@@ -291,9 +337,10 @@ export async function openSkillChallengeFromSpec(
   spec: StoredBeatSpec,
 ): Promise<EncounterState> {
   const num = (v: Json | undefined, fallback: number) => (typeof v === 'number' ? v : fallback)
+  const pacing = pacingFor((await loadState(service, env.adventureId)).state)
   const challenge = newSkillChallenge({
-    neededSuccesses: num(spec.params.needed_successes, 3),
-    maxFailures: num(spec.params.max_failures, 2),
+    neededSuccesses: biasedSuccesses(num(spec.params.needed_successes, 3), pacing),
+    maxFailures: biasedFailures(num(spec.params.max_failures, 2), pacing),
     suggestedSkills: Array.isArray(spec.params.suggested_skills)
       ? (spec.params.suggested_skills as Json[]).filter((s): s is string => typeof s === 'string')
       : [],
@@ -333,14 +380,54 @@ export async function runCombatPlaceholderEncounter(
       'Do NOT resolve the fight, decide a winner, or describe how it ends.',
     'Encounter entered',
   )
-  // The combat RESOLUTION is a separate mechanic (the F09 battle map; a placeholder auto-win for
-  // now). It is a marker event, NOT a narration line - the bare "party victorious (placeholder
-  // auto-resolve)" used to be appended to the transcript, dropping a mechanical stub into the
-  // middle of the prose. What belongs in OUR narration is the story AROUND the fight: the
-  // lead-in above (the clash joined) and the aftermath below. So log the outcome and let the
-  // aftermath beat carry it.
+  // F09.0a: resolve the fight on the REAL engine from authored data (the objective -> encounter
+  // join in combat.ts), single-writer. Combat is an isolated black box - it re-enters the spine
+  // ONLY through the two calls below (applyNpcState + resolveOpenEncounter), the exact seams the
+  // placeholder already used; it touches no consistency/pacing agent. On any gap (ad-hoc beat, no
+  // authored enemies, empty party) or engine error, fall back to the historical auto-win so a live
+  // session can never break. The resolution is a marker event, NOT a narration line - the story
+  // AROUND the fight (lead-in above, aftermath below) is what OUR narration carries.
+  const live: LiveCombatResult | null = await resolveLiveCombat(
+    service, env, (await loadState(service, env.adventureId)).state,
+    { label: spec.label, stakes: spec.stakes, onSuccess: spec.onSuccess, onPartial: spec.onPartial, onFailure: spec.onFailure },
+  ).catch((err: unknown) => {
+    console.error('combat resolve failed; using placeholder auto-win', err)
+    return null
+  })
+
+  if (live) {
+    await logEvent(service, env.adventureId, sessionId, 'combat_resolved', {
+      label: spec.label, outcome: live.result.outcome, tier: live.result.tier,
+      boss_outcome: live.result.bossOutcome, casualties: live.result.casualties as unknown as Json,
+      encounter_id: live.encounterId, seed: live.seed, rounds: live.rounds,
+      warnings: live.warnings, resolver: 'engine',
+    })
+    // Boss fate -> npcStates BEFORE resolving, so the aftermath canon + ending signals see it. The
+    // group guard is a no-op for a solo/boss npc, so a real dead/alive write lands (F09 SS3.3).
+    if (live.boss) {
+      const npcState = bossNpcStateForOutcome(live.result.bossOutcome)
+      if (npcState) {
+        await applyNpcState(
+          service, env, sessionId, live.boss, npcState, 'combat',
+          `boss ${live.result.bossOutcome} in "${spec.label}"`,
+        )
+      }
+    }
+    await resolveOpenEncounter(service, env, sessionId, live.result.tier, combatAftermath(spec, live))
+    return
+  }
+
+  // No engine result (ad-hoc beat, no authored enemies, or engine error): the historical auto-win
+  // that keeps a live session moving. But if the fight was against the BOSS, the victory must
+  // reach state the way the engine path does above - mark the boss dead - or the meta-loop steward
+  // keeps advancing a defeated antagonist and the ending signals never see the win (live
+  // 2026-07-24: the Whispering Maw "died" here yet kept hunting the party for two more days).
+  const placeholderBoss = await bossReferencedBy(service, env.adventureId, spec.label)
+  if (placeholderBoss) {
+    await applyNpcState(service, env, sessionId, placeholderBoss, 'dead', 'combat_placeholder', `defeated in "${spec.label}"`)
+  }
   await logEvent(service, env.adventureId, sessionId, 'combat_resolved', {
-    label: spec.label, outcome: 'victory', resolver: 'placeholder',
+    label: spec.label, outcome: 'victory', resolver: 'placeholder', boss_killed: placeholderBoss?.name ?? null,
   })
   await resolveOpenEncounter(
     service, env, sessionId, 'full',
@@ -348,6 +435,21 @@ export async function runCombatPlaceholderEncounter(
       'defeated, what the victory cost and what it opens - as the scene settles. Do not re-narrate ' +
       'the blow-by-blow of the fight itself.',
   )
+}
+
+/** The aftermath narration context for a real result - resolveOpenEncounter prepends its tierText. */
+function combatAftermath(spec: StoredBeatSpec, live: LiveCombatResult): string {
+  if (live.result.tier === 'failed') {
+    return `The fight ("${spec.label}") turned against the party - they were overwhelmed and went down. ` +
+      'Narrate the fail-forward AFTERMATH: the party is beaten (unconscious, not dead) and the story moves ' +
+      'on, worse for it. Do not re-narrate the blow-by-blow.'
+  }
+  const pcDown = live.result.casualties.pcIds.length
+  const bossNote = live.boss && live.result.bossOutcome === 'killed' ? ` ${live.boss.name} lies dead among them.` : ''
+  const costNote = pcDown > 0 ? ` The win came at a cost - ${pcDown} of the party fell before the end.` : ''
+  return `The fight ("${spec.label}") is over and the party won.${bossNote}${costNote} Narrate the AFTERMATH ` +
+    'as the scene settles - the enemy defeated, what the victory cost and what it opens. Do not re-narrate ' +
+    'the blow-by-blow of the fight itself.'
 }
 
 // --- Skill challenge (Slice 2) ---------------------------------------------------------------
@@ -498,6 +600,7 @@ export async function handleChallengeIntent(
       knownLocations: [],
       knownNpcs: [],
       milestones: [],
+      dcShift: pacingFor(state).dcShift,
     })
   } catch (err) {
     await commitDiffs(service, env.adventureId, () => [typingDiff(false)])
@@ -531,7 +634,24 @@ export async function handleChallengeIntent(
   }
 
   if (resolution.type !== 'check' || !resolution.check) {
-    // No roll needed: the attempt still counts toward the challenge, one way or the other.
+    // No roll. auto_FAIL still counts against the party - the action backfired, a wasted attempt.
+    // An auto_SUCCESS counts as progress UNLESS it was disruptive/destructive rather than a real
+    // attempt at the challenge: casting Fireball into the crowd "to read a journal" is noise, not
+    // deciphering (live 2026-07-24). Code keys on the adjudicator's own `loud` signal (smashing,
+    // explosions, shouting) so a QUIET legitimate attempt the cheap model waved through still
+    // advances the challenge - a blanket "no auto-success counts" stalled honest investigation
+    // (live 2026-07-25: four "look around / move to the alcove" actions credited nothing and the
+    // challenge failed with zero progress).
+    if (resolution.type === 'auto_success' && adjudication.sceneEffects?.loud === true) {
+      await narrationBeat(
+        service, env, sessionId,
+        `Inside the challenge "${encounter.label}", ${character.name}: ${adjudication.interpretation}. ` +
+          `It is loud and destructive, not real progress - it does NOT advance the challenge, which still ` +
+          `demands the party's genuine effort. ${resolution.consequencesHint}`,
+        'Challenge attempt', 'outcome',
+      )
+      return { status: 200, body: { ok: true, resolved: 'auto_success_noncounting' } }
+    }
     const success = resolution.type === 'auto_success'
     const status = await applyChallengeAttempt(service, env, sessionId, {
       characterId: character.id,

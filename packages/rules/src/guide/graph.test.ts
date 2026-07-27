@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { hasBlockingErrors, lintStoryGraph, routeCount } from './graph'
-import type { StoryGraph } from './graph'
+import type { GraphNode, StoryGraph } from './graph'
 
 /** A minimal but healthy guide: 2 objectives, 2 routes each, a living NPC, endings both ways. */
 function healthy(): StoryGraph {
@@ -189,6 +189,180 @@ describe('entities that are not people (2026-07-23)', () => {
       npcSignals: [{ npcId: 'force', state: 'allied', weight: -4 }],
     })
     expect(lintStoryGraph(graph).some((f) => f.code === 'ending_needs_absent_npc_rapport')).toBe(false)
+  })
+})
+
+/** A healthy authored graph: each objective gets two route nodes, one combat node, registered
+ *  atoms, a living NPC for the social node. */
+function withNodes(): StoryGraph {
+  const graph = healthy()
+  const mk = (over: Partial<GraphNode>): GraphNode => ({
+    id: over.key ?? 'x', key: 'x', objectiveId: 'o1', kind: 'skill_challenge', role: 'route',
+    // Every route node banks a setback: `failure_writes_nothing` makes a free loss an error.
+    onSuccess: [], onPartial: [], onFailure: ['ground_lost'], npcIds: [],
+    transitions: [{ on: 'full', toNodeKey: null, arrivalContext: '' }],
+    ...over,
+  })
+  graph.nodes = [
+    mk({ key: 'o1n0', id: 'o1n0', objectiveId: 'o1', kind: 'social', npcIds: ['n1'], onSuccess: ['lantern_relit'] }),
+    mk({ key: 'o1n1', id: 'o1n1', objectiveId: 'o1', onSuccess: ['lantern_relit'] }),
+    mk({ key: 'o2n0', id: 'o2n0', objectiveId: 'o2', kind: 'combat', onSuccess: ['wreckers_routed'] }),
+    mk({ key: 'o2n1', id: 'o2n1', objectiveId: 'o2', onSuccess: ['wreckers_routed'] }),
+  ]
+  graph.registryAtoms = ['lantern_relit', 'wreckers_routed', 'ground_lost']
+  graph.minPlayers = 1
+  return graph
+}
+
+describe('authored node graph (2026-07-26)', () => {
+  it('a healthy node graph passes clean', () => {
+    expect(lintStoryGraph(withNodes())).toEqual([])
+  })
+
+  it('a dangling transition target is a hard error', () => {
+    const graph = withNodes()
+    graph.nodes![0].transitions = [{ on: 'full', toNodeKey: 'ghost', arrivalContext: '' }]
+    expect(lintStoryGraph(graph).some((f) => f.code === 'node_dangling_transition')).toBe(true)
+  })
+
+  it('a failed edge with no arrival context is a hard error', () => {
+    const graph = withNodes()
+    graph.nodes![0].transitions = [
+      { on: 'full', toNodeKey: null, arrivalContext: '' },
+      { on: 'failed', toNodeKey: 'o1n1', arrivalContext: '' },
+    ]
+    expect(lintStoryGraph(graph).some((f) => f.code === 'transition_missing_arrival_context')).toBe(true)
+  })
+
+  it('a failure edge pointing nowhere is a hard error', () => {
+    // Shipped live 2026-07-26: stage 5 authored `failed -> null`, the gate skipped every null
+    // target, and the runtime read it as "the objective resolved here" - a failed scene that
+    // opened nothing and credited nothing.
+    const graph = withNodes()
+    graph.nodes![0].transitions = [
+      { on: 'full', toNodeKey: null, arrivalContext: '' },
+      { on: 'failed', toNodeKey: null, arrivalContext: 'driven back' },
+    ]
+    expect(lintStoryGraph(graph).some((f) => f.code === 'failure_transition_dead_end')).toBe(true)
+  })
+
+  it('a null target on the success tier stays legal', () => {
+    const graph = withNodes()
+    graph.nodes![0].transitions = [{ on: 'full', toNodeKey: null, arrivalContext: '' }]
+    expect(lintStoryGraph(graph).some((f) => f.code === 'failure_transition_dead_end')).toBe(false)
+  })
+
+  it('a route node that awards nothing on failure is a hard error', () => {
+    // Replaces `failure_loop_no_escalation`, which only fired on a failed edge pointing at its own
+    // node - a shape stage 5 can no longer produce. The general case went unchecked: live, three
+    // of five resolutions came in failed or partial and every one awarded zero atoms.
+    const graph = withNodes()
+    graph.nodes![1].onFailure = []
+    expect(lintStoryGraph(graph).some((f) => f.code === 'failure_writes_nothing')).toBe(true)
+  })
+
+  it('a rescue node may award nothing on failure - it exists to be won', () => {
+    const graph = withNodes()
+    graph.nodes!.push({
+      ...graph.nodes![1], id: 'o1r0', key: 'o1r0', role: 'rescue', onFailure: [],
+    })
+    const rescueFindings = lintStoryGraph(graph)
+      .filter((f) => f.code === 'failure_writes_nothing' && f.message.includes('o1r0'))
+    expect(rescueFindings).toEqual([])
+  })
+
+  it('an outcome atom off the registry is a hard error', () => {
+    const graph = withNodes()
+    graph.nodes![1].onSuccess = ['lantern_relit', 'smuggled_in_a_stray']
+    expect(lintStoryGraph(graph).some((f) => f.code === 'node_outcome_off_registry')).toBe(true)
+  })
+
+  it('a social node staging nobody alive can never open', () => {
+    const graph = withNodes()
+    graph.nodes![0].npcIds = ['n2'] // n2 is absent
+    expect(lintStoryGraph(graph).some((f) => f.code === 'node_unstageable_npc')).toBe(true)
+  })
+
+  it('a node needing more players than min_players is unplayable', () => {
+    const graph = withNodes()
+    graph.nodes![1].minParticipants = 2
+    graph.minPlayers = 1
+    expect(lintStoryGraph(graph).some((f) => f.code === 'min_players_unplayable')).toBe(true)
+  })
+
+  it('too few route nodes is an error, not a warning', () => {
+    const graph = withNodes()
+    graph.nodes = graph.nodes!.filter((n) => n.key !== 'o1n1') // o1 now has one route node
+    expect(lintStoryGraph(graph).some((f) => f.code === 'objective_missing_route_nodes')).toBe(true)
+  })
+
+  it('a thin finale is flagged as climax_underfunded', () => {
+    const graph = withNodes()
+    graph.nodes = graph.nodes!.filter((n) => n.key !== 'o2n1') // o2 (last objective) now thin
+    expect(lintStoryGraph(graph).some((f) => f.code === 'climax_underfunded')).toBe(true)
+  })
+
+  it('warns when no combat is authored (floor)', () => {
+    const graph = withNodes()
+    graph.nodes![2].kind = 'skill_challenge'
+    expect(lintStoryGraph(graph).some((f) => f.code === 'combat_floor_unmet')).toBe(true)
+  })
+
+  it('a setback atom is not an orphan award', () => {
+    // Regression (2026-07-26): partial/failure atoms are authored CONSEQUENCES, not routes.
+    // Counting them made every authored graph report a fistful of orphan awards.
+    const graph = withNodes()
+    graph.nodes![0].onFailure = ['guards_alerted']
+    graph.registryAtoms = [...graph.registryAtoms!, 'guards_alerted']
+    expect(lintStoryGraph(graph).some((f) => f.code === 'orphan_award_atoms')).toBe(false)
+  })
+
+  it('still flags a SUCCESS atom no objective reads', () => {
+    const graph = withNodes()
+    graph.nodes![0].onSuccess = ['lantern_relit', 'a_thread_nobody_reads']
+    graph.registryAtoms = [...graph.registryAtoms!, 'a_thread_nobody_reads']
+    expect(lintStoryGraph(graph).some((f) => f.code === 'orphan_award_atoms')).toBe(true)
+  })
+})
+
+describe('personal arcs stay reward-only (2026-07-26)', () => {
+  it('a personal atom completing an objective is a hard error', () => {
+    const graph = withNodes()
+    graph.personalAtoms = ['lantern_relit']
+    const findings = lintStoryGraph(graph)
+    expect(findings.some((f) => f.code === 'personal_atom_in_structural_position')).toBe(true)
+    expect(hasBlockingErrors(findings)).toBe(true)
+  })
+
+  it('a node crediting a personal atom is a hard error', () => {
+    const graph = withNodes()
+    graph.nodes![1].onFailure = ['private_grief_eased']
+    graph.registryAtoms = [...graph.registryAtoms!, 'private_grief_eased']
+    graph.personalAtoms = ['private_grief_eased']
+    expect(lintStoryGraph(graph).some((f) => f.code === 'personal_atom_in_structural_position')).toBe(true)
+  })
+
+  it('a slot with no existing overlay scene can never surface', () => {
+    const graph = withNodes()
+    graph.personalSlots = [{ id: 'p1', key: 'the_bereaved', overlayNodeKeys: ['ghost'] }]
+    expect(lintStoryGraph(graph).some((f) => f.code === 'personal_slot_unreachable_overlay')).toBe(true)
+  })
+
+  it('fewer slots than max_players warns but does not block', () => {
+    const graph = withNodes()
+    graph.personalSlots = [{ id: 'p1', key: 'a', overlayNodeKeys: ['o1n0'] }]
+    graph.maxPlayers = 4
+    const findings = lintStoryGraph(graph)
+    expect(findings.some((f) => f.code === 'personal_slots_thin')).toBe(true)
+    expect(hasBlockingErrors(findings)).toBe(false)
+  })
+
+  it('healthy personal content produces no findings', () => {
+    const graph = withNodes()
+    graph.personalAtoms = ['private_grief_eased']
+    graph.personalSlots = [{ id: 'p1', key: 'a', overlayNodeKeys: ['o1n0'] }]
+    graph.maxPlayers = 1
+    expect(lintStoryGraph(graph)).toEqual([])
   })
 })
 

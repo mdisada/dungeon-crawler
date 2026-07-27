@@ -93,12 +93,18 @@ export interface GuaranteedRouteInput {
 /**
  * Builds the rescue route for one objective. Deterministic: same objective -> same shape, so a
  * guide regeneration does not reshuffle every rescue, and different objectives differ.
+ *
+ * ALWAYS BUILT (2026-07-27). This used to bail whenever the objective's predicate yielded no
+ * writable atom, on the reasoning that a rescue which cannot complete the objective is worse than
+ * none. That reasoning died with the predicate: the rescue is the ladder's TERMINAL now, the scene
+ * that resolves the objective whichever way it goes, and an objective without one has no floor to
+ * land on. Its atoms are flavour, so having none is not a reason to withhold the scene itself.
+ *
+ * The only remaining null is a missing template, which would be a bug in the template table rather
+ * than anything an author did.
  */
 export function buildGuaranteedRoute(input: GuaranteedRouteInput): GuaranteedRoute | null {
-  const atoms = minimalSatisfyingAtoms(input.completionPredicates)
-  if (!atoms || atoms.length === 0) return null
-  // Belt and braces: never ship a route that does not actually complete the thing.
-  if (!atomsSatisfy(input.completionPredicates, atoms)) return null
+  const atoms = minimalSatisfyingAtoms(input.completionPredicates) ?? []
 
   const template = pickTemplate('skill_challenge', input.objectiveId)
   if (!template) return null
@@ -115,8 +121,11 @@ export function buildGuaranteedRoute(input: GuaranteedRouteInput): GuaranteedRou
     guidance: templateGuidance(template, twist),
     params: { ...template.params },
     onSuccess: atoms,
-    // Partial/failure stay EMPTY on purpose. This is the safety net, not a giveaway: a rescue
-    // that credited the objective on a partial would hand out the spine for showing up.
+    // Still empty, but for a different reason than it used to be. The old one was "a rescue that
+    // credited the objective on a failure would hand out the spine for showing up" - back when
+    // credited atoms WERE the objective. Losing the rescue now retires the objective as `failed`
+    // regardless of what it writes, so the empty map is simply the honest one: falling short here
+    // earns no flavour flags, and the navigator does the retiring.
     onPartial: [],
     onFailure: [],
   }

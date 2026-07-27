@@ -23,6 +23,22 @@ export type {
   DirectorThresholds, RouteHealth,
 } from './director.ts'
 export type { PivotAssessment, PivotHandling } from './classifier.ts'
+export { decideCredit, isObjectiveCreditSource, OBJECTIVE_CREDIT_SOURCES } from './credit.ts'
+export type { CreditDecision, CreditInput, ObjectiveCreditSource } from './credit.ts'
+export {
+  biasedDangerBase, biasedDc, biasedFailures, biasedSuccesses, DIFFICULTY_PRESETS,
+  DIFFICULTY_PROFILES, formatKnobValue, hasPacingOverrides, isDifficultyPreset,
+  PACING_GROUP_LABELS, PACING_KNOBS, pacingOverrides, resolvePacing, worstCaseObjectiveTurns,
+} from './pacing.ts'
+export type {
+  DifficultyPreset, PacingGroup, PacingKnob, PacingKnobKey, PacingOverrides, PacingProfile,
+} from './pacing.ts'
+export { pickReveal } from './reveals.ts'
+export { isSpineProgress, progressedSince as spineProgressed } from './progress-signal.ts'
+export type { ProgressEvent } from './progress-signal.ts'
+export type { RevealCandidate } from './reveals.ts'
+export { hasPlayableNode, nextNode } from './navigate.ts'
+export type { NavigateInput, NavigateResult, NavNode, NavReason, NavTier, NavTransition } from './navigate.ts'
 export {
   applyDialNudge, COMMIT_MIN_EVENTS, COMMIT_MIN_MARGIN, commitmentReady, DIAL_MAX, DIAL_MIN,
   ladderReady, parseEndingSignals, scoreEndings, SHORT_LADDER_MAX,
@@ -42,10 +58,12 @@ export {
 } from './offers.ts'
 export { corpsePropText, scenePropsAt } from './props.ts'
 export type { PropRow, ScenePropView } from './props.ts'
-export { addressedNpcId, isStageable, npcStateOf, resolveNpcNames, stageableNpcs } from './staging.ts'
+export { deflectDirective, deflectLevel } from './deflect.ts'
+export type { DeflectLevel } from './deflect.ts'
+export { addressedNpcId, isStageable, npcStateOf, resolveAddressed, resolveNpcNames, stageableNpcs } from './staging.ts'
 export { annotateStaleMemories } from './memory-staleness.ts'
 export type { MemorySubject } from './memory-staleness.ts'
-export type { NpcLiveState, NpcStageRow } from './staging.ts'
+export type { AddressedNpc, NpcLiveState, NpcStageRow } from './staging.ts'
 export {
   ENCOUNTER_TEMPLATES, pickTemplate, templateByKey, templateGuidance, templateMenu,
   templatesForKind, TWIST_AXES,

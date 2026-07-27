@@ -54,6 +54,10 @@ Look for:
 - Dead-end knowledge: information the players can never plausibly reach.
 - Timeline impossibilities (an NPC in two places, an event before its cause).
 - Spoiling titles: objective titles that give away a twist their hidden description relies on.
+- Scene (node) prose that contradicts another scene, its objective, or the meta loop: two scenes
+  describing the same place or person incompatibly, a scene assuming something an earlier one
+  never established, or an arrival line that reads as a success when the party got there by
+  failing.
 
 Report each problem against the most specific handle you can. If the guide is coherent, return an empty list - do not invent problems.
 
@@ -77,7 +81,9 @@ Locations:
 ${lines(digest.locations)}
 
 Ingredients:
-${lines(digest.ingredients)}`
+${lines(digest.ingredients)}${
+    digest.nodes && digest.nodes.size > 0 ? `\n\nScenes (the playable nodes):\n${lines(digest.nodes)}` : ''
+  }`
 
   return { system, user, maxTokens: 2500 }
 }
@@ -92,6 +98,7 @@ export function parseStage7(raw: string, digest: GuideDigest): ParseResult<Warni
     ...digest.npcs.keys(),
     ...digest.locations.keys(),
     ...digest.ingredients.keys(),
+    ...(digest.nodes?.keys() ?? []),
   ])
 
   const warnings: WarningDraft[] = c.arr(extracted.data.warnings ?? [], '$.warnings', 0, 40).map((raw, i) => {
@@ -126,6 +133,10 @@ export const REPAIRABLE_FIELDS: Record<string, string[]> = {
   npcs: ['description', 'chapter'],
   locations: ['description', 'chapter'],
   ingredients: ['text', 'reveals'],
+  // Nodes expose PROSE only. Structure (transitions, outcome maps, affordance keys) is authored
+  // against the registry and proven by the reachability gate - letting a prose-repair pass edit
+  // it would put the one thing the graph guarantees back in free-text hands.
+  story_nodes: ['narration_seed', 'label'],
 }
 
 export interface Stage7Edit {
@@ -145,6 +156,7 @@ export function handleTable(handle: string): string | null {
   if (/^npc#\d+$/.test(handle)) return 'npcs'
   if (/^loc#\d+$/.test(handle)) return 'locations'
   if (/^ing#\d+$/.test(handle)) return 'ingredients'
+  if (/^node#\d+$/.test(handle)) return 'story_nodes'
   return null
 }
 
@@ -179,9 +191,10 @@ Rules, in the direction of the BETTER STORY:
 - Keep each row's flavor, tone, and specificity - a flattening edit is a failure.
 - Keep fields roughly their original length and NEVER leave a sentence unfinished.
 - When a finding is about TIMING or PLACEMENT, use the "chapter" field: the chapter NUMBER the row belongs in (npc/loc rows may instead use "global" for an adventure-wide presence; objectives always take a number). Pair a move with whatever text edits the new placement needs.
-- Editable fields per row type: obj# -> title, hidden_description, chapter; npc# -> description, chapter; loc# -> description, chapter; ing# -> text, reveals.
+- Editable fields per row type: obj# -> title, hidden_description, chapter; npc# -> description, chapter; loc# -> description, chapter; ing# -> text, reveals; node# -> narration_seed, label (a scene's opening prose only - its mechanics and outcomes are fixed and must not be described away).
 - When a finding is about an objective's COMPLETION PREDICATE (it references its own result, an unestablished flag, the wrong shape), patch "completion_predicates" with the corrected predicate AS A JSON STRING. Grammar: atoms {"flag": "<snake_case_milestone>", "eq": true} or {"event": "short past-tense marker"}, combined with {"any": [...]}/{"all": [...]}; NEVER "fact" atoms; at least one flag/event must be claimable; prefer an "any" honoring multiple resolutions. This decides WHEN players complete the objective - keep it achievable by ordinary play.
 - When a finding says a spine entity NEVER APPEARS (registry coverage), fix it by CREATING that row: { "create": { "kind": "npc"|"location", "name": "<the exact name the finding cites>", "description": "1-3 sentences grounded in the canon below", "chapter": "<number>"|"global" }, "note": "..." }. Place it in the chapter where the story needs it; never rename it.
+- Edit ONLY handles listed under "Current content of the flagged rows" below. The canon section exists so your edits FIT the rest of the guide - it is not a list of things to change, and an edit aimed at any other handle is discarded.
 - A finding these operations cannot fix (merges, predicate changes) is simply left alone - it stays a warning for the creator.
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
@@ -210,9 +223,17 @@ Locations:
 ${lines(ctx.digest.locations)}
 
 Ingredients:
-${lines(ctx.digest.ingredients)}`
+${lines(ctx.digest.ingredients)}${
+    ctx.digest.nodes && ctx.digest.nodes.size > 0 ? `\n\nScenes:\n${lines(ctx.digest.nodes)}` : ''
+  }`
 
-  return { system, user, maxTokens: 2500 }
+  // The plan REWRITES whole fields, so its output scales with the number of flagged rows: up to
+  // EDIT_PLAN_CAP patches, each potentially a full hidden_description. At 2500 the reply was cut
+  // off mid-word ("completion_predica"), which fails extractJsonObject, and generateParsed's
+  // truncation retry then hit the same wall - so the ENTIRE repair pass aborted with 0 attempted
+  // while 16 findings shipped as warnings (live 2026-07-26, first authored-graph guide). Sized to
+  // generateParsed's own truncation ceiling so a retry is a real second chance, not a repeat.
+  return { system, user, maxTokens: 6000 }
 }
 
 export function parseStage7EditPlan(
@@ -227,24 +248,30 @@ export function parseStage7EditPlan(
 
   const c = new Check()
   const seen = new Set<string>()
+  // Entry- and field-level problems are collected but do NOT fail the batch. A repair plan spans
+  // ~10 rows; hard-failing on one bad field discarded every good repair alongside it, which is how
+  // stage 7 came to report "16 found, 0 attempted" on live guides (2026-07-26). A dropped field
+  // simply leaves that row's text as it was. These errors are surfaced only when NOTHING survives,
+  // so the generateParsed retry still gets a real second chance at a wholly bad plan.
+  const soft = new Check()
   const edits: Stage7Edit[] = c.arr(extracted.data.edits ?? [], '$.edits', 0, EDIT_PLAN_CAP).flatMap((rawEdit, i): Stage7Edit[] => {
     const path = `$.edits[${i}]`
-    const e = c.obj(rawEdit, path)
+    const e = soft.obj(rawEdit, path)
     if (e.create != null) {
       if (e.handle != null) {
-        c.errors.push(`${path}: an entry is an edit (handle+patch) OR a create, never both`)
+        soft.errors.push(`${path}: an entry is an edit (handle+patch) OR a create, never both`)
         return []
       }
-      const cr = c.obj(e.create, `${path}.create`)
-      const kind = c.oneOf(cr.kind, `${path}.create.kind`, ['npc', 'location'] as const)
-      const name = c.str(cr.name, `${path}.create.name`)
+      const cr = soft.obj(e.create, `${path}.create`)
+      const kind = soft.oneOf(cr.kind, `${path}.create.kind`, ['npc', 'location'] as const)
+      const name = soft.str(cr.name, `${path}.create.name`)
       if (name && existingNames.has(name.trim().toLowerCase())) {
-        c.errors.push(`${path}.create.name: "${name}" already exists - edit that row instead of creating a duplicate`)
+        soft.errors.push(`${path}.create.name: "${name}" already exists - edit that row instead of creating a duplicate`)
         return []
       }
-      const description = c.str(cr.description, `${path}.create.description`)
+      const description = soft.str(cr.description, `${path}.create.description`)
       if (description && looksCutOff(description)) {
-        c.errors.push(`${path}.create.description: ends mid-thought - finish the sentence`)
+        soft.errors.push(`${path}.create.description: ends mid-thought - finish the sentence`)
         return []
       }
       const chapterText = typeof cr.chapter === 'number' ? String(cr.chapter) : typeof cr.chapter === 'string' ? cr.chapter.trim().toLowerCase() : ''
@@ -253,20 +280,23 @@ export function parseStage7EditPlan(
       if (chapterText === 'global') chapter = 'global'
       else if (Number.isInteger(chapterNumber) && chapterNumber >= 1 && chapterNumber <= chapterCount) chapter = String(chapterNumber)
       else {
-        c.errors.push(`${path}.create.chapter: expected a chapter number 1-${chapterCount} or "global", got "${String(cr.chapter)}"`)
+        soft.errors.push(`${path}.create.chapter: expected a chapter number 1-${chapterCount} or "global", got "${String(cr.chapter)}"`)
         return []
       }
       const note = typeof e.note === 'string' ? e.note.slice(0, 200) : ''
       return [{ patch: {}, create: { kind, name: name.trim(), description: description.trim(), chapter }, note }]
     }
-    const handle = c.str(e.handle, `${path}.handle`)
+    const handle = soft.str(e.handle, `${path}.handle`)
     const table = handleTable(handle)
-    if (!table || !knownHandles.has(handle)) {
-      c.errors.push(`${path}.handle: unknown handle "${handle}"`)
-      return []
-    }
+    // An edit aimed at a row that is NOT in this round's editable surface is DROPPED, not fatal.
+    // Hard-failing it threw away every valid edit in the same plan: once the canon digest began
+    // listing scenes (2026-07-26), the model started volunteering fixes for unflagged nodes
+    // (node#2/#9/#12 alongside the flagged node#3/#10/#13), so a plan with 8 good edits parsed as
+    // an error twice and the whole repair pass reported 0 attempted. Same instinct as parseStage7,
+    // where an unknown handle degrades instead of failing the stage.
+    if (!table || !knownHandles.has(handle)) return []
     if (seen.has(handle)) {
-      c.errors.push(`${path}.handle: "${handle}" appears twice - one entry per row, merge the patches`)
+      soft.errors.push(`${path}.handle: "${handle}" appears twice - one entry per row, merge the patches`)
       return []
     }
     seen.add(handle)
@@ -274,12 +304,12 @@ export function parseStage7EditPlan(
     const patch: Record<string, string> = {}
     const rawPatch = e.patch
     if (typeof rawPatch !== 'object' || rawPatch === null || Array.isArray(rawPatch)) {
-      c.errors.push(`${path}.patch: expected an object of field -> new text`)
+      soft.errors.push(`${path}.patch: expected an object of field -> new text`)
       return []
     }
     for (const [field, value] of Object.entries(rawPatch as Record<string, unknown>)) {
       if (!allowed.has(field)) {
-        c.errors.push(`${path}.patch.${field}: not an editable field of ${table} (allowed: ${[...allowed].join(', ')})`)
+        soft.errors.push(`${path}.patch.${field}: not an editable field of ${table} (allowed: ${[...allowed].join(', ')})`)
         continue
       }
       if (field === 'chapter') {
@@ -290,14 +320,14 @@ export function parseStage7EditPlan(
         } else if (Number.isInteger(number) && number >= 1 && number <= chapterCount) {
           patch.chapter = String(number)
         } else {
-          c.errors.push(
+          soft.errors.push(
             `${path}.patch.chapter: expected a chapter number 1-${chapterCount}${table !== 'objectives' ? ' or "global"' : ' (objectives always belong to a chapter)'}, got "${String(value)}"`,
           )
         }
         continue
       }
       if (typeof value !== 'string' || !value.trim()) {
-        c.errors.push(`${path}.patch.${field}: expected non-empty replacement text`)
+        soft.errors.push(`${path}.patch.${field}: expected non-empty replacement text`)
         continue
       }
       // Predicate patches are machine data: full structural validation (same gates stage 3
@@ -307,41 +337,47 @@ export function parseStage7EditPlan(
         try {
           parsed = JSON.parse(value)
         } catch {
-          c.errors.push(`${path}.patch.completion_predicates: not valid JSON`)
+          soft.errors.push(`${path}.patch.completion_predicates: not valid JSON`)
           continue
         }
         const problems = validatePredicate(parsed, `${path}.patch.completion_predicates`)
         if (problems.length > 0) {
-          c.errors.push(...problems)
+          soft.errors.push(...problems)
           continue
         }
         if (containsFactAtom(parsed)) {
-          c.errors.push(`${path}.patch.completion_predicates: "fact" atoms are not completable by live play - use flags or events`)
+          soft.errors.push(`${path}.patch.completion_predicates: "fact" atoms are not completable by live play - use flags or events`)
           continue
         }
         if (!hasClaimableAtom(parsed)) {
-          c.errors.push(`${path}.patch.completion_predicates: has no claimable milestone - needs at least one {flag,eq:true} or {event}`)
+          soft.errors.push(`${path}.patch.completion_predicates: has no claimable milestone - needs at least one {flag,eq:true} or {event}`)
           continue
         }
         patch[field] = JSON.stringify(parsed)
         continue
       }
       if (table === 'objectives' && field === 'title' && countWords(value) > OBJECTIVE_TITLE_MAX_WORDS) {
-        c.errors.push(`${path}.patch.title: "${value}" is over ${OBJECTIVE_TITLE_MAX_WORDS} words - titles stay short and open`)
+        soft.errors.push(`${path}.patch.title: "${value}" is over ${OBJECTIVE_TITLE_MAX_WORDS} words - titles stay short and open`)
         continue
       }
       if (field !== 'title' && looksCutOff(value)) {
-        c.errors.push(`${path}.patch.${field}: ends mid-thought ("...${value.trim().slice(-30)}") - finish the sentence`)
+        soft.errors.push(`${path}.patch.${field}: ends mid-thought ("...${value.trim().slice(-30)}") - finish the sentence`)
         continue
       }
       patch[field] = value.trim()
     }
     if (c.errors.length === 0 && Object.keys(patch).length === 0) {
-      c.errors.push(`${path}.patch: no valid field was patched - edit something or drop this entry`)
+      soft.errors.push(`${path}.patch: no valid field was patched - edit something or drop this entry`)
     }
+    // Every field of this entry was dropped: there is nothing to write, so it is not an
+    // "attempted" repair. Dropping it keeps the repair-summary counts honest.
+    if (Object.keys(patch).length === 0) return []
     const note = typeof e.note === 'string' ? e.note.slice(0, 200) : ''
     return [{ handle, patch, note }]
   })
 
+  // Some edits landed: apply them and let the dropped fields go. Nothing landed but the model
+  // clearly tried: surface why, so the retry can do better.
+  if (edits.length === 0 && soft.errors.length > 0) return { ok: false, errors: soft.errors }
   return c.result(edits)
 }

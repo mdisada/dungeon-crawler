@@ -89,7 +89,12 @@ export function recordPuzzleAttempt(
   return { state: next, status, newHintUnlocked: hintsUnlocked > state.hintsUnlocked }
 }
 
-/** Solved tier: full only when every active PC attempted at least once (decision 9). */
-export function puzzleSolvedTier(state: PuzzleProgress): 'full' | 'partial' {
-  return state.activePcIds.every((id) => (state.contributions[id] ?? 0) > 0) ? 'full' : 'partial'
+/**
+ * A solved puzzle is solved (2026-07-27). This used to return `partial` unless every active PC had
+ * attempted, but a puzzle cannot be "kept working" the way a skill challenge can - the answer is
+ * either enacted or it is not - so the participation gate could only ever downgrade a win into a
+ * tier that credited nothing. Spotlight balance is the Variety Manager's job, not the outcome's.
+ */
+export function puzzleSolvedTier(): 'full' {
+  return 'full'
 }

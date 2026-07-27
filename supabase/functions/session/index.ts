@@ -9,6 +9,7 @@ import { corsHeaders } from '../_shared/cors.ts'
 import { idleNudgeAction } from './beats.ts'
 import { hintAction } from './hints.ts'
 import { debugUsage } from './debug.ts'
+import { labInspect, labList } from './lab-inspect.ts'
 import { playerIntent } from './intent.ts'
 import { runStoryProgressTail } from './progress.ts'
 import { endSession, manualCheckpoint, restoreCheckpoint, startSession } from './lifecycle.ts'
@@ -207,6 +208,12 @@ Deno.serve(async (req) => {
         break
       case 'debug_usage':
         result = requireAdventure() ?? (await debugUsage(service, adventureId, userData.user.email ?? ''))
+        break
+      case 'lab_list':
+        result = await labList(service, userId, userData.user.email ?? '', String(body.scope ?? 'mine'))
+        break
+      case 'lab_inspect':
+        result = requireAdventure() ?? (await labInspect(service, adventureId, userData.user.email ?? ''))
         break
       case 'decide_proposal':
         result =

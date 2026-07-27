@@ -25,14 +25,26 @@ const AGENT_ROLES = [
   'npc_tactician', 'story_director', 'ingredient_generator', 'beat_planner', 'hook_weaver',
   'meta_loop_steward', 'consistency_checker', 'summarizer', 'user_direct',
 ]
-async function pinModels(userId, model) {
-  const modelMap = Object.fromEntries(AGENT_ROLES.map((r) => [r, model]))
+/**
+ * Pin every agent role to one model so a run is comparable turn to turn.
+ *
+ * `model: null` leaves the map EMPTY so the system defaults apply instead - which is the only way
+ * to exercise the real per-role tiering (glm-5.2 story director, flash-lite cheap tier) rather than
+ * flattening it to a single model (2026-07-26).
+ */
+async function pinModels(userId, model, overrides) {
+  // A PARTIAL map is the A/B tool: roles named here override, everything else falls through to the
+  // deployed system default (resolveModel does `modelMap[role] ?? SYSTEM_DEFAULT[role]`). That is
+  // how one variable - e.g. the narrator - gets swapped without flattening the whole tiering.
+  const modelMap = overrides && Object.keys(overrides).length > 0
+    ? { ...overrides }
+    : model ? Object.fromEntries(AGENT_ROLES.map((r) => [r, model])) : {}
   const patched = await serviceRest('PATCH', `user_settings?user_id=eq.${userId}`, { provider: 'openrouter', model_map: modelMap })
   if (!Array.isArray(patched) || patched.length === 0) {
     await serviceRest('POST', 'user_settings', { user_id: userId, provider: 'openrouter', model_map: modelMap })
   }
   const [row] = await serviceRest('GET', `user_settings?user_id=eq.${userId}&select=model_map`)
-  if (Object.values(row?.model_map ?? {}).some((m) => m !== model)) throw new Error('model pin failed')
+  if (model && Object.values(row?.model_map ?? {}).some((m) => m !== model)) throw new Error('model pin failed')
 }
 
 const PARTY = [
@@ -78,8 +90,18 @@ export async function executeRun(run) {
         const token = await signIn(email, password)
         members.push({ userId, token, ...PARTY[i] })
       }
-      await pinModels(members[0].userId, config.model)
-      return { logDetail: { emails: members.length, model: config.model } }
+      // `pin_models: false` runs the app on its DEPLOYED per-role defaults instead of flattening
+      // every agent onto one model - the only way a lab run tests the real tiering. The simulated
+      // player still uses config.model either way; it is not one of the app's agents.
+      const pin = config.pin_models === false ? null : config.model
+      await pinModels(members[0].userId, pin, config.model_map)
+      return {
+        logDetail: {
+          emails: members.length,
+          model: config.model_map ? `overrides: ${JSON.stringify(config.model_map)}` : pin ?? 'system defaults',
+          player_model: config.model,
+        },
+      }
     })
 
     // ---- Adventure: fresh generation or reuse of a prior lab guide ----
@@ -177,6 +199,16 @@ export async function executeRun(run) {
     const startedSession = await act(members[0].token, { action: 'start_session', adventure_id: advId })
     log('play', 'session.start', startedSession.status === 200 ? 'session started' : `status ${startedSession.status}`,
       { status: startedSession.status, body: startedSession.body })
+    // A refused start means there is no session to play INTO - most often a reused adventure that
+    // still carries a live session from an earlier run. Playing on anyway burns the budget on
+    // turns the API rejects and reports it as "the table is locked", which reads like a product
+    // bug rather than the setup mistake it is (2026-07-26). Fail here, where the cause is obvious.
+    if (startedSession.status !== 200) {
+      throw new Error(
+        `start_session refused (${startedSession.status}): ${JSON.stringify(startedSession.body).slice(0, 200)}` +
+        ' - reuse mode needs an adventure with no active session.',
+      )
+    }
 
     // Progress Director threshold overrides. Reaching the rescue rungs at production settings
     // takes 9-15 stalled turns per objective; a test run lowers them so rung 4/5 behaviour can
@@ -241,6 +273,12 @@ export async function executeRun(run) {
           eventCounts: counts, state: mid, turnStats,
           incidents: (await serviceRest('GET',
             `event_log?adventure_id=eq.${advId}&select=payload&type=eq.incident`)).map((e) => e.payload),
+          resolutions: (await serviceRest('GET',
+            `event_log?adventure_id=eq.${advId}&select=payload&type=eq.encounter_resolved`)).map((e) => e.payload),
+          beatOpens: (await serviceRest('GET',
+            `event_log?adventure_id=eq.${advId}&select=payload&type=eq.beat_opened&order=id`)).map((e) => e.payload),
+          objectiveFails: (await serviceRest('GET',
+            `event_log?adventure_id=eq.${advId}&select=payload&type=eq.objective_failed`)).map((e) => e.payload),
         })
         for (const w of health.warnings ?? []) log('play', 'invariant.warning', w, { at_turn: turn })
         if (!health.ok) {
@@ -386,6 +424,9 @@ export async function executeRun(run) {
     // summary meaningless, so it is computed before anything is reported and shouted about.
     summary.invariants = checkInvariants({
       eventCounts: byType, state, turnStats, incidents: summary.incidents,
+      resolutions: events.filter((e) => e.type === 'encounter_resolved').map((e) => e.payload),
+      beatOpens: events.filter((e) => e.type === 'beat_opened').map((e) => e.payload),
+      objectiveFails: events.filter((e) => e.type === 'objective_failed').map((e) => e.payload),
     })
     writeFileSync(`tests/lab/logs/${run.id}.summary.json`, JSON.stringify(summary, null, 2))
     for (const w of summary.invariants.warnings ?? []) log('analysis', 'invariant.warning', w, {})

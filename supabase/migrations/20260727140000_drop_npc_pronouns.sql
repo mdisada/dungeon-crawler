@@ -1,0 +1,14 @@
+-- Supersedes 20260727120000_npc_pronouns.sql (same day). The column was the wrong shape for the
+-- problem: the narrator was drifting on NPC gender because its roster carried bare NAMES, and the
+-- reflex was to author the missing pronoun as a new field. But the identity was never missing -
+-- `npcs.description` and `npcs.personality` already say "Corren's daughter", "Harbormistress",
+-- "answers about her husband". None of it reached the narrator.
+--
+-- The backfill proved the point from the other side: 36 of 71 NPCs could not be resolved from
+-- their descriptions by any deterministic rule, because those descriptions contain no pronouns at
+-- all - and yet a reader knows exactly who "Harbormistress Sereth Vane" is. A pronoun field is a
+-- lossy restatement of an identity the guide already authored.
+--
+-- Replaced by an identity clause in the narrator's cast roster, which costs no column, needs no
+-- authoring, and works on every NPC already stored.
+alter table npcs drop column if exists pronouns;

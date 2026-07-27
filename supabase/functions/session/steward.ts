@@ -7,6 +7,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import type { Json } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
+import { antagonistDefeated } from './npc-state.ts'
 import { recordProposal } from './proposals.ts'
 import { runSteward, runSuspicionJudge } from './story-agents.ts'
 import { assertOk, loadState, logEvent } from './util.ts'
@@ -57,6 +58,10 @@ export async function ensureMetaLoop(service: SupabaseClient, env: AgentEnv): Pr
  */
 export async function antagonistTurn(service: SupabaseClient, env: AgentEnv, sessionId: string, trigger: string): Promise<void> {
   const meta = await ensureMetaLoop(service, env)
+  // A beaten antagonist does not keep scheming. Once a boss NPC (or the committed BBEG) is dead,
+  // the off-screen agenda is over - advancing it produced the incoherence of a defeated creature
+  // still stalking the party (live 2026-07-24).
+  if (await antagonistDefeated(service, env.adventureId, meta.committed_bbeg_npc_id)) return
   const { data: adventure } = await service.from('adventures').select('meta_loop').eq('id', env.adventureId).single()
   const antagonist = String(((adventure?.meta_loop ?? {}) as Record<string, Json>).antagonist ?? 'the antagonist')
 

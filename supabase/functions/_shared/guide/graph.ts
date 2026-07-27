@@ -14,6 +14,12 @@
 import { evaluatePredicate, listMilestoneAtoms } from '../story/evaluate.ts'
 import { canonicalizeAtomSlug } from '../story/atoms.ts'
 import { minimalSatisfyingAtoms } from './guaranteed-route.ts'
+import type { NodeKind, TransitionTier } from './nodes.ts'
+
+/** Combat pacing bounds, mirrored from the runtime (session/beats.ts) so the guide is checked
+ *  against the same floor/ceiling live play enforces. */
+export const COMBAT_FLOOR = 1
+export const COMBAT_BUDGET = 3
 
 export type LintSeverity = 'error' | 'warning'
 
@@ -65,6 +71,25 @@ export interface GraphEnding {
   npcSignals?: { npcId: string; state: string; weight: number }[]
 }
 
+/** An authored graph node (story-engine overhaul 2026-07-26). Present once a guide is authored
+ *  with the node graph; absent on legacy guides, where the encounter/ingredient award model
+ *  still governs. */
+export interface GraphNode {
+  id: string
+  key: string
+  objectiveId: string
+  kind: NodeKind
+  role: 'route' | 'rescue'
+  onSuccess: string[]
+  onPartial: string[]
+  onFailure: string[]
+  /** Resolved NPC ids the node stages (social nodes) - checked against the living roster. */
+  npcIds: string[]
+  transitions: { on: TransitionTier; toNodeKey: string | null; arrivalContext: string }[]
+  /** Distinct participants the node's mechanics demand, if fixed (a braided/coop node). */
+  minParticipants?: number
+}
+
 export interface StoryGraph {
   chapters: { id: string; index: number; title: string }[]
   objectives: GraphObjective[]
@@ -72,6 +97,18 @@ export interface StoryGraph {
   encounters: GraphEncounter[]
   ingredients: GraphIngredient[]
   endings: GraphEnding[]
+  /** Authored nodes (optional - legacy guides have none). */
+  nodes?: GraphNode[]
+  /** Canonical slugs of every registered atom (spine + local); for the off-registry check. */
+  registryAtoms?: string[]
+  /** adventures.min_players - the smallest party a node must stay playable for. */
+  minPlayers?: number
+  /** Canonical slugs of every PERSONAL-scope atom - barred from any structural position. */
+  personalAtoms?: string[]
+  /** Authored personal slots, for the coverage + overlay checks. */
+  personalSlots?: { id: string; key: string; overlayNodeKeys: string[] }[]
+  /** adventures.max_players - how many slots the guide should carry. */
+  maxPlayers?: number
 }
 
 /** Atoms any authored route can award, canonicalized for comparison. */
@@ -85,7 +122,30 @@ function awardableAtoms(graph: StoryGraph): Set<string> {
   }
   for (const e of graph.encounters) add(e.outcomeAtoms)
   for (const i of graph.ingredients) add(i.awardsAtoms)
+  // A node's SUCCESS is a route. Its partial/failure atoms are deliberately excluded: those are
+  // authored setbacks (`guards_alerted`, `party_distracted`) whose whole job is to record a cost,
+  // and they are not expected to complete anything - counting them made every authored graph
+  // report a fistful of "orphan awards" (2026-07-26).
+  for (const n of graph.nodes ?? []) add(n.onSuccess)
   return set
+}
+
+/**
+ * Route-role nodes serving this objective.
+ *
+ * This used to filter on `atomsSatisfy(objective.completionPredicates, n.onSuccess)` - only nodes
+ * whose awarded atoms provably satisfied the predicate counted as routes. That coupling is what
+ * reported `"Cross Mirehaven's Harbour Front" has 0 route node(s)` on a guide with three perfectly
+ * good authored scenes, four times in a row, and blocked it from ever shipping: the objective's
+ * predicate and its nodes' awards were both authored by a model, in different stages, and had to
+ * agree as strings.
+ *
+ * A route completes its objective because it is a scene with a winning transition, so counting is
+ * structural now. Whether any of them can actually be won is the prover's question, not the
+ * linter's - and the prover walks the real navigator to answer it.
+ */
+function routeNodesFor(objective: GraphObjective, graph: StoryGraph): GraphNode[] {
+  return (graph.nodes ?? []).filter((n) => n.role === 'route' && n.objectiveId === objective.id)
 }
 
 /**
@@ -117,9 +177,45 @@ export const MIN_ROUTES_PER_OBJECTIVE = 2
 export function lintStoryGraph(graph: StoryGraph): LintFinding[] {
   const findings: LintFinding[] = []
   const awardable = awardableAtoms(graph)
+  const hasNodes = (graph.nodes?.length ?? 0) > 0
+  const maxObjectiveIndex = graph.objectives.reduce((m, o) => Math.max(m, o.index), -1)
 
-  // 1. Every objective must be completable by SOMETHING.
+  // 1. Every objective must be playable.
   for (const objective of graph.objectives) {
+    const isClimax = objective.index === maxObjectiveIndex
+
+    // GRAPH-BEARING GUIDES (2026-07-27): playability is structural. Every predicate-derived check
+    // below is skipped, because none of them describe how these objectives complete any more - an
+    // objective resolves when one of its scenes resolves. `objective_no_claimable_atom` and
+    // `objective_satisfied_at_start` in particular were both statements about a contract that no
+    // longer exists, and both were blocking errors on a paid generation.
+    if (hasNodes) {
+      const routes = routeNodesFor(objective, graph).length
+      const hasRescue = (graph.nodes ?? []).some((n) => n.objectiveId === objective.id && n.role === 'rescue')
+      if (routes === 0 && !hasRescue) {
+        findings.push({
+          severity: 'error',
+          code: 'objective_unreachable',
+          message: `"${objective.title}" has no authored scene at all - there is nothing here to play.`,
+          target: { table: 'objectives', id: objective.id },
+        })
+      } else if (routes < MIN_ROUTES_PER_OBJECTIVE) {
+        findings.push({
+          severity: 'error',
+          code: isClimax ? 'climax_underfunded' : 'objective_missing_route_nodes',
+          message: isClimax
+            ? `The finale "${objective.title}" has ${routes} route node(s). A climax players can only ` +
+              'win through the rescue route reads as a dead end - author at least two ways to win it.'
+            : `"${objective.title}" has ${routes} route node(s); the Three-Clue Rule wants ` +
+              `${MIN_ROUTES_PER_OBJECTIVE}+ so a party that flubs one still has a way through.`,
+          target: { table: 'objectives', id: objective.id },
+        })
+      }
+      continue
+    }
+
+    // LEGACY GUIDES (no authored nodes) still complete by predicate, so they still need one that
+    // live play can claim.
     const atoms = listMilestoneAtoms(objective.completionPredicates)
     const all = [...atoms.flags, ...atoms.events, ...atoms.facts]
     if (all.length === 0) {
@@ -278,6 +374,182 @@ export function lintStoryGraph(graph: StoryGraph): LintFinding[] {
     })
   }
 
+  // 6. Node-graph structural integrity - only when a graph is authored.
+  if (hasNodes) findings.push(...lintNodes(graph))
+
+  // 7. The personal-content invariant.
+  findings.push(...lintPersonal(graph))
+
+  return findings
+}
+
+/**
+ * Personal arcs must stay REWARD-ONLY. A personal atom appearing in a node transition, an
+ * objective predicate or an ending signal would make one player's private thread structural -
+ * which is what makes party size change the story, strands the table on an absent player's arc,
+ * and puts the reachability question out of reach. Checked here because it is the one rule the
+ * authoring prompt alone can never guarantee.
+ */
+function lintPersonal(graph: StoryGraph): LintFinding[] {
+  const findings: LintFinding[] = []
+  const personal = new Set((graph.personalAtoms ?? []).map(canonicalizeAtomSlug).filter(Boolean))
+  if (personal.size > 0) {
+    for (const objective of graph.objectives) {
+      const atoms = listMilestoneAtoms(objective.completionPredicates)
+      const hit = [...atoms.flags, ...atoms.events, ...atoms.facts]
+        .map(canonicalizeAtomSlug).filter((a) => personal.has(a))
+      if (hit.length > 0) {
+        findings.push({
+          severity: 'error', code: 'personal_atom_in_structural_position',
+          message: `Objective "${objective.title}" completes on personal atom(s) ${hit.join(', ')} - ` +
+            'a private arc cannot gate the main story.',
+          target: { table: 'objectives', id: objective.id },
+        })
+      }
+    }
+    for (const node of graph.nodes ?? []) {
+      const hit = [...node.onSuccess, ...node.onPartial, ...node.onFailure]
+        .map(canonicalizeAtomSlug).filter((a) => personal.has(a))
+      if (hit.length > 0) {
+        findings.push({
+          severity: 'error', code: 'personal_atom_in_structural_position',
+          message: `Node "${node.key}" credits personal atom(s) ${hit.join(', ')} through its outcome map.`,
+          target: { table: 'story_nodes', id: node.id },
+        })
+      }
+    }
+  }
+
+  // Every slot needs somewhere to surface, or its arc is authored and then never seen.
+  const nodeKeys = new Set((graph.nodes ?? []).map((n) => n.key))
+  for (const slot of graph.personalSlots ?? []) {
+    const reachable = slot.overlayNodeKeys.filter((k) => nodeKeys.has(k))
+    if (nodeKeys.size > 0 && reachable.length === 0) {
+      findings.push({
+        severity: 'error', code: 'personal_slot_unreachable_overlay',
+        message: `Personal slot "${slot.key}" attaches to no scene that exists - it could never come up in play.`,
+        target: { table: 'personal_slots', id: slot.id },
+      })
+    }
+  }
+
+  // Thin coverage is a warning: a party larger than the slot count still plays fine, the last
+  // players simply get no personal thread.
+  const slotCount = (graph.personalSlots ?? []).length
+  if (graph.maxPlayers !== undefined && slotCount > 0 && slotCount < graph.maxPlayers) {
+    findings.push({
+      severity: 'warning', code: 'personal_slots_thin',
+      message: `${slotCount} personal slot(s) for a party of up to ${graph.maxPlayers} - the ` +
+        'last players to join would have no personal stake.',
+    })
+  }
+  return findings
+}
+
+/** Structural checks over the authored node graph: transitions, outcome registration,
+ *  stageability, min-player playability, and combat pacing. All deterministic. */
+function lintNodes(graph: StoryGraph): LintFinding[] {
+  const findings: LintFinding[] = []
+  const nodes = graph.nodes ?? []
+  const nodeKeys = new Set(nodes.map((n) => n.key))
+  const registry = new Set((graph.registryAtoms ?? []).map(canonicalizeAtomSlug))
+  const npcById = new Map(graph.npcs.map((n) => [n.id, n]))
+  const minPlayers = graph.minPlayers ?? 1
+
+  for (const node of nodes) {
+    const at = { table: 'story_nodes', id: node.id }
+
+    // Transitions: dangling target, tier-aware arrival context, non-escalating failure loop.
+    let hasFull = false
+    for (const tr of node.transitions) {
+      if (tr.on === 'full') hasFull = true
+      if (tr.toNodeKey === null) {
+        // A null target is legitimate ONLY on the success tier ("the objective resolves here").
+        // On a failure tier it is a dead end: the runtime opens nothing next, the outcome map
+        // credits nothing, and the objective stays open with the party in a finished scene. The
+        // navigator now falls through instead of stopping, but an authored edge that goes nowhere
+        // is still a hole in the graph - it means this failure has no consequence and no route
+        // onward. Caught here so it never ships, rather than relying on the runtime's fallback.
+        if (tr.on !== 'full') {
+          findings.push({ severity: 'error', code: 'failure_transition_dead_end', target: at,
+            message: `Node "${node.key}" transitions on ${tr.on} to nothing. A setback must lead ` +
+              'somewhere - route it to another node, or to the rescue.' })
+        }
+        continue
+      }
+      if (!nodeKeys.has(tr.toNodeKey)) {
+        findings.push({ severity: 'error', code: 'node_dangling_transition', target: at,
+          message: `Node "${node.key}" transitions on ${tr.on} to "${tr.toNodeKey}", which does not exist.` })
+      }
+      if (tr.on !== 'full' && !tr.arrivalContext.trim()) {
+        findings.push({ severity: 'error', code: 'transition_missing_arrival_context', target: at,
+          message: `Node "${node.key}" ${tr.on} edge into "${tr.toNodeKey}" has no arrival_context - a ` +
+            'setback would be narrated from the destination\'s success-flavored seed.' })
+      }
+    }
+    if (!hasFull) {
+      findings.push({ severity: 'error', code: 'node_no_full_transition', target: at,
+        message: `Node "${node.key}" has no transition for a full success.` })
+    }
+    // A failure must cost something. This replaces `failure_loop_no_escalation`, which only fired
+    // on a failed edge pointing at its OWN node - a shape the stage-5 parser can no longer produce
+    // (2026-07-27: self-targets are rewritten to the next route). That rule was therefore dead
+    // while the general case went unchecked: live, three of five resolutions came in failed or
+    // partial and every one awarded zero atoms. The party lost repeatedly and the world recorded
+    // none of it. Route nodes only - a rescue exists to be won, not to bank setbacks.
+    if (node.role !== 'rescue' && node.onFailure.length === 0) {
+      findings.push({ severity: 'error', code: 'failure_writes_nothing', target: at,
+        message: `Node "${node.key}" awards nothing on failure - a setback that changes no state is ` +
+          'a scene the party can lose for free. Declare a local atom and reference it in on_failure.' })
+    }
+
+    // Outcome atoms should be registered - but this is a WARNING now (2026-07-27). It was an
+    // error back when a credited atom was how an objective completed, so an unregistered one
+    // meant a scene whose win went nowhere. Atoms are flavour now: an unregistered one is a flag
+    // nobody reads, which is untidy and worth surfacing, and nothing like a reason to refuse a
+    // finished guide. Live 2026-07-27, `credits unregistered atom(s): ettel_guidance_won` blocked
+    // a guide four attempts running.
+    if (registry.size > 0) {
+      const off = [...node.onSuccess, ...node.onPartial, ...node.onFailure]
+        .filter((a) => !registry.has(canonicalizeAtomSlug(a)))
+      if (off.length > 0) {
+        findings.push({ severity: 'warning', code: 'node_outcome_off_registry', target: at,
+          message: `Node "${node.key}" credits unregistered atom(s): ${off.slice(0, 4).join(', ')}.` })
+      }
+    }
+
+    // A social node needs a living, present person staged.
+    if (node.kind === 'social') {
+      const living = node.npcIds.filter((id) => {
+        const npc = npcById.get(id)
+        return npc && npc.initialState !== 'dead' && npc.initialState !== 'absent'
+      })
+      if (living.length === 0) {
+        findings.push({ severity: 'error', code: 'node_unstageable_npc', target: at,
+          message: `Social node "${node.key}" stages no living, present NPC - it can never open.` })
+      }
+    }
+
+    // The smallest allowed party must be able to play it.
+    if (node.minParticipants && node.minParticipants > minPlayers) {
+      findings.push({ severity: 'error', code: 'min_players_unplayable', target: at,
+        message: `Node "${node.key}" needs ${node.minParticipants} participants but the adventure allows ` +
+          `parties as small as ${minPlayers}.` })
+    }
+  }
+
+  // Combat pacing across the whole adventure (route nodes only; the rescue is never combat).
+  const combatNodes = nodes.filter((n) => n.role === 'route' && n.kind === 'combat').length
+  if (combatNodes < COMBAT_FLOOR) {
+    findings.push({ severity: 'warning', code: 'combat_floor_unmet',
+      message: `The adventure authors ${combatNodes} combat node(s); adventurers should draw steel at ` +
+        `least ${COMBAT_FLOOR} time - live play will force one at the climax if none is authored.` })
+  }
+  if (combatNodes > COMBAT_BUDGET) {
+    findings.push({ severity: 'warning', code: 'combat_over_budget',
+      message: `The adventure authors ${combatNodes} combat nodes; ${COMBAT_BUDGET} is the pacing ceiling ` +
+        '(real-time combat is the slowest thing at the table). Live play downgrades the overflow.' })
+  }
   return findings
 }
 

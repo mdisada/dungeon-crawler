@@ -8,7 +8,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { AgentCallError, callAgentText, callAgentTextWithMeta } from '../_shared/llm.ts'
 import {
-  CLAIM_ROLES, claimViolations, decideCanonization, extractJson, parseAdjudication,
+  clampDc, CLAIM_ROLES, claimViolations, decideCanonization, extractJson, parseAdjudication,
   parseConsistency, parseEntityClaims, parseGists, parseGrounding, parseNarrationOptions,
   parseNpcOutput, parseSocialClassification, suspectEntities,
 } from '../_shared/play/index.ts'
@@ -218,6 +218,46 @@ export async function runClaimCheck(
 }
 
 /**
+ * Does this draft declare the OPEN encounter already won?
+ *
+ * The graph moved structure to authoring time, which leaves prose as the last place the story can
+ * assert something the state does not hold. The dangerous shape is premature resolution: the
+ * party is mid-encounter and the narration says they slipped past the guards. State says
+ * unresolved, transcript says resolved, and every later line inherits the contradiction.
+ *
+ * Same discipline as the speaking-corpse check: the model PERCEIVES one narrow thing (does the
+ * passage show the goal achieved?), code decides what to do about it. A closed yes/no against a
+ * stated goal, not an open "is this consistent?" - the question that cannot fail.
+ */
+const OUTCOME_CLAIM_SYSTEM =
+  'A tabletop RPG scene is IN PROGRESS and its outcome has NOT been decided yet. You are given ' +
+  'the goal of that scene and a passage of narration. Answer one question: does the passage ' +
+  'show or state that the goal has ALREADY been ACHIEVED or DEFINITIVELY FAILED? Building ' +
+  'tension, describing attempts, partial progress, obstacles, or near-misses are all NOT ' +
+  'resolutions - answer false for those. Only an accomplished or conclusively lost goal is ' +
+  'true. When in doubt, answer false. Reply with ONLY JSON: {"resolved": true|false}'
+
+export async function runOutcomeClaimCheck(
+  env: AgentEnv,
+  draft: string,
+  goal: string,
+): Promise<boolean> {
+  if (env.demo || !goal.trim() || !draft.trim()) return false
+  try {
+    const raw = await agentJson(
+      env, 'consistency_checker', OUTCOME_CLAIM_SYSTEM,
+      `Scene goal (undecided): ${goal}\n\nPassage:\n${draft}`,
+      120,
+      { name: 'outcome_claim', schema: obj({ resolved: { type: 'boolean' } }) },
+    )
+    const obj_ = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    return obj_.resolved === true
+  } catch {
+    return false // a checker outage must never silence the narrator
+  }
+}
+
+/**
  * Theory grounding: which of the party's own lines asserts this claim, if any?
  *
  * Not "is this consistent?" - the question canonization used to ask, which cannot fail. This one
@@ -295,6 +335,12 @@ export interface AdjudicatorContext {
   knownNpcs: string[]
   /** Authored milestone vocabulary (objective + open-beat predicate atoms, exact text). */
   milestones: string[]
+  /**
+   * The adventure's difficulty shift, applied to whatever DC the model returns. Kept OUT of the
+   * prompt on purpose: telling the model "this is a hard adventure" makes it inflate its own DCs
+   * and the shift then lands twice. The model judges the fiction; the profile does the arithmetic.
+   */
+  dcShift?: number
 }
 
 /** World-movement proposal riding on the Adjudicator's ruling; server-validated before applying. */
@@ -534,7 +580,12 @@ export async function runAdjudicator(
   const raw = await agentJson(env, 'adjudicator', ADJUDICATOR_SYSTEM, user, 1000, sceneEffectsSchema(ctx))
   const parsed = parseAdjudication(raw, ctx.partySkills)
   if (!parsed.ok) throw new AgentCallError(`Adjudicator output invalid: ${parsed.errors.join('; ')}`)
-  return { ...parsed.data, sceneEffects: extractSceneEffects(raw) }
+  const data = parsed.data
+  const shift = ctx.dcShift ?? 0
+  const shifted = shift !== 0 && data.check
+    ? { ...data, check: { ...data.check, dc: clampDc(data.check.dc + shift) } }
+    : data
+  return { ...shifted, sceneEffects: extractSceneEffects(raw) }
 }
 
 function cannedClassification(text: string): SocialClassification {
@@ -605,6 +656,17 @@ export interface NpcContext {
   constraint?: string
   /** DM-chosen gist (Slice 2 review console): the reply must follow this direction. */
   direction?: string
+  /**
+   * The party addressed someone who is not in this scene (2026-07-27). Not a direction and not a
+   * constraint - just the fact that the question was aimed elsewhere, so this NPC can say so
+   * instead of quietly answering on a missing person's behalf.
+   */
+  absentNote?: string
+  /**
+   * Steer the conversation back on task (2026-07-27). Code decides when and how hard from the
+   * no-progress counter; the words are this NPC's, out of the personality and wants already above.
+   */
+  deflectNote?: string
 }
 
 function cannedNpcOutput(ctx: NpcContext): unknown {
@@ -681,8 +743,13 @@ function npcSchemaFor(knowledgeIds: string[], pcIds: string[]) {
   return {
     name: 'npc_reply',
     schema: obj({
-      dialogue: { type: 'string', description: '1-3 sentences of spoken dialogue, in character.' },
-      tone: str,
+      // maxLength is the structural cap on a runaway reply. Without it a cheap model can emit a
+      // 4985-char monologue that blows the token budget mid-object, so the JSON truncates
+      // (finish_reason 'length') and nothing parses - live 2026-07-24, npc_agent unparsed twice
+      // in one scene, its internal reasoning ("'locked_by' should be...") leaking into the tail.
+      // The provider enforces the bound, so the model plans a short line instead of overrunning.
+      dialogue: { type: 'string', maxLength: 600, description: '1-3 sentences of spoken dialogue, in character.' },
+      tone: { type: 'string', maxLength: 80 },
       address_pc: idEnum(pcIds),
       reveals: {
         type: 'array',
@@ -740,11 +807,16 @@ export async function runNpcAgent(env: AgentEnv, ctx: NpcContext): Promise<NpcAg
       ? `Their ${ctx.checkResult.skill} check ${ctx.checkResult.success ? 'SUCCEEDED' : 'FAILED'} (margin ${ctx.checkResult.margin}).`
       : 'No check involved - plain conversation.',
     ctx.direction ? `The DM chose this direction for your reply - follow it closely: "${ctx.direction}"` : '',
+    ctx.absentNote ?? '',
+    ctx.deflectNote ?? '',
     ctx.constraint ? `HARD CONSTRAINTS - the previous draft violated these facts. ${ctx.constraint}` : '',
   ].filter(Boolean).join('\n')
   const attempt = async () => {
     const parsed = parseNpcOutput(
-      await agentJson(env, 'npc_agent', NPC_SYSTEM, user, 600,
+      // 900 base (agentJson doubles to 1800 on a parse miss): the reply object carries dialogue +
+      // reveals + opening + proposed_actions + disposition, and 600 truncated the tail on longer
+      // in-character lines. The dialogue maxLength above caps the prose; this caps the envelope.
+      await agentJson(env, 'npc_agent', NPC_SYSTEM, user, 900,
         npcSchemaFor(ctx.knowledge.map((k) => k.id), pcIds)),
       pcIds,
     )
@@ -769,13 +841,19 @@ export interface EntryMapping {
   interpretation: string
   /** Scene movement riding on the reply (travel/staging/time) - validated server-side. */
   sceneEffects: SceneEffects | null
+  /** Which authored affordance the reply matched, when the node offered a menu (2026-07-26).
+   *  Null on legacy guides, or when the reply fits none of them. */
+  affordanceKey?: string | null
 }
 
 const ENTRY_SYSTEM =
   'A tabletop RPG is in a CUTSCENE: the narrator just delivered a hook toward the next ' +
   'encounter. Classify the party\'s reply. Reply with ONLY JSON: {"entry": ' +
-  '"offered"|"adhoc"|"fold_in", "interpretation": string, "scene_effects"?: ' +
+  '"offered"|"adhoc"|"fold_in", "interpretation": string, "affordance_key"?: string, ' +
+  '"scene_effects"?: ' +
   '{"travel_location"?: string, "stage_npcs"?: [1-3 names], "advance_day"?: boolean}}. ' +
+  'When the scene lists authored ways in, FIRST try to match the reply to one of their keys and ' +
+  'return it as "affordance_key" - that match settles the classification. ' +
   '"offered": the reply engages or MOVES TOWARD the offered encounter in any way - attempting ' +
   'it, approaching its site, walking/climbing/riding onward, picking a direction the hook laid ' +
   'out, or agreeing to face it. Committing to move IS engagement ("I walk forward", "I follow ' +
@@ -808,6 +886,11 @@ export interface EntryContext {
   recentEvents: string[]
   /** Recently folded-in replies - a repeat/continuation of one of these must not fold again. */
   recentFolds: string[]
+  /**
+   * The authored node's affordances (2026-07-26). When present the mapper's job shrinks from
+   * open judgment to MATCHING against a closed menu: which authored way in is this, or none.
+   */
+  affordances?: { key: string; hint: string }[]
 }
 
 export async function runEntryMapper(env: AgentEnv, ctx: EntryContext): Promise<EntryMapping> {
@@ -825,10 +908,23 @@ export async function runEntryMapper(env: AgentEnv, ctx: EntryContext): Promise<
     ctx.recentFolds.length > 0
       ? `Already folded in (a repeat or continuation of these is COMMITMENT - never fold_in again): ${ctx.recentFolds.map((f) => `"${f}"`).join(' | ')}`
       : '',
+    // The closed menu. Matching an authored way in is a far narrower question than judging
+    // engagement in the abstract, and every option here is one the scene was BUILT to handle.
+    (ctx.affordances?.length ?? 0) > 0
+      ? `Authored ways into this scene (match the reply to ONE of these keys and return it as ` +
+        `"affordance_key", or omit it if the reply fits none):\n` +
+        ctx.affordances!.map((a) => `- ${a.key}: ${a.hint}`).join('\n')
+      : '',
   ].filter(Boolean).join('\n')
   const raw = await agentJson(env, 'adjudicator', ENTRY_SYSTEM, user, 300)
   const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
-  const entry = (['offered', 'adhoc', 'fold_in'] as const).find((e) => e === obj.entry) ?? 'fold_in'
+  let entry = (['offered', 'adhoc', 'fold_in'] as const).find((e) => e === obj.entry) ?? 'fold_in'
+  // A reply that matched an authored affordance IS engagement, whatever the model then called
+  // it: the menu is the ground truth and the label is commentary.
+  const matchedKey = typeof obj.affordance_key === 'string'
+    ? ctx.affordances?.find((a) => a.key === obj.affordance_key)?.key ?? null
+    : null
+  if (matchedKey) entry = 'offered'
   const effects = extractSceneEffects(raw)
   return {
     // "offered" with nothing on offer is a model error - degrade to fold_in, never a crash.
@@ -840,6 +936,7 @@ export async function runEntryMapper(env: AgentEnv, ctx: EntryContext): Promise<
     sceneEffects: effects
       ? { ...effects, milestones: [], markEvent: null, encounter: null }
       : null,
+    affordanceKey: matchedKey,
   }
 }
 
@@ -875,14 +972,44 @@ export async function runReplyGists(env: AgentEnv, ctx: NpcContext, rejected?: s
   return parseGists(await agentJson(env, 'npc_agent', GIST_SYSTEM, user, 200))
 }
 
+/**
+ * How to read the labelled fact block every narration call carries (2026-07-27).
+ *
+ * These are constants, so they belong here - sent once as system, not re-explained inside every
+ * user message. That move is what paid for the goal, cast identities and story-so-far the block was
+ * missing: same prompt size, three gaps closed.
+ */
+const NARRATOR_CONTEXT_KEY =
+  ' Labelled facts follow. GOAL: never state as a task. HERE: who is in this scene and who they ' +
+  'ARE - hold every detail true, their role and their gender included. CAST: exist, but elsewhere. ' +
+  'GONE: discuss freely, never stage or voice. FORCES/DONE/CLOCK/PROPS: established - build on, ' +
+  'never redefine. Spell names EXACTLY. Unnamed newcomers are always allowed.'
+
+/**
+ * LENGTH, IN WORDS (2026-07-27). The old brief said "2-4 sentences, vivid but concise" and could
+ * not bind: it constrains the sentence COUNT, so four 120-word sentences comply, and measured runs
+ * came in at 7.2 sentences and 868 characters anyway. "Vivid but concise" is also two adjectives
+ * pulling opposite ways, and vivid is the one that invites elaboration.
+ *
+ * A word budget is countable, which a sentence count and an adjective are not, and the REASON is
+ * stated because a bound with a rationale is followed more often than a bare number. Vividness is
+ * redirected rather than dropped - it comes from specifics, which is what actually made the
+ * premium narrator worth buying, and specifics are short.
+ *
+ * This is a soft instruction, not a wall (see NARRATION_MAX_TOKENS for why no hard cap). Whether
+ * it worked is measurable: `narration_published` now records `style`, so narration-audit.mjs can
+ * compare beats against beats.
+ */
 const NARRATOR_BASE =
-  'You narrate a tabletop RPG. Second person, present tense, 2-4 sentences, vivid but concise. ' +
+  'You narrate a tabletop RPG. Second person, present tense. THREE sentences, 70 words at most - ' +
+  'the player is waiting to act, and length is the main thing that makes a turn drag. Be vivid ' +
+  'through specifics, never through volume: one exact detail beats three general ones. ' +
   'Never invent facts about named NPCs/items/places beyond the given context. Never mention ' +
   'dice, rolls, checks, or game mechanics - translate outcomes into fiction. Never presume the ' +
   'party\'s motivation or feelings; motivation belongs to the players. When a party member\'s ' +
   'described traits or quirks bear on the moment (a dwarf\'s Darkvision in the dark, a ' +
   'sailor\'s eye for rigging), let the narration notice it - personal, never generic. ' +
-  'Output only narration text.'
+  'Output only narration text.' + NARRATOR_CONTEXT_KEY
 
 /**
  * 'beat' opens situations and must end on a choice; 'outcome' resolves and may settle;
@@ -908,8 +1035,8 @@ const NARRATOR_SYSTEMS: Record<NarrationStyle, string> = {
     'sound, a detail worth a closer look) so they always know what they could engage with next.',
   exposition:
     'You narrate a tabletop RPG. Second person, present tense. This is a CUTSCENE between ' +
-    'encounters: 4-8 sentences of vivid exposition that carries consequences forward and sets ' +
-    'the next situation. Never invent facts about named NPCs/items/places beyond the given ' +
+    'encounters: FIVE sentences, 130 words at most, carrying consequences forward and setting ' +
+    'the next situation. It is the longest thing the player reads, so earn every line. Never invent facts about named NPCs/items/places beyond the given ' +
     'context. Never mention dice, rolls, checks, or game mechanics. Never presume the party\'s ' +
     'motivation or feelings. Let the party members\' described traits, backgrounds, and quirks ' +
     'color what each of them would notice or be drawn toward. END with an explicit in-fiction ' +
@@ -917,8 +1044,31 @@ const NARRATOR_SYSTEMS: Record<NarrationStyle, string> = {
     'their answer, a visible approach, a pressing danger. Never re-offer a direction the ' +
     'party already chose, and never pad a single obvious path into a menu: if one way onward ' +
     'exists, carry them down it and end at what it reveals. The players\' reply enters the ' +
-    'next encounter. Output only narration text.',
+    'next encounter. Output only narration text.' + NARRATOR_CONTEXT_KEY,
 }
+
+/**
+ * Enough room that the narrator's natural output always FINISHES (2026-07-27).
+ *
+ * 63 published lines ended mid-sentence. The cause is this number: 500 tokens cuts at roughly 2000
+ * characters, and on the current narrator (glm-5.2, premium since 2026-07-26) that is exactly p95.
+ * The style brief permitted prose the cap could not hold, and the two had never been reconciled.
+ *
+ * NO `maxLength` ACCOMPANIES THIS, on purpose. A schema ceiling is also a hard cut - under
+ * constrained decoding the string must close when it is reached - so it does not fix truncation,
+ * it relocates it to a lower threshold. Adding a second cut to fix the first is not a fix, and the
+ * failure mode is one I could not verify in advance. The defect here is "prose gets chopped"; the
+ * remedy is room, not another wall.
+ *
+ * A first attempt capped beats at 600 chars. That was calibrated against a 421-char median from
+ * the whole stored corpus - which is mostly older flash-lite runs. The current narrator's real
+ * distribution is p50 868, p75 1275, p90 1675, so 600 would have bound 66% of lines: a 30% cut to
+ * typical output shipped as a bug fix. Whether beats SHOULD be shorter is a pacing decision that
+ * deserves evidence, and the evidence does not exist yet - published lines do not record which
+ * style wrote them, so that 868 median mixes 2-4-sentence beats with 4-8-sentence cutscenes.
+ * `narration_published` now carries `style` so a later audit can separate them and settle it.
+ */
+const NARRATION_MAX_TOKENS = 900
 
 export async function runNarrator(
   env: AgentEnv,
@@ -936,7 +1086,7 @@ export async function runNarrator(
     agentRole: 'narrator',
     system: constraint ? `${system}\nHard constraints: ${constraint}` : system,
     user: prompt,
-    maxTokens: 500,
+    maxTokens: NARRATION_MAX_TOKENS,
   })
 }
 

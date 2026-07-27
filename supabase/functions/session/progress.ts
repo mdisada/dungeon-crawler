@@ -14,6 +14,7 @@ import type { EndingCandidate, EndingWorld, WorldFacts } from '../_shared/story/
 import { runClaimCheck, runConsistency, runObjectiveJudge } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { loadLoops, planAndOpenBeat } from './beats.ts'
+import { graphDecision, inPlayNodeKey, loadObjectiveNodes } from './graph-read.ts'
 import { recordSceneLedger } from './ledger.ts'
 import { applyMilestones } from './milestones.ts'
 import { narrationBeat } from './narration.ts'
@@ -22,6 +23,7 @@ import { recordProposal } from './proposals.ts'
 import { beatRouteHealth } from './route-health.ts'
 import { antagonistTurn } from './steward.ts'
 import { maybeCompleteQuestForObjective, maybeReweaveDeclined } from './story.ts'
+import { personalEpilogueLines } from './personal.ts'
 import { runClimaxAuthor } from './story-agents.ts'
 import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
 
@@ -120,8 +122,25 @@ async function completeObjective(
   ordered: ObjectiveRow[],
   world: WorldFacts,
 ): Promise<boolean> {
+  // CLAIM the transition atomically (2026-07-27). Several progress passes legitimately overlap -
+  // the inline head, the tail in its own worker, and the director each run one - and they all read
+  // the objective as `active` before any of them writes. Unguarded, every one of them completes it
+  // and logs `objective_completed`, so the party is told twice and the quest ladder advances on a
+  // duplicate. `updateEndings` already learned this exact lesson (live 2026-07-24, one ending
+  // published three times) and claims `committed_ending_id` the same way.
+  //
+  // Intermittent by nature, which is what made it so easy to wave off: story-live failed on it
+  // twice, passed three times, and I called it a flake before looking. Today's completion path
+  // added DB round-trips ahead of this write, widening the window rather than causing it.
+  const { data: claimedObjective } = await service
+    .from('objectives')
+    .update({ reveal_state: 'completed' })
+    .eq('id', completed.id)
+    .eq('reveal_state', 'active')
+    .select('id')
+  if (!claimedObjective || claimedObjective.length === 0) return false // another pass got there first
+
   await recordSceneLedger(service, env, sessionId, 'objective', completed.title)
-  await service.from('objectives').update({ reveal_state: 'completed' }).eq('id', completed.id)
   await logEvent(service, env.adventureId, sessionId, 'objective_completed', {
     objective_id: completed.id, title: completed.title, evaluated: true,
   })
@@ -139,7 +158,10 @@ async function completeObjective(
   const silentlyCompleted: ObjectiveRow[] = []
   let next = ordered.find((o) => o.reveal_state === 'hidden')
   while (next && evaluatePredicate(next.completion_predicates, world)) {
-    await service.from('objectives').update({ reveal_state: 'completed' }).eq('id', next.id)
+    const { data: claimedNext } = await service
+      .from('objectives').update({ reveal_state: 'completed' })
+      .eq('id', next.id).eq('reveal_state', 'hidden').select('id')
+    if (!claimedNext || claimedNext.length === 0) break // a concurrent pass collapsed it already
     await logEvent(service, env.adventureId, sessionId, 'objective_completed', {
       objective_id: next.id, title: next.title, evaluated: true, presatisfied: true,
     })
@@ -210,20 +232,31 @@ async function completeObjective(
 }
 
 /**
- * Fail-forward (overhaul Phase 4): retire an objective the party could not finish and move the
- * story on. Mirrors completeObjective's ladder mechanics, but the outcome is 'failed' - the
- * ending signal vocabulary has always accepted {objective_id, outcome:'failed'} and nothing
- * ever produced one, so a story that stalled here simply never ended.
+ * Why an objective is being retired unfinished. The two causes need different prose, and giving
+ * them the same line was actively misleading (2026-07-27):
  *
- * This is the LAST rung and a genuine last resort (default: 15 no-progress turns, full-AI
- * only - assist gets a DM proposal instead). The narration frames it as the antagonist gaining
- * ground, never as the party being told they lost.
+ * - `stalled`  - the director timed out. The party never engaged; the chance passed them by.
+ * - `spent`    - the party played every authored scene and lost them all. They are NOT told the
+ *                chance passed: they were there, they fought for it, and it cost them. This is
+ *                the Adventurers League failure box - you proceed to Part 2 with the alarm up.
+ */
+export type FailCause = 'stalled' | 'spent'
+
+/**
+ * Retire an objective the party could not finish and move the story on. Mirrors
+ * completeObjective's ladder mechanics, but the outcome is 'failed' - which the ending signal
+ * vocabulary has always accepted as {objective_id, outcome:'failed'}.
+ *
+ * On `spent` this is not a last resort at all - it is the ordinary bottom of the scene ladder and
+ * the reason the spine cannot stall. On `stalled` it stays what it was: a genuine timeout
+ * (full-AI only - assist gets a DM proposal instead).
  */
 export async function failObjective(
   service: SupabaseClient,
   env: AgentEnv,
   sessionId: string,
   reason: string,
+  cause: FailCause = 'stalled',
 ): Promise<boolean> {
   const ordered = await orderedObjectives(service, env.adventureId)
   const state = (await loadState(service, env.adventureId)).state
@@ -243,9 +276,12 @@ export async function failObjective(
     return false
   }
 
-  await service.from('objectives').update({ reveal_state: 'completed', outcome: 'failed' }).eq('id', current.id)
+  const { data: claimedFail } = await service
+    .from('objectives').update({ reveal_state: 'completed', outcome: 'failed' })
+    .eq('id', current.id).eq('reveal_state', 'active').select('id')
+  if (!claimedFail || claimedFail.length === 0) return false // another pass retired it first
   await logEvent(service, env.adventureId, sessionId, 'objective_failed', {
-    objective_id: current.id, title: current.title, reason,
+    objective_id: current.id, title: current.title, reason, cause,
   })
   const next = ordered.find((o) => o.reveal_state === 'hidden' && o.id !== current.id)
   if (next) {
@@ -261,8 +297,11 @@ export async function failObjective(
       { id: current.id, title: current.title, state: 'failed' },
       ...(next ? [{ id: next.id, title: next.title, state: 'active' }] : []),
     ]
+    const banner = cause === 'spent'
+      ? `Won the hard way: ${current.title}`
+      : `The moment passes: ${current.title}`
     return [
-      appendLinesDiff(s, [newLine(null, null, `The moment passes: ${current.title}`)]),
+      appendLinesDiff(s, [newLine(null, null, banner)]),
       { domain: 'objectives', patch: { currentId: next?.id ?? null, list: list as unknown as Json } },
     ] as StateDiff[]
   })
@@ -273,16 +312,23 @@ export async function failObjective(
   } catch (err) {
     console.error('fail-forward antagonist turn failed', err)
   }
+  const opening = cause === 'spent'
+    ? `The party threw everything they had at "${current.title}" and it was not enough. They are ` +
+      'through it and moving on, but on the worst possible terms. Narrate the cost of getting ' +
+      'this far - what the opposition gains, what closes off, who is worse for it - and give the ' +
+      'party their due for trying. Never phrase it as a verdict on the players, and never say ' +
+      'they walked away or let the chance pass; they were there for all of it.'
+    : `The party never managed "${current.title}", and the chance has now passed them by. Narrate ` +
+      'what that COSTS - what the opposition gains, what closes off, who is worse for it - as ' +
+      'something that happens in the world, never as a verdict on the players.'
   await narrationBeat(
     service, env, sessionId,
-    `The party never managed "${current.title}", and the chance has now passed them by. Narrate ` +
-      'what that COSTS - what the opposition gains, what closes off, who is worse for it - as ' +
-      'something that happens in the world, never as a verdict on the players.' +
+    opening +
       (next
         ? ` Then let the next thread surface in the fiction: "${next.title}". Do not state it as a task.`
         : ' End on what is now at stake.') +
       ' End at a concrete decision point.',
-    'The moment passes',
+    cause === 'spent' ? 'Hard-won ground' : 'The moment passes',
   )
   return true
 }
@@ -429,8 +475,10 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
   const condensed = ((recent ?? []) as { type: string; payload: Record<string, Json> }[])
     .reverse()
     .map((e) => `${e.type}: ${['text', 'title', 'tag', 'name'].map((k) => e.payload[k]).filter((v) => typeof v === 'string').join(' ')}`)
+  const personalOutcomes = await personalEpilogueLines(service, env.adventureId).catch(() => [])
   let climax = (await runClimaxAuthor(
     env, { title: leading.title, description: leading.description, tone: leading.tone }, condensed,
+    personalOutcomes,
   ).catch(() => '')) || leading.climax_summary || leading.description
 
   // Consistency, cheaply and deterministically. Publishing the climax directly (above) removed
@@ -533,6 +581,55 @@ export async function evaluateStoryProgress(
 }
 
 /**
+ * Has the active objective resolved, and how? `null` means "still in play".
+ *
+ * GRAPH-BEARING GUIDES (2026-07-27) - the authored scene ladder is the authority. An objective
+ * resolves because a scene resolved, never because a bag of flags added up. Winning any authored
+ * scene completes it; running out of scenes retires it as `failed`, which advances the story just
+ * as a win does. This is the Adventurers League model, and it is what makes the spine unstallable:
+ * `nextNode` answers `open` or `resolve` and nothing else, so there is no third state to hang in.
+ *
+ * Completion used to be INFERRED here - `evaluatePredicate` over a world fact base, against a
+ * predicate stage 3 authored two stages before the nodes existed and stage 7 could rewrite. Every
+ * mismatch along that chain was an objective that could never complete, or a guide that could
+ * never generate. The predicate is no longer read for these guides at all.
+ *
+ * LEGACY GUIDES (no authored nodes) keep the predicate path unchanged - 60-odd stored adventures
+ * still run on it, and they have no scene ladder to consult.
+ */
+async function objectiveOutcome(
+  service: SupabaseClient,
+  adventureId: string,
+  current: ObjectiveRow,
+  world: WorldFacts,
+  encounterOpen: boolean,
+): Promise<'completed' | 'failed' | null> {
+  const nodes = await loadObjectiveNodes(service, adventureId, current.id)
+
+  // LEGACY GUIDES: the predicate decides, and it is independent of what is on the table. An
+  // objective whose atoms are all true is complete whether or not a scene happens to be open.
+  if (nodes.length === 0) {
+    return evaluatePredicate(current.completion_predicates, world) ? 'completed' : null
+  }
+
+  // GRAPH-BEARING GUIDES: the scene ladder decides, and both guards below belong to it alone.
+  //
+  // They exist for one reason: `used` is written when a beat is INSERTED, so a node the party has
+  // not played yet already looks spent to the navigator. Ask it mid-scene and it reports the
+  // ladder exhausted and retires the objective out from under them.
+  //
+  // These sat above the legacy branch when first written and blocked predicate completion for
+  // every stored adventure whenever any encounter was live - a graph-shaped guard applied to a
+  // model that has no nodes and no `used` to be confused by. story-live caught it twice before I
+  // stopped calling it a flake.
+  if (encounterOpen) return null
+  if (await inPlayNodeKey(service, adventureId, nodes)) return null
+
+  const read = await graphDecision(service, adventureId, current.id)
+  return read?.decision.action === 'resolve' ? read.decision.outcome : null
+}
+
+/**
  * The deterministic head: objective completion + its narration. The player's turn depends on
  * this being visible immediately, and it costs at most one narration call. The agent-heavy tail
  * is handed to a fresh worker when one is available, and runs inline otherwise.
@@ -559,7 +656,17 @@ async function runStoryProgressHead(
     const ordered = await orderedObjectives(service, env.adventureId)
     const current = ordered.find((o) => o.id === state.objectives.currentId)
     if (!current || current.reveal_state !== 'active') break
-    if (!evaluatePredicate(current.completion_predicates, world)) break
+
+    const outcome = await objectiveOutcome(service, env.adventureId, current, world, Boolean(state.encounter))
+    if (!outcome) break
+    if (outcome === 'failed') {
+      // The scene ladder bottomed out. In assist mode this only records a proposal and leaves the
+      // objective active, so stop the loop rather than re-proposing twice more on the same pass.
+      const retired = await failObjective(service, env, sessionId, 'every authored scene was played and lost', 'spent')
+      if (!retired) break
+      objectiveJustCompleted = true
+      continue
+    }
     questJustCompleted = (await completeObjective(service, env, sessionId, current, ordered, world)) || questJustCompleted
     objectiveJustCompleted = true
   }
@@ -652,6 +759,7 @@ export async function runStoryProgressTail(
           console.error('beat re-plan failed', err)
           await logEvent(service, env.adventureId, sessionId, 'incident', {
             kind: 'beat_open_failed', trigger,
+            error: String(err instanceof Error ? err.message : err).slice(0, 300),
           })
         }
       }
@@ -670,7 +778,17 @@ export async function runStoryProgressTail(
       // exactly this was waiting for the beat to exit. 30 turns, 1 beat, 0 milestones, aborted.
       // The Progress Director now calls this when it escalates, so a stuck beat is a REASON to
       // ask "did the fiction already do it?" rather than a reason never to ask.
-      if ((exitMet || beatSpent || ctx?.forceRecognition) && !objectiveJustCompleted) {
+      //
+      // NOT RUN ON GRAPH-BEARING GUIDES (2026-07-27). The judge exists because a completion
+      // predicate can miss - the fiction does the deed, the authored atoms never anticipated that
+      // phrasing, and the objective sits open. Objectives now resolve because a scene resolved, so
+      // there is no miss for it to catch: crediting an atom cannot complete anything, and the call
+      // would be a paid LLM roll of the dice with no effect on progression. Legacy guides still
+      // run on predicates and still need it.
+      const graphBearing = state.objectives.currentId
+        ? (await graphDecision(service, env.adventureId, state.objectives.currentId)) !== null
+        : false
+      if ((exitMet || beatSpent || ctx?.forceRecognition) && !objectiveJustCompleted && !graphBearing) {
         const current = ordered.find((o) => o.id === state.objectives.currentId)
         const atoms = current && current.reveal_state === 'active'
           ? listMilestoneAtoms(current.completion_predicates)

@@ -80,14 +80,16 @@ export interface DigestRefs {
 
 /** Loads every guide entity and numbers them into stable handles (obj#1, npc#1, ...). */
 export async function buildDigest(db: SupabaseClient, adventureId: string): Promise<DigestRefs> {
-  const [chapters, objectives, npcs, locations, ingredients] = await Promise.all([
+  const [chapters, objectives, npcs, locations, ingredients, nodes] = await Promise.all([
     db.from('chapters').select('id, index, title').eq('adventure_id', adventureId).order('index'),
     db.from('objectives').select('id, chapter_id, index, title, hidden_description').eq('adventure_id', adventureId),
     db.from('npcs').select('id, name, role, description, chapter_id').eq('adventure_id', adventureId).order('created_at'),
     db.from('locations').select('id, name, description, chapter_id').eq('adventure_id', adventureId).order('created_at'),
     db.from('ingredients').select('id, type, content, reveals').eq('adventure_id', adventureId).order('created_at'),
+    db.from('story_nodes').select('id, key, kind, label, narration_seed, chapter_id, objective_id')
+      .eq('adventure_id', adventureId).order('key'),
   ])
-  for (const res of [chapters, objectives, npcs, locations, ingredients]) {
+  for (const res of [chapters, objectives, npcs, locations, ingredients, nodes]) {
     if (res.error) throw new Error(`digest load failed: ${res.error.message}`)
   }
 
@@ -100,7 +102,9 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
     (a, b) => (chapterNumber.get(a.chapter_id) ?? 0) - (chapterNumber.get(b.chapter_id) ?? 0) || a.index - b.index,
   )
 
-  const digest: GuideDigest = { objectives: new Map(), npcs: new Map(), locations: new Map(), ingredients: new Map() }
+  const digest: GuideDigest = {
+    objectives: new Map(), npcs: new Map(), locations: new Map(), ingredients: new Map(), nodes: new Map(),
+  }
   const refs = new Map<string, { table: string; id: string }>()
   const objectiveIdByHandle = new Map<string, string>()
   const entryGiverHandles: string[] = []
@@ -127,6 +131,18 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
     const text = (ing.content as { text?: string } | null)?.text ?? ing.reveals
     digest.ingredients.set(handle, `${ing.type}: ${clip(text, 140)}`)
     refs.set(handle, { table: 'ingredients', id: ing.id })
+  })
+  // Authored scenes (2026-07-26). Their prose is the newest thing that can contradict the guide,
+  // and stage 7 is the pass that catches contradictions - so it reads them too.
+  const objectiveTitle = new Map(sortedObjectives.map((o) => [o.id, o.title as string]))
+  ;(nodes.data ?? []).forEach((n, i) => {
+    const handle = `node#${i + 1}`
+    const serves = objectiveTitle.get(n.objective_id as string) ?? '?'
+    digest.nodes!.set(
+      handle,
+      `${n.kind} scene ${chapterTag(n.chapter_id)} serving "${clip(serves, 60)}" - ${clip(n.narration_seed, 160)}`,
+    )
+    refs.set(handle, { table: 'story_nodes', id: n.id })
   })
 
   return {
@@ -235,6 +251,59 @@ async function resyncAwardAtoms(db: SupabaseClient, adventureId: string): Promis
       .update({ outcome_atoms: derived as unknown as Json })
       .in('id', stale)
     assertOk(updateError, 'award atom resync failed')
+  }
+
+  await resyncNodeAwards(db, adventureId)
+}
+
+/**
+ * The same resync for the authored graph: a node's `on_success` and an objective's
+ * `guaranteed_route.onSuccess` are both `minimalSatisfyingAtoms(predicate)`, derived once and then
+ * left behind when stage 7 rewrites the predicate.
+ *
+ * Both were added in the 2026-07-26 graph overhaul and neither was wired into this resync, so they
+ * drifted exactly the way `encounters.outcome_atoms` used to. Live 2026-07-27, "Cross Mirehaven's
+ * Harbour Front": the predicate became `mother_ettel_met | driftwood_yard_reached` while all three
+ * of its nodes and its rescue still awarded `ettel_guidance_won`. Nothing could complete the
+ * objective, and the playability prover reported it unwinnable on every path.
+ */
+async function resyncNodeAwards(db: SupabaseClient, adventureId: string): Promise<void> {
+  const [{ data: objectives, error: objError }, { data: nodes, error: nodeError }] = await Promise.all([
+    db.from('objectives').select('id, completion_predicates, guaranteed_route').eq('adventure_id', adventureId),
+    db.from('story_nodes').select('id, objective_id, encounter_spec').eq('adventure_id', adventureId),
+  ])
+  assertOk(objError, 'node award resync objectives load failed')
+  assertOk(nodeError, 'node award resync nodes load failed')
+  if ((nodes ?? []).length === 0) return
+
+  const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+  const asRecord = (v: unknown) =>
+    (typeof v === 'object' && v !== null && !Array.isArray(v) ? v : {}) as Record<string, unknown>
+
+  for (const objective of (objectives ?? []) as {
+    id: string; completion_predicates: unknown; guaranteed_route: unknown
+  }[]) {
+    const derived = minimalSatisfyingAtoms(objective.completion_predicates)
+    if (derived === null) continue
+
+    for (const node of (nodes ?? []) as { id: string; objective_id: string; encounter_spec: unknown }[]) {
+      if (node.objective_id !== objective.id) continue
+      const spec = asRecord(node.encounter_spec)
+      if (same(spec.on_success, derived)) continue
+      const { error } = await db
+        .from('story_nodes')
+        .update({ encounter_spec: { ...spec, on_success: derived } as unknown as Json })
+        .eq('id', node.id)
+      assertOk(error, 'node award resync failed')
+    }
+
+    const route = asRecord(objective.guaranteed_route)
+    if (Object.keys(route).length === 0 || same(route.onSuccess, derived)) continue
+    const { error } = await db
+      .from('objectives')
+      .update({ guaranteed_route: { ...route, onSuccess: derived } as unknown as Json })
+      .eq('id', objective.id)
+    assertOk(error, 'guaranteed route award resync failed')
   }
 }
 

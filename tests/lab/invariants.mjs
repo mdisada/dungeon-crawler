@@ -18,9 +18,12 @@
  * @param {object} ctx.state          final game state
  * @param {Array} ctx.turnStats
  * @param {Array} ctx.incidents
+ * @param {Array} [ctx.resolutions]   encounter_resolved payloads - drives the graph-health checks
  * @returns {{ ok: boolean, violations: string[] }}
  */
-export function checkInvariants({ eventCounts, state, turnStats, incidents }) {
+export function checkInvariants({
+  eventCounts, state, turnStats, incidents, resolutions = [], beatOpens = [], objectiveFails = [],
+}) {
   const violations = []
   // Split by what the finding MEANS, not by how alarming it sounds. `fatal` means the story
   // engine cannot advance, so every further turn is wasted money - abort. `warnings` are real
@@ -78,6 +81,78 @@ export function checkInvariants({ eventCounts, state, turnStats, incidents }) {
   if (blind >= 5) warnings.push(`${blind} turns produced neither narration nor dialogue`)
   if (turnStats.length >= 20 && blind >= turnStats.length * 0.5) {
     violations.push(`${blind}/${turnStats.length} turns produced nothing the player could read`)
+  }
+
+  // --- authored-graph health (added 2026-07-27) --------------------------------------------
+  //
+  // Run 9ed8729b reported quality "good" and 3 objectives completed while the spine was not
+  // working at all: three of five encounter resolutions credited nothing, both remaining
+  // objectives were finished by the recognition judge rather than by an authored outcome map, and
+  // one objective re-arrived at the same dead end three times. Every check above passed, because
+  // they all ask "did SOMETHING happen" and the safety nets guaranteed that something did.
+  //
+  // These three ask the sharper question: did the story advance the way it was authored to, or
+  // did the fallbacks carry it? A run the safety nets rescued is not a passing run - it is a
+  // failing run with the evidence hidden.
+  // RETIRED 2026-07-27: "N/M encounter resolutions credited no milestone - the outcome maps are
+  // not what is moving the story". Outcome maps are deliberately not what moves the story any
+  // more. Objectives resolve because a scene resolved; the atoms a scene credits are flavour. This
+  // invariant asserted the architecture that was just replaced, and would now fire on every
+  // healthy run.
+  //
+  // What replaces it is the sharper question the same evidence supports: was every scene the
+  // party was SHOWN actually playable? A node whose beat opened and narrated but which never
+  // reached a resolution is a scene the party was handed and had taken away - live 2026-07-27,
+  // the rescue node of "Investigate the Tide-Ledger" opened, narrated, and was retired in the same
+  // tail because the resolution pass counted it as played the moment its beat was inserted.
+  const resolvedNodeKeys = new Set(resolutions.map((r) => r?.node_key).filter(Boolean))
+  const staged = beatOpens.map((p) => p?.node_key).filter(Boolean).filter((k) => !resolvedNodeKeys.has(k))
+  // The last node opened is legitimately still in play when the run's turn budget runs out.
+  const abandoned = staged.slice(0, Math.max(staged.length - 1, 0))
+  if (abandoned.length > 0) {
+    // WARNING, not a violation (2026-07-27). A violation aborts the run mid-flight, and on its
+    // first outing this one killed a paid playthrough at turn 16 over a single abandoned scene -
+    // taking the evidence we were actually buying (whether NPC deflection fires and how it reads)
+    // down with it. One dropped scene is a real defect and worth surfacing; it is not a dead
+    // spine, and the abort threshold should mean "nothing further can be learned from this run".
+    const line = `${abandoned.length} authored scene(s) opened and were never played to a resolution ` +
+      `(${abandoned.slice(0, 3).join(', ')}) - the party was shown a scene and had it taken away`
+    if (abandoned.length >= 3) violations.push(line)
+    else warnings.push(line)
+  }
+
+  // The recognition judge exists to catch what the deterministic path missed. When it is
+  // completing MORE objectives than the outcome maps are, it has stopped being a safety net.
+  const recognized = count('objective_recognized')
+  const completed = count('objective_completed')
+  if (completed > 0 && recognized >= completed) {
+    warnings.push(
+      `${recognized} objective(s) credited by the recognition judge vs ${completed} completed - ` +
+      'the safety net is doing the spine\'s job')
+  }
+
+  // Exhaustion is no longer a stall - it retires the objective the hard way and the story moves on
+  // (2026-07-27). So it is not a structural failure any more, it is a difficulty signal: every
+  // scene of that objective was played and lost. A run where that keeps happening is a run the
+  // party is losing outright, which is worth surfacing even though nothing is broken.
+  const spent = objectiveFails.filter((p) => p?.cause === 'spent').length
+  if (spent >= 3) {
+    warnings.push(
+      `${spent} objectives were lost with every authored scene played - the party is being beaten ` +
+      'by the content, not stalled by it')
+  }
+
+  // `graph_navigation_stopped` is the HEALTHY stop: an authored success edge saying "the objective
+  // resolves here". One per objective is normal. Many more than that means a node keeps reporting
+  // the objective finished while the objective stays open - the party arrives at the same
+  // non-decision repeatedly, which is precisely how the null-target dead end presented before it
+  // was diagnosed (six stops, three objectives, one of them hit three times).
+  // One stop per objective is the healthy shape; one spare absorbs a legitimate retry.
+  const stopped = count('graph_navigation_stopped')
+  if (stopped >= 3 && stopped > completed + 1) {
+    violations.push(
+      `${stopped} navigation stops against ${completed} completed objective(s) - a node keeps ` +
+      'reporting its objective resolved while the objective stays open')
   }
 
   return { ok: violations.length === 0, violations, warnings }

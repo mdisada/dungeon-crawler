@@ -75,15 +75,68 @@ export function addressedNpcId(
   staged: readonly { npcId: string; name: string }[],
 ): string | null {
   if (staged.length < 2) return null // one speaker on stage - nothing to disambiguate
-  const haystack = ` ${utterance.toLowerCase()} `
-  const named = staged.filter((s) => {
-    const name = s.name.toLowerCase().trim()
-    if (!name) return false
-    // Whole-word containment, so "Sil" does not match "Silas" and a name at the end of a
-    // sentence ("...ask Silas.") still resolves.
-    return new RegExp(`(^|[^a-z])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`).test(haystack)
-  })
+  const named = namedIn(utterance, staged)
   return named.length === 1 ? named[0].npcId : null
+}
+
+const NAME_STOPWORDS = new Set(['the', 'of', 'and', 'lady', 'lord', 'sir'])
+
+/**
+ * The forms a player might plausibly type for one roster name: the whole thing, plus each
+ * distinctive word in it.
+ *
+ * Matching only the full authored string is why this almost never resolved. Rosters carry titles
+ * ("Warden Sef Karthen", "Captain Idris Thane") and nobody types those - they type "Karthen".
+ * Tokens under three letters and bare honorifics are dropped so "of" and "sir" cannot match, and
+ * a token two NPCs share simply matches both, which the callers already read as ambiguous.
+ */
+function nameKeys(name: string): string[] {
+  const full = name.toLowerCase().trim()
+  if (!full) return []
+  const tokens = full.split(/\s+/).filter((t) => t.length >= 3 && !NAME_STOPWORDS.has(t))
+  return [...new Set([full, ...tokens])]
+}
+
+/** Whole-word name matching, so "Sil" does not match "Silas" and "...ask Silas." still resolves. */
+function namedIn<T extends { name: string }>(utterance: string, roster: readonly T[]): T[] {
+  const haystack = ` ${utterance.toLowerCase()} `
+  return roster.filter((r) =>
+    nameKeys(r.name).some((key) =>
+      new RegExp(`(^|[^a-z])${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`).test(haystack)))
+}
+
+export type AddressedNpc =
+  | { kind: 'staged'; npcId: string }
+  | { kind: 'offstage'; name: string }
+  | { kind: 'unclear' }
+
+/**
+ * Who the party just spoke to - including the case where that person is not here.
+ *
+ * `addressedNpcId` only ever searched the STAGED roster, and its caller fell back to
+ * `speakers[0]` for everything else. So naming someone who had walked off did not read as "she
+ * is gone" - it silently handed her line to whoever happened to be standing there. Live
+ * 2026-07-27, Miregate: the player typed "I ask Dessa Mol what she thinks is moving on the
+ * ships" and Warden Sef Karthen answered, twice, having never been part of that conversation.
+ * Eight lines later Karthen said "Dessa's not here" - the system knew, and had said nothing.
+ *
+ * `offstage` gives the caller the one fact it needs to answer honestly in fiction instead of
+ * substituting a body. Still pure name resolution against a closed roster, never interpretation.
+ */
+export function resolveAddressed(
+  utterance: string,
+  staged: readonly { npcId: string; name: string }[],
+  offstage: readonly { name: string }[],
+): AddressedNpc {
+  const here = namedIn(utterance, staged)
+  if (here.length === 1) return { kind: 'staged', npcId: here[0].npcId }
+  // Only when NO staged NPC was named - "ask Karthen about Dessa" is addressed to Karthen, and
+  // mentioning someone absent in the third person is not addressing them.
+  if (here.length === 0) {
+    const away = namedIn(utterance, offstage)
+    if (away.length === 1) return { kind: 'offstage', name: away[0].name }
+  }
+  return { kind: 'unclear' }
 }
 
 /**

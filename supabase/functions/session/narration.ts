@@ -8,7 +8,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { dialogueGateActive, dmSettings } from '../_shared/play/index.ts'
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
-import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions } from './agents.ts'
+import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions, runOutcomeClaimCheck } from './agents.ts'
 import type { AgentEnv, NarrationStyle } from './agents.ts'
 import { buildCanon } from './canon.ts'
 import { retrieveMemories } from './memory.ts'
@@ -26,11 +26,16 @@ import { assertOk, commitDiffs, loadContext, loadState, logEvent } from './util.
  *              unmeasurable because it blocked, so a false positive and a true one looked alike.
  *   'enforce'- one constrained regeneration when a dead mouth speaks; keep the better draft.
  *
- * Starts at 'shadow'. The class it targets - the speaking corpse - is real and recurring, but
- * the last thing to block prose was wrong 14 times out of 14, so this one earns its authority
- * with data before it gets any.
+ * Started at 'shadow'. The class it targets - the speaking corpse - is real and recurring, but
+ * the last thing to block prose was wrong 14 times out of 14, so this one earned its authority
+ * with data first. Flipped to 'enforce' 2026-07-25 on that data: the shadow log caught the
+ * departed Elara Meadowlight speaking a full scene after she vanished ("state: absent, role:
+ * speaks") and published it anyway, which then fed the ledger a live sighting and thrashed her
+ * state absent->alive. Unlike the flags checker, this is a perceive-then-deterministically-judge
+ * pass (who does the passage SHOW acting; are they dead/absent), not a fragment-vs-proposition
+ * guess - the exact shape that can be enforced without the false-positive tax.
  */
-export const PROSE_CLAIM_CHECK: 'off' | 'shadow' | 'enforce' = 'shadow'
+export const PROSE_CLAIM_CHECK: 'off' | 'shadow' | 'enforce' = 'enforce'
 
 /**
  * The rebuilt check: model perceives (who does this passage SHOW speaking or acting?), code
@@ -76,6 +81,51 @@ async function claimGuard(
   return retry.violations.length === 0 ? second : draft
 }
 
+/**
+ * Premature-resolution guard (2026-07-26). While an encounter is OPEN its outcome belongs to the
+ * engine - the tier the party plays to, and the outcome map that tier selects. Prose that
+ * declares the goal already won or lost puts the transcript ahead of the state, and every line
+ * after it inherits the contradiction.
+ *
+ * Only runs while something is actually open, so a cutscene (where narration SHOULD move things
+ * along) is untouched. One constrained regeneration; a second claim keeps the prose and logs -
+ * same trade the consistency pass settled on, for the same reason (guaranteed-bad canned text is
+ * worse than a slightly over-eager sentence).
+ */
+async function outcomeGuard(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  draft: string,
+  state: GameState,
+  regenerate: (constraint: string) => Promise<string>,
+): Promise<string> {
+  const encounter = state.encounter
+  if (OUTCOME_CLAIM_CHECK === 'off' || !encounter) return draft
+  const goal = `${encounter.label}${encounter.stakes ? ` (at stake: ${encounter.stakes})` : ''}`
+  if (!(await runOutcomeClaimCheck(env, draft, goal))) return draft
+
+  await logEvent(service, env.adventureId, sessionId, 'outcome_claim_blocked', {
+    enforced: OUTCOME_CLAIM_CHECK === 'enforce', label: encounter.label, draft: draft.slice(0, 400),
+  }).catch(() => {})
+  if (OUTCOME_CLAIM_CHECK !== 'enforce') return draft
+
+  const second = await regenerate(
+    `NEVER state or imply that "${encounter.label}" has already been achieved, won, failed or ` +
+    'otherwise settled - it is still being played and only the engine decides how it ends. ' +
+    'Write the tension and the attempt, and stop short of the outcome.',
+  ).catch(() => draft)
+  return (await runOutcomeClaimCheck(env, second, goal)) ? draft : second
+}
+
+/**
+ * Rollout switch for the premature-resolution guard. Starts at 'enforce': unlike the flags
+ * checker this is a closed question against a stated goal with a safe default (false on doubt or
+ * outage), and the failure it prevents - the transcript declaring a win the state never recorded
+ * - poisons every subsequent line rather than merely reading oddly.
+ */
+export const OUTCOME_CLAIM_CHECK: 'off' | 'shadow' | 'enforce' = 'enforce'
+
 function factSheet(state: GameState): string {
   const recent = agentContextLines(state, 6)
   return [
@@ -83,6 +133,90 @@ function factSheet(state: GameState): string {
     `Party: ${state.players.list.map((p) => p.name).join(', ')}`,
     `Recent lines: ${recent.join(' | ')}`,
   ].join('\n')
+}
+
+/** The authored identity of an NPC, trimmed to one clause - who they are, in a handful of words. */
+function identityClause(description: string, personality: unknown): string {
+  const source = description.trim() ||
+    (typeof personality === 'object' && personality !== null
+      ? String((personality as Record<string, unknown>).summary ?? (personality as Record<string, unknown>).traits ?? '')
+      : '')
+  if (!source) return ''
+  // First clause only. Descriptions are one or two sentences; the opening phrase is the identity
+  // ("Broad-shouldered tavernkeeper who has spent two years...") and the rest is colour.
+  const clause = source.split(/[.;]|\s+-\s+/)[0].trim()
+  return clause.length > 90 ? `${clause.slice(0, 88).replace(/[,\s]+$/, '')}...` : clause
+}
+
+/**
+ * The cast, as data: who is in this scene, who else exists, and who cannot appear at all.
+ *
+ * Replaces two prose blocks (`castRosterLine` + `deadRosterLine`) that spent most of their tokens
+ * re-explaining the same standing rules on every single call - "spelled EXACTLY as written",
+ * "CANNOT speak, act, or appear alive". Those are constants, so they moved to the narrator's
+ * system prompt and what travels per call is now just the facts.
+ *
+ * WHO THEY ARE, not just their names (2026-07-27). A bare roster made the narrator reconstruct
+ * each person from a six-line window, and once that window scrolled past their introduction it was
+ * guessing: live, Warden Sef Karthen was "her attention" in one line and "his boots" nine lines
+ * later, and Maren Ostler flipped inside a single sentence. The fix is the one a chatbot gets for
+ * free from an unbounded history - keep the character's identity in front of the model - except
+ * here it has to be re-supplied every call, because our history is truncated.
+ *
+ * The identity is AUTHORED data that was already sitting in `npcs.description` and
+ * `npcs.personality` and simply never reached the narrator. "Corren's daughter", "Harbormistress",
+ * "answers about her husband" - the referent is unambiguous once the model can see it, and it
+ * costs no new column, no new authored field, and works on every NPC already in the database.
+ *
+ * Only the STAGED cast pays for a clause; everyone else is a name. Salience, the same way a
+ * chatbot keeps the active participants in focus and lets the rest stay implicit.
+ *
+ * `GONE` deliberately says WHY. The old line read "Not present in the story yet", which is
+ * actively wrong for someone who has just walked off and reads as "never introduced" - so a
+ * narrator with the exit outside its window put her straight back in the scene.
+ */
+async function rosterLines(
+  service: SupabaseClient,
+  adventureId: string,
+  state: GameState,
+): Promise<string[]> {
+  const npcStates = state.dm?.facts.npcStates ?? {}
+  const staged = new Set(state.dialogue?.speakers?.map((sp) => sp.npcId) ?? [])
+  const { data } = await service
+    .from('npcs')
+    .select('id, name, initial_state, description, personality')
+    .eq('adventure_id', adventureId)
+  const rows = ((data ?? []) as {
+    id: string; name: string; initial_state: string; description: string; personality: unknown
+  }[])
+    .filter((n) => n.name)
+    .map((n) => ({
+      id: n.id,
+      name: n.name,
+      identity: identityClause(n.description ?? '', n.personality),
+      state: npcStates[n.id] ?? n.initial_state ?? 'alive',
+    }))
+
+  const living = rows.filter((n) => n.state === 'alive')
+  const here = living.filter((n) => staged.has(n.id))
+  const elsewhere = living.filter((n) => !staged.has(n.id))
+  const gone = rows.filter((n) => n.state !== 'alive')
+
+  return [
+    here.length > 0
+      ? `HERE   ${here.map((n) => (n.identity ? `${n.name} - ${n.identity}` : n.name)).join('; ')}`
+      : '',
+    elsewhere.length > 0 ? `CAST   ${elsewhere.slice(0, 20).map((n) => n.name).join(', ')}` : '',
+    gone.length > 0
+      ? `GONE   ${gone.slice(0, 12).map((n) => `${n.name} - ${n.state === 'dead' ? 'dead' : 'not in this scene'}`).join('; ')}`
+      : '',
+  ].filter(Boolean)
+}
+
+/** The thread the party is actually pulling on. Read from state - no query. */
+function goalLine(state: GameState): string {
+  const active = state.objectives?.list?.find((o) => o.id === state.objectives?.currentId)
+  return active?.title ? `GOAL   ${active.title}` : ''
 }
 
 /** "Dead before the story began" is scene-setting, not a contradiction - spell that out. */
@@ -118,6 +252,34 @@ Not present in the story yet: ${absent.join(', ')} - may be spoken about, but ca
   )
 }
 
+/**
+ * The living cast, spelled exactly as authored.
+ *
+ * `deadRosterLine` lists only the dead and absent, so a narrator that had not seen a name in the
+ * last few lines was reconstructing it from memory - and live 2026-07-26 the foreman Calder became
+ * "Calver's men" mid-scene. A misspelt NPC is not a cosmetic slip: NPC references elsewhere match
+ * by name, so the wrong spelling is a person who does not exist.
+ *
+ * Cheap and bounded (an adventure has a handful of NPCs), and it is the "code supplies the
+ * information" fix rather than an instruction the model has to remember.
+ */
+async function castRosterLine(
+  service: SupabaseClient,
+  adventureId: string,
+  npcStates: Record<string, string>,
+): Promise<string> {
+  const { data } = await service
+    .from('npcs')
+    .select('id, name, initial_state')
+    .eq('adventure_id', adventureId)
+  const living = ((data ?? []) as { id: string; name: string; initial_state: string }[])
+    .filter((n) => (npcStates[n.id] ?? n.initial_state ?? 'alive') === 'alive')
+    .map((n) => n.name)
+    .filter(Boolean)
+  if (living.length === 0) return ''
+  return `\nPeople in this story, spelled EXACTLY as written - never alter or approximate a name: ${living.join(', ')}.`
+}
+
 export const MECHANICAL_FALLBACK = 'The attempt is resolved; the outcome stands.'
 
 /**
@@ -135,36 +297,45 @@ export async function publishNarration(
 ): Promise<string> {
   const state = (await loadState(service, env.adventureId)).state
   const npcStates = state.dm?.facts.npcStates ?? {}
-  // Anyone the guide authored as already dead/absent (a murder victim) may be NAMED, examined
-  // and discussed - that is the whole subject of a mystery. Only speaking or appearing alive is
-  // off limits, which is a judgement, so it goes to the checker as a fact rather than a
-  // deterministic name-match block (which fell back to mechanical text, live 2026-07-21).
-  const preexisting = await deadRosterLine(service, env.adventureId, npcStates)
-  const facts = `${factSheet(state)}${preexisting}`
-  // Retrieval memory (Slice 7): long-form cutscenes ground on what past sessions established.
-  const memories = style === 'exposition' ? await retrieveMemories(service, env, prompt) : []
-  const memoryLines = memories.length > 0
-    ? `\n\nEstablished earlier (carry these forward, never contradict them):\n${memories.map((m) => `- ${m}`).join('\n')}`
-    : ''
-  // Personalization (2026-07-20): the narrator sees who the party members ARE, not just names.
-  const profiles = await partyProfileLines(service, await loadPartyCharacters(service, env.adventureId))
-  const partyLines = profiles.length > 0
-    ? `\n\nThe party (weave their traits and quirks in when relevant):\n${profiles.map((p) => `- ${p}`).join('\n')}`
-    : ''
-  // The narrator must see the same facts the checker holds it to, or it invents scenes
-  // the checker then rightly blocks (seen live: every idle nudge fell back to mechanical).
-  const grounded = `${prompt}\n\nEstablished scene facts - stay consistent with these:\n${facts}${partyLines}${memoryLines}`
-  // CANON ONLY for the checker (Phase 6). It used to receive `facts` (which carries the live
-  // transcript under "Recent lines") plus the generating prompt verbatim - so a draft that
-  // correctly followed its instruction was flagged as contradicting it, blocked, regenerated
-  // under a NEVER: constraint quoting the very thing it was asked to write, and on the second
-  // failure published the mechanical fallback. See canon.ts for the full account.
+  // CANON ONLY for the checker (Phase 6). It used to receive the live transcript plus the
+  // generating prompt verbatim - so a draft that correctly followed its instruction was flagged as
+  // contradicting it, blocked, regenerated under a NEVER: constraint quoting the very thing it was
+  // asked to write, and on the second failure published the mechanical fallback. See canon.ts.
+  //
+  // `canon.story` is the other half of that split and it goes to the NARRATOR (2026-07-27): the
+  // forces at work, what the party has already achieved, what is on a clock. Withholding it left
+  // the fact-checker better informed about the story than its author.
   const canon = await buildCanon(service, env.adventureId, state)
+  const [roster, profiles, memories] = await Promise.all([
+    rosterLines(service, env.adventureId, state),
+    partyProfileLines(service, await loadPartyCharacters(service, env.adventureId)),
+    // Retrieval memory (Slice 7): long-form cutscenes ground on what past sessions established.
+    style === 'exposition' ? retrieveMemories(service, env, prompt) : Promise.resolve([]),
+  ])
+
+  // LABELLED DATA, NOT PROSE (2026-07-27). This block used to be four paragraphs of English that
+  // re-taught the narrator its own standing rules on every call. Those rules are constant, so they
+  // moved into the system prompt and only the facts travel per turn - which paid for the three
+  // things that were missing (the goal, who the cast ARE, the story so far) without the prompt
+  // getting bigger.
+  const grounded = [
+    prompt,
+    '',
+    `SCENE  ${state.scene.locationName || 'unknown'} | ${state.scene.mode} | day ${state.scene.day}`,
+    goalLine(state),
+    ...roster,
+    canon.story,
+    profiles.length > 0 ? `PARTY  ${profiles.join(' // ')}` : '',
+    `LAST   ${agentContextLines(state, 6).join(' | ')}`,
+    memories.length > 0 ? `EARLIER ${memories.join(' // ')}` : '',
+  ].filter(Boolean).join('\n')
 
   let text: string
   try {
     text = await runNarrator(env, grounded, undefined, style)
     text = await claimGuard(service, env, sessionId, text, canon, (constraint) =>
+      runNarrator(env, grounded, constraint, style))
+    text = await outcomeGuard(service, env, sessionId, text, state, (constraint) =>
       runNarrator(env, grounded, constraint, style))
     let verdict = await runConsistency(env, text, canon.npcs, canon.npcStates, canon.text, { restrictions: canon.restrictions })
     if (!verdict.ok) {
@@ -209,7 +380,10 @@ export async function publishNarration(
     appendLinesDiff(s, [newLine(null, null, text)]),
     typingDiff(false),
   ])
-  await logEvent(service, env.adventureId, sessionId, 'narration_published', { text })
+  // `style` rides along so length can be judged per style (2026-07-27). Without it the measured
+  // 868-char median mixes 2-4-sentence beats with 4-8-sentence cutscenes, and "are beats too long?"
+  // has no answer - which is precisely why a length ceiling could not be set responsibly.
+  await logEvent(service, env.adventureId, sessionId, 'narration_published', { text, style })
   return text
 }
 

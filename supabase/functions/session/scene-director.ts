@@ -10,6 +10,7 @@ import type { AgentEnv, SceneEffects } from './agents.ts'
 import { maybeSpawnEncounter } from './danger.ts'
 import { spawnInstantiator } from './encounters.ts'
 import { applyMilestones } from './milestones.ts'
+import { bossReferencedBy } from './npc-state.ts'
 import { appendLinesDiff, newLine } from './orchestrate.ts'
 import { setScene } from './state.ts'
 import { antagonistTurn } from './steward.ts'
@@ -22,6 +23,10 @@ export interface AppliedSceneEffects {
   dayAdvanced: number | null
   /** Placeholder-combat label when a fight was auto-resolved as a party victory. */
   combatWon: string | null
+  /** Label of an ad-hoc BOSS clash that ended without the boss being defeated (it was repelled). */
+  combatInconclusive: string | null
+  /** A brand-new location was allocated because the party moved somewhere not yet authored. */
+  locationCreated: string | null
   /** The staged social scene was closed (explicit end_scene, or implied by travel). */
   sceneEnded: boolean
 }
@@ -53,7 +58,10 @@ export async function applySceneEffects(
   effects: SceneEffects,
   hooks: SceneHooks,
 ): Promise<AppliedSceneEffects> {
-  const applied: AppliedSceneEffects = { traveledTo: null, staged: [], dayAdvanced: null, combatWon: null, sceneEnded: false }
+  const applied: AppliedSceneEffects = {
+    traveledTo: null, staged: [], dayAdvanced: null, combatWon: null,
+    combatInconclusive: null, locationCreated: null, sceneEnded: false,
+  }
 
   // Departing or concluding closes the staged social scene first - travel implies it, or the
   // roleplay gravity well never releases (nothing else ends a scene in full-AI).
@@ -68,7 +76,34 @@ export async function applySceneEffects(
   if (effects.travelLocation) {
     const { data, error } = await service.from('locations').select('id, name').eq('adventure_id', env.adventureId)
     assertOk(error, 'locations load failed')
-    const match = matchByName((data ?? []) as { id: string; name: string }[], effects.travelLocation)
+    const rows = (data ?? []) as { id: string; name: string }[]
+    let match = matchByName(rows, effects.travelLocation)
+    // Allocate-on-miss (2026-07-25). The destination used to be REJECTED when it named no authored
+    // row, so the party could never reach a place the fiction had just invented - an NPC mentions
+    // "the Alabaster Archives", the party heads there, and travel silently no-ops, stranding them
+    // in the one starting location for the whole adventure (live 2026-07-24). The world is meant to
+    // grow to match the story it tells (MAIN-SPEC 1.1a, "what the world becomes" = sandbox), so code
+    // ALLOCATES the identity the fiction declared - the same declare-then-code-allocates pattern
+    // the planner uses for cast. Guarded: a place-like name, and a hard cap so a runaway model
+    // cannot sprawl the map. (The Adjudicator path is enum-bound and never misses; this catches the
+    // free-text entry/cutscene path.)
+    const proposed = effects.travelLocation.trim()
+    if (!match && proposed.length >= 3 && proposed.length <= 60 && rows.length < 16) {
+      const { data: created, error: createError } = await service
+        .from('locations')
+        .insert({ adventure_id: env.adventureId, name: proposed, description: '' })
+        .select('id, name')
+        .single()
+      if (createError) {
+        console.error('location allocate failed', createError)
+      } else {
+        match = created as { id: string; name: string }
+        applied.locationCreated = created.name
+        await logEvent(service, env.adventureId, sessionId, 'location_allocated', {
+          location_id: created.id, name: created.name, proposed,
+        })
+      }
+    }
     if (match) {
       const result = await setScene(service, env.adventureId, env.creatorId, { location_id: match.id })
       if (result.status === 200) {
@@ -108,25 +143,46 @@ export async function applySceneEffects(
 
   if (effects.encounter) {
     // Combat placeholder (pre-Phase 7): mark the encounter visibly in the transcript and the
-    // event log, auto-resolve it as a decisive party victory, and record a story marker so
-    // beat/objective predicates can key on it. The real combat engine replaces this block.
+    // event log, auto-resolve it, and record a story marker so beat/objective predicates can key
+    // on it. The real combat engine replaces this block.
+    //
+    // EXCEPTION - the boss. This path fires on a spur-of-the-moment "I fight the creature myself",
+    // never a structured climax. A boss is not felled by an impromptu clash the player declares:
+    // resolving that as a decisive victory ended a horror hunt on turn 3 (live 2026-07-24). Code
+    // owns the outcome: a boss is driven back but SURVIVES here (only the authored climax, through
+    // the real engine, can kill it); ordinary foes still auto-resolve as the party's win.
     const label = effects.encounter
+    const boss = await bossReferencedBy(service, env.adventureId, label)
     await logEvent(service, env.adventureId, sessionId, 'encounter_started', {
-      kind: 'combat', label, placeholder: true,
+      kind: 'combat', label, placeholder: true, boss: Boolean(boss),
     })
-    await commitDiffs(service, env.adventureId, (s) => [
-      appendLinesDiff(s, [newLine(null, null, `Combat: ${label} - party victorious (placeholder auto-resolve)`)]),
-    ])
-    await logEvent(service, env.adventureId, sessionId, 'encounter_resolved', {
-      kind: 'combat', label, victory: true, placeholder: true,
-    })
-    // narrative_marker, not story_event (Phase 1): the free-text tag never matched an authored
-    // {event} atom except by string luck, and a lucky match would be UNAUTHORED progression.
-    // Progression from combat flows through the beat's outcome map; this is transcript color.
-    await logEvent(service, env.adventureId, sessionId, 'narrative_marker', {
-      tag: `combat victory: ${label}`, source: 'encounter_placeholder',
-    })
-    applied.combatWon = label
+    if (boss) {
+      await commitDiffs(service, env.adventureId, (s) => [
+        appendLinesDiff(s, [newLine(null, null, `Combat: ${label} - the enemy is driven back, not destroyed (placeholder)`)]),
+      ])
+      await logEvent(service, env.adventureId, sessionId, 'encounter_resolved', {
+        kind: 'combat', label, victory: false, outcome: 'inconclusive', boss: true, placeholder: true,
+      })
+      await logEvent(service, env.adventureId, sessionId, 'narrative_marker', {
+        tag: `boss repelled, not defeated: ${label}`, source: 'encounter_placeholder',
+      })
+      // Deliberately NOT combatWon: nothing downstream may treat the boss as beaten.
+      applied.combatInconclusive = label
+    } else {
+      await commitDiffs(service, env.adventureId, (s) => [
+        appendLinesDiff(s, [newLine(null, null, `Combat: ${label} - party victorious (placeholder auto-resolve)`)]),
+      ])
+      await logEvent(service, env.adventureId, sessionId, 'encounter_resolved', {
+        kind: 'combat', label, victory: true, placeholder: true,
+      })
+      // narrative_marker, not story_event (Phase 1): the free-text tag never matched an authored
+      // {event} atom except by string luck, and a lucky match would be UNAUTHORED progression.
+      // Progression from combat flows through the beat's outcome map; this is transcript color.
+      await logEvent(service, env.adventureId, sessionId, 'narrative_marker', {
+        tag: `combat victory: ${label}`, source: 'encounter_placeholder',
+      })
+      applied.combatWon = label
+    }
   }
 
   if (effects.milestones.length > 0) {

@@ -17,6 +17,6 @@ export type {
   DiffDomain, DmSettingsState, DmState, EncounterKind, EncounterSpecState, EncounterState,
   FxEvent, GameState, HpState, Json, ObjectivesState,
   ObjectiveView, NarrationReview, NpcReplyReview, OfferBannerView, OpeningState, PendingPromptState,
-  PendingReviewState, PlayersState, PlayerView, ProposalEntry, QuestJournalView, ReviewCandidate,
-  SceneMode, SceneState, SessionState, SpeakerSlot, StateDiff, TokenState,
+  PendingReviewState, PersonalStake, PlayersState, PlayerView, ProposalEntry, QuestJournalView, ReviewCandidate,
+  SceneMode, SceneState, SessionState, SpeakerSlot, StateDiff, SuggestedChoice, TokenState,
 } from './types.ts'

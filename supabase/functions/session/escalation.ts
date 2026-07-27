@@ -7,8 +7,8 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
-import { activeLoop, resolveNpcNames, stageableNpcs } from '../_shared/story/index.ts'
-import type { DirectorDecision, NpcStageRow } from '../_shared/story/index.ts'
+import { activeLoop, pickReveal, resolveNpcNames, stageableNpcs } from '../_shared/story/index.ts'
+import type { DirectorDecision, NpcStageRow, RevealCandidate } from '../_shared/story/index.ts'
 import type { GameState, Json, OfferBannerView } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { loadLoops } from './beats.ts'
@@ -29,16 +29,32 @@ function situation(state: GameState): string {
   ].filter(Boolean).join(' ')
 }
 
-async function undiscoveredReveal(service: SupabaseClient, adventureId: string): Promise<string | null> {
+/**
+ * A clue the party could plausibly run into RIGHT HERE.
+ *
+ * This used to take the first undiscovered ingredient in table order, wherever it lived. Live
+ * 2026-07-26 that surfaced a clue placed in the foreman's office while the party stood at the mine
+ * entrance, and the narrator - handed the text - stated it as observed fact: "Veil's knowing hand
+ * has clearly doubled the collected sums", with no ledger, no office and no Veil in the scene. A
+ * later reveal did the same with the adventure's central twist.
+ *
+ * Placement is authored, so use it: prefer clues bound to where the party actually is, then
+ * unplaced ones (which can surface anywhere), and never one bound to somewhere else.
+ */
+async function undiscoveredReveal(
+  service: SupabaseClient,
+  adventureId: string,
+  locationId: string | null,
+): Promise<string | null> {
   const { data } = await service
     .from('ingredients')
-    .select('reveals')
+    .select('reveals, placement')
     .eq('adventure_id', adventureId)
     .eq('discovered', false)
     .not('reveals', 'is', null)
-    .limit(1)
-  const reveals = ((data ?? []) as { reveals: string | null }[])[0]?.reveals
-  return reveals && reveals.trim() ? reveals.trim() : null
+  // Selection rule lives in _shared/story/reveals.ts so it is unit-tested (nothing under
+  // supabase/functions has a test runner). See the module header for the leak it prevents.
+  return pickReveal((data ?? []) as RevealCandidate[], locationId)
 }
 
 export async function deliverRung(
@@ -81,7 +97,7 @@ export async function deliverRung(
 
   if (decision.action === 'reveal') {
     // Rung 2 - orient: surface an existing, undiscovered clue as an in-fiction detail.
-    let seed = await undiscoveredReveal(service, env.adventureId)
+    let seed = await undiscoveredReveal(service, env.adventureId, state.scene.locationId ?? null)
     if (!seed) {
       const objective = state.objectives.list.find((o) => o.id === state.objectives.currentId)?.title
       const loop = activeLoop(await loadLoops(service, env.adventureId))
@@ -100,7 +116,14 @@ export async function deliverRung(
       service, env, sessionId,
       `${opener} ${ground} Draw their attention to something already here that points a way ` +
         `forward - a detail they can act on, a companion's passing thought, a half-remembered ` +
-        `fact.${seed ? ` Work this in as that detail: "${seed}".` : ''} Deliver it in the fiction, ` +
+        `fact.${seed
+          ? ` Point them toward this WITHOUT stating it: "${seed}". That sentence is the DM's ` +
+            'private note, not something anyone in the scene knows or says. Give the party only ' +
+            'the physical trace of it that is present right now - a mark, a sound, a smell, an ' +
+            'object, someone\'s slip of the tongue - and let them draw the conclusion themselves. ' +
+            'NEVER assert the note as fact, and never describe a person, place or object that is ' +
+            'not in this scene.'
+          : ''} Deliver it in the fiction, ` +
         'never as instructions, and leave the next move to them.',
       'Director: orient',
     )

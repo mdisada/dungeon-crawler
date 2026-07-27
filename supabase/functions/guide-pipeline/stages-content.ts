@@ -3,7 +3,14 @@ import { expectedPartyLevel, expectedPartySize } from '../_shared/guide/budget.t
 import { deriveNpcStatBlock } from '../_shared/guide/npc-stats.ts'
 import { buildStage4Prompt, parseStage4 } from '../_shared/guide/stages/stage4.ts'
 import { buildStage5Prompt, parseStage5 } from '../_shared/guide/stages/stage5.ts'
+import {
+  buildRescueNode, buildStage5NodesPrompt, parseStage5Nodes,
+} from '../_shared/guide/stages/stage5-nodes.ts'
+import type { Stage5NodesContext } from '../_shared/guide/stages/stage5-nodes.ts'
+import type { StoryNodeSpec } from '../_shared/guide/nodes.ts'
+import type { GuaranteedRoute } from '../_shared/guide/guaranteed-route.ts'
 import { minimalSatisfyingAtoms } from '../_shared/guide/guaranteed-route.ts'
+import { canonicalizeAtomSlug } from '../_shared/story/index.ts'
 import type { EntityRef, Json } from '../_shared/guide/types.ts'
 import { enqueueJob, type StageEnv } from './stage-env.ts'
 import { chapterSketch, loadChapterScenes } from './stages-story.ts'
@@ -22,7 +29,7 @@ async function loadChapter(env: StageEnv, chapterId: string) {
 async function loadChapterObjectives(env: StageEnv, chapterId: string) {
   const { data, error } = await env.db
     .from('objectives')
-    .select('id, index, title, hidden_description, completion_predicates')
+    .select('id, index, title, hidden_description, completion_predicates, guaranteed_route')
     .eq('chapter_id', chapterId)
     .order('index')
     .order('created_at')
@@ -34,6 +41,8 @@ async function loadChapterObjectives(env: StageEnv, chapterId: string) {
     // Real predicates, not the null placeholder this used to carry: stage 5 derives each
     // encounter's award atoms from the objective it serves (Phase 5).
     completionPredicates: o.completion_predicates as unknown,
+    // The code-authored rescue route (stage 3), materialized as a rescue node by stage 5.
+    guaranteedRoute: o.guaranteed_route as unknown,
   }))
 }
 
@@ -238,7 +247,7 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
 
   const { data: chapterNpcs, error: npcError } = await env.db
     .from('npcs')
-    .select('id, name, role, human_edited, pending_regen')
+    .select('id, name, role, initial_state, human_edited, pending_regen')
     .eq('chapter_id', chapterId)
     .order('created_at')
   assertOk(npcError, 'npcs load failed')
@@ -364,6 +373,14 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
     assertOk(error, 'boss update failed')
   }
 
+  // --- Author the playable story-node graph for this chapter (overhaul 2026-07-26) ---
+  // The beat planner + encounter designer, moved out of runtime: >= 2 route nodes per objective
+  // plus the materialized rescue node, all pre-linted before guide_ready.
+  const keyedNpcs: KeyedNpc[] = npcKeys.list.map(({ key, name, row }) => ({
+    key, name, id: row.id, initialState: row.initial_state,
+  }))
+  await authorChapterNodes(env, chapterId, objectives, keyedNpcs, chapter)
+
   // Last chapter to clear stage 5 starts the whole-guide weave.
   const { data: remaining, error: remainingError } = await env.db
     .from('guide_jobs')
@@ -376,4 +393,109 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
   if ((remaining ?? []).length === 0) {
     await enqueueJob(env.db, env.adventure.id, 6)
   }
+}
+
+/** snake_case stored encounter spec - the exact shape the runtime openBeatSpec reads, plus the
+ *  pre-resolved npc_ids for social nodes. */
+function storedSpec(node: StoryNodeSpec, npcIds: string[]): Json {
+  const e = node.encounter
+  const params = (typeof e.params === 'object' && e.params !== null && !Array.isArray(e.params)
+    ? e.params
+    : {}) as Record<string, unknown>
+  return {
+    kind: e.kind, label: e.label, stakes: e.stakes, rationale: e.rationale,
+    // npc_ids live INSIDE params - where openSocialEncounter and route-health's stillborn
+    // detector both read them from.
+    params: { ...params, ...(npcIds.length > 0 ? { npc_ids: npcIds } : {}) },
+    on_success: e.onSuccess, on_partial: e.onPartial, on_failure: e.onFailure,
+  } as unknown as Json
+}
+
+function storedTransitions(node: StoryNodeSpec): Json {
+  return node.transitions.map((t) => ({
+    on: t.on, to_node_key: t.toNodeKey, arrival_context: t.arrivalContext,
+  })) as unknown as Json
+}
+
+type Stage5Objective = {
+  id: string; title: string; hiddenDescription: string
+  completionPredicates: unknown; guaranteedRoute: unknown
+}
+
+interface KeyedNpc { key: string; name: string; id: string; initialState: string }
+
+async function authorChapterNodes(
+  env: StageEnv,
+  chapterId: string,
+  objectives: Stage5Objective[],
+  npcs: KeyedNpc[],
+  chapter: { index: number; title: string },
+): Promise<void> {
+  const living = npcs.filter((n) => n.initialState !== 'dead' && n.initialState !== 'absent')
+  const npcIdByKey = new Map(npcs.map((n) => [n.key, n.id]))
+  const ctx: Stage5NodesContext = {
+    chapterNumber: chapter.index + 1,
+    chapterTitle: chapter.title,
+    objectives: objectives.map((o) => ({
+      id: o.id, title: o.title, hiddenDescription: o.hiddenDescription, completionPredicates: o.completionPredicates,
+    })),
+    npcs: living.map(({ key, name }) => ({ key, name })),
+    partySkills: [],
+  }
+  const output = await env.generate('beat_planner', buildStage5NodesPrompt(ctx), (raw) => parseStage5Nodes(raw, ctx))
+
+  // Register every declared setback atom (scope 'local') so the stage-8 gate does not flag it as
+  // off-registry. Upsert-ignore keeps spine atoms and prior locals intact.
+  const localBySlug = new Map<string, { name: string; kind: string }>()
+  for (const a of output.localAtoms) {
+    const slug = canonicalizeAtomSlug(a.name)
+    if (slug && !localBySlug.has(slug)) localBySlug.set(slug, a)
+  }
+  if (localBySlug.size > 0) {
+    const rows = [...localBySlug].map(([slug, a]) => ({
+      adventure_id: env.adventure.id, slug, kind: a.kind, scope: 'local',
+      label: a.name, source_table: 'story_nodes', source_id: null,
+    }))
+    const { error } = await env.db
+      .from('story_atoms')
+      .upsert(rows, { onConflict: 'adventure_id,slug', ignoreDuplicates: true })
+    assertOk(error, 'local atom registration failed')
+  }
+
+  // Replace this chapter's previously generated nodes (keep human-edited ones).
+  const { error: delError } = await env.db
+    .from('story_nodes').delete().eq('chapter_id', chapterId).eq('human_edited', false)
+  assertOk(delError, 'story_nodes delete failed')
+
+  const objectiveId = (objectiveKey: string) => objectiveKey.replace(/^obj:/, '')
+  const rows: Record<string, unknown>[] = []
+  for (const { node, npcKeys: keys } of output.nodes) {
+    const npcIds = keys.map((k) => npcIdByKey.get(k)).filter((id): id is string => Boolean(id))
+    rows.push({
+      adventure_id: env.adventure.id, chapter_id: chapterId, objective_id: objectiveId(node.objectiveKey),
+      key: node.key, index: node.index, kind: node.kind, role: node.role, label: node.label,
+      narration_seed: node.narrationSeed, encounter_spec: storedSpec(node, npcIds),
+      affordances: node.affordances as unknown as Json, transitions: storedTransitions(node),
+      local_atoms: node.localAtoms as unknown as Json,
+    })
+  }
+  // Materialize each objective's rescue node from its guaranteed route.
+  for (const o of objectives) {
+    if (!o.guaranteedRoute) continue
+    const node = buildRescueNode(o.id, o.guaranteedRoute as GuaranteedRoute)
+    rows.push({
+      adventure_id: env.adventure.id, chapter_id: chapterId, objective_id: o.id,
+      key: node.key, index: node.index, kind: node.kind, role: node.role, label: node.label,
+      narration_seed: node.narrationSeed, encounter_spec: storedSpec(node, []),
+      affordances: node.affordances as unknown as Json, transitions: storedTransitions(node),
+      local_atoms: [] as unknown as Json,
+    })
+  }
+  if (rows.length > 0) {
+    const { error } = await env.db.from('story_nodes').insert(rows)
+    assertOk(error, 'story_nodes insert failed')
+  }
+  await logPipelineEvent(env.db, env.adventure.id, 'story_nodes_authored', {
+    chapter_id: chapterId, route_nodes: output.nodes.length, rescue_nodes: rows.length - output.nodes.length,
+  })
 }

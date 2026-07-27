@@ -312,33 +312,27 @@ async function main() {
   const staged = await act(gm, { action: 'start_social', adventure_id: advId, npc_ids: [volgarth.id] })
   ok('a dead NPC cannot be staged to speak', staged.status === 409, staged.body)
 
-  console.log('\n[stall promoter: a stalled cutscene gets something to engage]')
+  console.log('\n[requested hint delivers a reveal, not a bare fold]')
   // Live 2026-07-21: ten turns of "who did it" folded into narration because no encounter was
-  // open and nobody was staged, so the fail-forward rung had nothing to resolve. A stalled
-  // cutscene must now produce something to engage instead of another fold.
+  // open and nobody was staged. The answer was stall promotion - but that moved to the Progress
+  // Director's rung 3 (escalation.promoteOpening has exactly ONE caller, director.ts), and
+  // runProgressDirector early-returns on env.demo so an unsolicited rung cannot corrupt these
+  // fixtures. Stall promotion is therefore UNREACHABLE in demo and cannot be asserted here; it is
+  // covered by the paid lab's route-health metrics instead.
+  //
+  // What this suite can still hold is the reachable half: a requested hint delivers the reveal
+  // rung and publishes something the player can read, rather than another silent fold. That was
+  // the actual complaint in the live session.
   await act(gm, { action: 'end_encounter', adventure_id: advId })
-  const promotedBefore = (await eventsOf(advId, 'stall_promoted')).length
-  let promoted = null
-  for (let i = 0; i < 4 && !promoted; i++) {
-    await act(gm, { action: 'hint', adventure_id: advId, requested: true })
-    const events = await eventsOf(advId, 'stall_promoted')
-    if (events.length > promotedBefore) promoted = events[events.length - 1]
-  }
-  ok('a stalled cutscene promotes an opening rather than folding again', Boolean(promoted), promoted)
-  if (promoted) {
-    ok(
-      'the promoted opening is something the party can engage',
-      promoted.payload.action === 'stage_npc' || promoted.payload.action === 'open_encounter',
-      promoted.payload,
-    )
-    sync = await act(gm, { action: 'resync', adventure_id: advId })
-    ok(
-      'the opening is live in state (staged speaker or open encounter)',
-      sync.body.state.dialogue.speakers.length > 0 || Boolean(sync.body.state.encounter),
-      { speakers: sync.body.state.dialogue.speakers.length, encounter: sync.body.state.encounter?.kind ?? null },
-    )
-  }
-
+  const linesBefore = (await act(gm, { action: 'resync', adventure_id: advId })).body.state.dialogue.lines.length
+  const hinted = await act(gm, { action: 'hint', adventure_id: advId, requested: true })
+  ok('requested hint accepted', hinted.status === 200 && hinted.body.rung === 2, hinted.body)
+  ok('hint_given logged at the reveal rung', (await eventsOf(advId, 'hint_given')).length >= 1)
+  const afterHint = (await act(gm, { action: 'resync', adventure_id: advId })).body.state
+  ok('the hint reached the player as narration, not a fold',
+    afterHint.dialogue.lines.length > linesBefore, { before: linesBefore, after: afterHint.dialogue.lines.length })
+  const unrequested = await act(gm, { action: 'hint', adventure_id: advId, requested: false })
+  ok('an unrequested hint is refused - automatic pacing is the director\'s', unrequested.status === 409, unrequested.body)
   console.log('\n[narrate_next options flow]')
   const narrateDenied = await act(p2, { action: 'narrate_next', adventure_id: advId })
   ok('player cannot narrate_next', narrateDenied.status === 403)

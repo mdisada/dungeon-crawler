@@ -54,6 +54,20 @@ export interface Canon {
   /** Live NPC states, for the deterministic dead-speaker precheck. */
   npcStates: Record<string, string>
   npcs: { id: string; name: string }[]
+  /**
+   * The durable world facts a WRITER needs, compressed to one line per category (2026-07-27).
+   *
+   * Everything below was already assembled here and handed only to the fact-checker, so the
+   * narrator wrote without knowing what the story had established - which named forces exist,
+   * what the party has already achieved, what is on a clock. It then invented over the gaps:
+   * live 2026-07-27 an investigation success declared "Miregate isn't a location; it's a
+   * ledger-system", contradicting the town the adventure opens in, because nothing in its prompt
+   * said what Miregate was.
+   *
+   * The context/restriction split this file exists for was right; the context half just ended up
+   * on the wrong side of it. Empty when there is nothing established yet.
+   */
+  story: string
 }
 
 /**
@@ -115,10 +129,11 @@ export async function buildCanon(
     .maybeSingle()
   const registry = ((adventureRow?.meta_loop as { entities?: { kind: string; name: string; note: string }[] } | null)
     ?.entities ?? []).filter((e) => e.kind === 'lore')
+  const loreText = registry.map((e) => `${e.name} (${e.note})`).join('; ')
   if (registry.length > 0) {
     lines.push(
       `Forces and factions at work (real parts of the world - name and describe them freely; ` +
-        `they are not people and never speak): ${registry.map((e) => `${e.name} (${e.note})`).join('; ')}.`,
+        `they are not people and never speak): ${loreText}.`,
     )
   }
 
@@ -182,10 +197,21 @@ export async function buildCanon(
        ...restrictions.map((r) => `  [${r.id}] ${r.text}`)]
     : ['', 'RESTRICTIONS: none. Nothing in this scene can be contradicted.']
 
+  // The writer's half, one labelled line per category and no instructional prose - the standing
+  // rules that used to travel with this text now live in the narrator's system prompt, where they
+  // are sent once instead of re-explained on every call.
+  const story = [
+    loreText ? `FORCES ${loreText}` : '',
+    trueFlags.length > 0 ? `DONE   ${trueFlags.slice(0, 12).map((f) => f.replaceAll('_', ' ')).join('; ')}` : '',
+    pressure.length > 0 ? `CLOCK  ${pressure.join(' ')}` : '',
+    props.length > 0 ? `PROPS  ${props.map((p) => p.text).join('; ')}` : '',
+  ].filter(Boolean).join('\n')
+
   return {
     text: [...lines, ...restrictionLines].join('\n'),
     restrictions,
     npcStates,
     npcs: rows.map((n) => ({ id: n.id, name: n.name })),
+    story,
   }
 }

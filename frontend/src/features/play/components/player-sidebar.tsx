@@ -68,6 +68,25 @@ export function PlayerSidebar() {
             </ul>
           </div>
         )}
+        {/* Your stake (2026-07-26): the personal arc bound to this character at session start.
+            Reward-only by construction - it never gates the party's story. */}
+        {me?.personal?.objectiveLabel && (
+          <div className="mt-2">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Your stake</p>
+            <p className="text-xs">
+              <span
+                className={cn(
+                  'font-medium',
+                  me.personal.status === 'completed' && 'text-muted-foreground line-through',
+                  me.personal.status === 'failed' && 'text-muted-foreground',
+                )}
+              >
+                {me.personal.objectiveLabel}
+              </span>
+              {me.personal.reward && <span className="text-muted-foreground"> - {me.personal.reward}</span>}
+            </p>
+          </div>
+        )}
         {offers.length > 0 && (
           <p className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400">
             Awaiting your answer: {offers.map((o) => o.label).join('; ')}

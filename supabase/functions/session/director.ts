@@ -9,17 +9,20 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { dmSettings } from '../_shared/play/index.ts'
 import {
-  activeLoop, advanceDirectorState, decideDirector, DEFAULT_DIRECTOR_THRESHOLDS,
+  activeLoop, advanceDirectorState, decideDirector,
   EMPTY_DIRECTOR_STATE,
+  spineProgressed,
 } from '../_shared/story/index.ts'
 import type { DirectorDecision, DirectorState, DirectorThresholds } from '../_shared/story/index.ts'
 import type { GameState, Json } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { loadLoops, planAndOpenBeat } from './beats.ts'
-import { openSkillChallengeFromSpec } from './encounters.ts'
+import { openSkillChallengeFromSpec, resolveOpenEncounter } from './encounters.ts'
 import type { StoredBeatSpec } from './encounters.ts'
 import { deliverRung, promoteOpening } from './escalation.ts'
+import { loadObjectiveNodes } from './graph-read.ts'
 import { narrationBeat } from './narration.ts'
+import { pacingFor } from './pacing.ts'
 import { evaluateStoryProgress, failObjective } from './progress.ts'
 import { beatRouteHealth } from './route-health.ts'
 import { forceAcceptOffer } from './story.ts'
@@ -68,19 +71,26 @@ export const DIRECTOR_APPLIES = true
 export const GUARANTEED_ROUTE_APPLIES = true
 export const FAIL_FORWARD_APPLIES = true
 
+/**
+ * Three layers, weakest first: the shipped defaults, the adventure's difficulty profile (chosen in
+ * the creation wizard), then the DM's live `set_auto` overrides. The middle layer is new - before
+ * it, difficulty reached the combat XP budget and nothing else, so an Easy adventure and a Deadly
+ * one waited exactly as long before the DM stepped in.
+ */
 function thresholdsFor(state: GameState): DirectorThresholds {
+  const base = pacingFor(state)
   const overrides = dmSettings(state).directorThresholds ?? {}
   return {
-    nudge: overrides.nudge ?? DEFAULT_DIRECTOR_THRESHOLDS.nudge,
-    reveal: overrides.reveal ?? DEFAULT_DIRECTOR_THRESHOLDS.reveal,
-    replanBeat: overrides.replanBeat ?? DEFAULT_DIRECTOR_THRESHOLDS.replanBeat,
-    guaranteedRoute: overrides.guaranteedRoute ?? DEFAULT_DIRECTOR_THRESHOLDS.guaranteedRoute,
-    failForward: overrides.failForward ?? DEFAULT_DIRECTOR_THRESHOLDS.failForward,
-    offerPressure: overrides.offerPressure ?? DEFAULT_DIRECTOR_THRESHOLDS.offerPressure,
+    nudge: overrides.nudge ?? base.nudge,
+    reveal: overrides.reveal ?? base.reveal,
+    replanBeat: overrides.replanBeat ?? base.replanBeat,
+    guaranteedRoute: overrides.guaranteedRoute ?? base.guaranteedRoute,
+    failForward: overrides.failForward ?? base.failForward,
+    offerPressure: overrides.offerPressure ?? base.offerPressure,
     guaranteedRouteOnObjective:
-      overrides.guaranteedRouteOnObjective ?? DEFAULT_DIRECTOR_THRESHOLDS.guaranteedRouteOnObjective,
+      overrides.guaranteedRouteOnObjective ?? base.guaranteedRouteOnObjective,
     failForwardOnObjective:
-      overrides.failForwardOnObjective ?? DEFAULT_DIRECTOR_THRESHOLDS.failForwardOnObjective,
+      overrides.failForwardOnObjective ?? base.failForwardOnObjective,
   }
 }
 
@@ -99,12 +109,33 @@ function jitterFor(objectiveId: string | null): number {
   return (Math.abs(h) % 3) - 1
 }
 
-/** Did the spine move on this turn? Mirrors the old hints.ts isProgress vocabulary. */
-const PROGRESS_TYPES = new Set([
-  'milestone_reached', 'beat_exit_met', 'objective_completed', 'objective_revealed',
-  'encounter_resolved', 'encounter_opened', 'scene_travel', 'offer_accepted', 'ingredient_revealed',
-])
+/**
+ * Who breaks in to redirect the party: a staged speaker if the scene has one, else any living,
+ * present NPC. Null when the adventure has nobody to speak - the caller falls back to narration.
+ */
+async function redirectSpeaker(
+  service: SupabaseClient,
+  adventureId: string,
+  state: GameState,
+): Promise<string | null> {
+  const staged = state.dialogue.speakers?.[0]?.name
+  if (staged) return staged
+  const { data } = await service
+    .from('npcs').select('id, name, initial_state').eq('adventure_id', adventureId)
+  const npcStates = state.dm?.facts.npcStates ?? {}
+  const living = ((data ?? []) as { id: string; name: string; initial_state: string | null }[])
+    .filter((n) => {
+      const st = npcStates[n.id] ?? n.initial_state ?? 'alive'
+      return st !== 'dead' && st !== 'absent'
+    })
+  return living[0]?.name ?? null
+}
 
+/**
+ * Did the SPINE move? The predicate lives in _shared/story/progress-signal.ts so it is unit-tested
+ * (see that module for the heist run where ad-hoc and random content reset this counter every turn
+ * and the ladder never escalated across ~50 turns of filler).
+ */
 async function progressedSince(
   service: SupabaseClient,
   adventureId: string,
@@ -116,12 +147,7 @@ async function progressedSince(
     .eq('adventure_id', adventureId)
     .gt('id', sinceEventId)
     .limit(80)
-  for (const e of (data ?? []) as { type: string; payload: Record<string, Json> | null }[]) {
-    if (PROGRESS_TYPES.has(e.type)) return true
-    if (e.type === 'encounter_attempt' && (e.payload?.success === true || e.payload?.result === 'solves')) return true
-    if (e.type === 'entry_mapped' && (e.payload?.entry === 'offered' || e.payload?.entry === 'adhoc')) return true
-  }
-  return false
+  return spineProgressed((data ?? []) as { type: string; payload: Record<string, Json> | null }[])
 }
 
 export interface DirectorTurnContext {
@@ -262,6 +288,32 @@ export async function runProgressDirector(
     }
 
     if (decision.action === 'replan_beat') {
+      // The party has drifted off the spine for `replanBeat` turns with a scene still open.
+      // Nudging cannot fix that - rungs 1-2 only narrate, and live 2026-07-26 rung 1 fired NINE
+      // times without changing anything while one encounter resolved fourteen times.
+      //
+      // So CLOSE the scene as a failure (owner-directed): the failure outcome map fires, which is
+      // a real recorded setback rather than a free reset, and the authored failure transition then
+      // routes them somewhere they have not been. An ally makes it diegetic - they cut across
+      // whatever the party was doing with something urgent - so it reads as the story moving, not
+      // the DM confiscating the scene.
+      if (state.encounter) {
+        const ally = await redirectSpeaker(service, env.adventureId, state)
+        await logEvent(service, env.adventureId, sessionId, 'encounter_force_failed', {
+          label: state.encounter.label, kind: state.encounter.kind, reason: 'off_spine',
+          speaker: ally ?? null,
+        }).catch(() => {})
+        await resolveOpenEncounter(
+          service, env, sessionId, 'failed',
+          `${ally ? `${ally} cuts straight across whatever the party was doing` : 'One of the party\'s allies breaks in'} ` +
+            'with something that will not wait - a way through they have just found, or a reason ' +
+            'the party must move NOW. They do not argue the point or answer what was being said; ' +
+            'they redirect. This attempt is over and it did not work: let that cost land, then ' +
+            'put the new direction in front of the party.',
+        ).catch((err) => console.error('force-fail failed', err))
+        // resolveOpenEncounter runs evaluateStoryProgress, which re-plans the beat on exit.
+        return
+      }
       if (loop) {
         try {
           await planAndOpenBeat(service, env, sessionId, loop.id, 'director_replan')
@@ -282,7 +334,27 @@ export async function runProgressDirector(
     }
 
     if (decision.action === 'guaranteed_route') {
-      // The authored routes did not work out. Open the code-authored one: its outcome map was
+      // GRAPH-BEARING GUIDES: the rescue is an authored NODE, so open it through navigation.
+      // Opening the stored spec directly runs the same scene without ever writing `beats.node_id`,
+      // which leaves the navigator convinced the rescue is still unplayed - it offers it again on
+      // the next escalation, and the ladder never reaches its terminal. Routing through
+      // planAndOpenBeat also means a rescue the party has ALREADY played and lost resolves the
+      // objective instead of replaying, which is the whole point of the terminal.
+      const graphNodes = currentObjectiveId
+        ? await loadObjectiveNodes(service, env.adventureId, currentObjectiveId)
+        : []
+      if (graphNodes.length > 0 && loop) {
+        try {
+          await planAndOpenBeat(service, env, sessionId, loop.id, 'guaranteed_route')
+        } catch (err) {
+          console.error('director rescue navigation failed', err)
+          await logEvent(service, env.adventureId, sessionId, 'incident', {
+            kind: 'director_rescue_failed', route_health: routeHealth,
+          }).catch(() => {})
+        }
+        return decision
+      }
+      // Legacy guides: open the code-authored route from its stored spec. Its outcome map was
       // generated from the objective's own predicate, so succeeding here provably completes it.
       // The party still has to PLAY it - this is a route, not a handout.
       if (guaranteedRoute) {

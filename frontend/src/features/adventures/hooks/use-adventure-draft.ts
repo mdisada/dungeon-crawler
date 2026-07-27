@@ -20,6 +20,7 @@ const EMPTY_DRAFT: AdventureDraft = {
   plotIdea: '',
   plotHistory: emptyPlotHistory(),
   difficultyPreset: null,
+  pacingOverrides: {},
 }
 
 interface AdventureDraftState {

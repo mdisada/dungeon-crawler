@@ -20,12 +20,16 @@ export function IntentInputRow() {
   const { state, isSpectator, reveal } = usePlay()
   const { myCharacterId, isBusy, error, clearError, say, requestHint } = useIntents()
   const [draft, setDraft] = useState('')
+  // The chip whose text is sitting in the input untouched. Any edit clears it, so an edited
+  // suggestion travels as ordinary free text and gets interpreted like anything else.
+  const [chipKey, setChipKey] = useState<string | null>(null)
   const activeLine = state.dialogue.lines.find((l) => l.id === state.dialogue.activeLineId) ?? null
   const { isRevealing } = reveal
 
   if (isSpectator || !myCharacterId || state.session.status !== 'active') return null
 
   const { typing, pending, openings } = state.dialogue
+  const suggestedChoices = state.dialogue.suggestedChoices ?? []
   // pending is nullish (null or, in states seeded before the field existed, undefined) when no
   // check is live - either way the input stays open. While a line is still being delivered the
   // input grays out too, so an ENABLED input always means "the table is waiting on you".
@@ -49,8 +53,18 @@ export function IntentInputRow() {
   async function submit() {
     const text = draft.trim()
     if (!text) return
-    const ok = await say(text)
-    if (ok) setDraft('')
+    const ok = await say(text, { affordanceKey: chipKey ?? undefined })
+    if (ok) {
+      setDraft('')
+      setChipKey(null)
+    }
+  }
+
+  /** Prefill, never auto-submit: the player still chooses to send, can edit first, and the table
+   *  keeps equal footing (one player cannot advance the story by clicking faster). */
+  function pickChoice(choice: { key: string; hint: string; label: string }) {
+    setDraft(choice.hint || choice.label)
+    setChipKey(choice.key)
   }
 
   return (
@@ -65,6 +79,27 @@ export function IntentInputRow() {
               >
                 Opening: {opening.hint}
               </span>
+            ))}
+          </div>
+        )}
+
+        {/* Authored ways into the current scene. Suggestions beside the free-text box - clicking
+            one fills the input so it can be edited or ignored, never sends on its own. */}
+        {suggestedChoices.length > 0 && !inputBlocked && (
+          <div className="flex flex-wrap gap-2">
+            {suggestedChoices.map((choice) => (
+              <button
+                key={choice.key}
+                type="button"
+                onClick={() => pickChoice(choice)}
+                className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                  chipKey === choice.key
+                    ? 'border-sky-300/80 bg-sky-900/80 text-sky-100'
+                    : 'border-white/25 bg-black/70 text-white/80 hover:border-sky-300/60 hover:text-white'
+                }`}
+              >
+                {choice.label}
+              </button>
             ))}
           </div>
         )}
@@ -105,7 +140,10 @@ export function IntentInputRow() {
         >
           <Input
             value={draft}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+              setDraft(e.target.value)
+              setChipKey(null) // an edited suggestion is just free text again
+            }}
             placeholder={placeholder}
             disabled={inputBlocked}
             aria-label="Action or dialogue input"

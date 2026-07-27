@@ -21,8 +21,18 @@ export async function saveAdventureDraft(
       chapters_max: draft.type === 'multi_chapter' ? draft.chaptersMax : null,
       plot_idea: draft.plotIdea,
       plot_history: draft.plotHistory,
+      // `{ preset, pacing }` - pacing holds ONLY the knobs moved off the preset, so switching
+      // preset later re-derives the rest instead of stacking stale numbers. Omitted when empty
+      // so the overwhelmingly common row stays exactly the shape it has always been.
       difficulty_setting:
-        draft.mode === 'full_ai' && draft.difficultyPreset ? { preset: draft.difficultyPreset } : null,
+        draft.mode === 'full_ai' && draft.difficultyPreset
+          ? {
+              preset: draft.difficultyPreset,
+              ...(Object.keys(draft.pacingOverrides).length > 0
+                ? { pacing: draft.pacingOverrides }
+                : {}),
+            }
+          : null,
       updated_at: new Date().toISOString(),
     })
     .eq('id', adventureId)

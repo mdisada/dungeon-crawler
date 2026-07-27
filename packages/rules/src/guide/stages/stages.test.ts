@@ -197,19 +197,20 @@ describe('stage 3 (objectives + predicates)', () => {
     expect(system).toContain('Secure the forged deed')
   })
 
-  it('rejects an objective whose predicate has no atom live play can claim (2.1)', () => {
-    // Structurally valid (validatePredicate passes) but uncompletable: an eq:false flag is never
-    // written by a milestone, so this objective could never finish - it must not ship.
+  it('accepts an objective whose predicate has no claimable atom (2026-07-27)', () => {
+    // This was a hard error until objectives stopped completing by predicate. An eq:false flag is
+    // never written by a milestone, which used to mean "this objective can never finish, so
+    // regenerate the whole chapter". Objectives resolve when a scene resolves now, so the cost of
+    // an unclaimable predicate is one flavour flag nobody sets - not worth failing paid
+    // generation over.
     const result = parseStage3(JSON.stringify({
       objectives: [{
         title: 'Keep the gate shut',
-        hidden_description: 'the party must never open it',
+        hidden_description: 'The party must never open it.',
         completion_predicates: { flag: 'gate_opened', eq: false },
       }],
     }))
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.errors.some((e) => e.includes('no claimable milestone'))).toBe(true)
+    expect(result.ok).toBe(true)
   })
 
   it('accepts an event-only predicate as claimable (2.1)', () => {
@@ -594,18 +595,63 @@ describe('stage 7 edit plans (auto-resolve consistency findings)', () => {
     if (result.ok) expect(result.data).toEqual([])
   })
 
-  it('rejects unknown handles, duplicate handles, and off-whitelist fields', () => {
+  it('DROPS an unflagged handle instead of failing the whole plan', () => {
+    // Changed 2026-07-26: hard-failing threw away every valid edit in the same plan. Once the
+    // canon digest listed scenes, the model volunteered fixes for unflagged nodes, so an
+    // 8-edit plan parsed as an error twice and the repair pass reported 0 attempted.
     const unknown = parseStage7EditPlan(
       '{ "edits": [ { "handle": "obj#9", "patch": { "title": "X" }, "note": "" } ] }', HANDLES, 3)
-    expect(unknown.ok).toBe(false)
+    expect(unknown.ok).toBe(true)
+    if (unknown.ok) expect(unknown.data).toHaveLength(0)
 
+    const mixed = parseStage7EditPlan(
+      JSON.stringify({ edits: [
+        { handle: 'obj#9', patch: { title: 'Ignored' }, note: '' },
+        { handle: 'obj#2', patch: { title: 'A Quiet Word' }, note: 'kept' },
+      ] }), HANDLES, 3)
+    expect(mixed.ok).toBe(true)
+    if (mixed.ok) {
+      expect(mixed.data).toHaveLength(1)
+      expect(mixed.data[0].handle).toBe('obj#2')
+    }
+  })
+
+  it('keeps the good edits when one field is bad', () => {
+    // The live failure (2026-07-26): a plan spanning ~10 rows died on one cut-off sentence, so
+    // stage 7 repaired NOTHING three guides running. A bad field now drops; its row keeps the
+    // old text; every other repair still lands.
+    const mixed = parseStage7EditPlan(
+      JSON.stringify({ edits: [
+        { handle: 'obj#2', patch: { hidden_description: 'The nectar is a poten' }, note: 'cut off' },
+        { handle: 'obj#1', patch: { title: 'A Quiet Word' }, note: 'good' },
+      ] }), HANDLES, 3)
+    expect(mixed.ok).toBe(true)
+    if (!mixed.ok) return
+    expect(mixed.data).toHaveLength(1)
+    expect(mixed.data[0].handle).toBe('obj#1')
+  })
+
+  it('reports why when NOTHING in the plan survives, so the retry can improve', () => {
+    const allBad = parseStage7EditPlan(
+      '{ "edits": [ { "handle": "obj#2", "patch": { "hidden_description": "cut off mid" }, "note": "" } ] }',
+      HANDLES, 3)
+    expect(allBad.ok).toBe(false)
+    if (!allBad.ok) expect(allBad.errors.some((e) => e.includes('ends mid-thought'))).toBe(true)
+  })
+
+  it('rejects duplicate handles and off-whitelist fields', () => {
+    // A repeated handle drops the SECOND entry (the first already patches that row) instead of
+    // failing the batch - same drop-and-continue rule as every other repair-plan problem.
     const dupe = parseStage7EditPlan(
       JSON.stringify({ edits: [
         { handle: 'obj#2', patch: { title: 'One' }, note: '' },
         { handle: 'obj#2', patch: { title: 'Two' }, note: '' },
       ] }), HANDLES, 3)
-    expect(dupe.ok).toBe(false)
-    if (!dupe.ok) expect(dupe.errors.some((e) => e.includes('appears twice'))).toBe(true)
+    expect(dupe.ok).toBe(true)
+    if (dupe.ok) {
+      expect(dupe.data).toHaveLength(1)
+      expect(dupe.data[0].patch.title).toBe('One')
+    }
 
     const offWhitelist = parseStage7EditPlan(
       '{ "edits": [ { "handle": "obj#2", "patch": { "completion_predicates": "{}" }, "note": "" } ] }', HANDLES, 3)

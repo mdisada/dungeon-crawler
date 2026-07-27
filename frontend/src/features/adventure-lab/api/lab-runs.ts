@@ -1,15 +1,6 @@
 import { supabase } from '@/lib/supabase'
-import type { LabComment, LabRun, LabRunConfig, LabRunEvent, ReusableAdventure } from '../types'
 
-export async function listRuns(): Promise<LabRun[]> {
-  const { data, error } = await supabase
-    .from('lab_runs')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(50)
-  if (error) throw error
-  return (data ?? []) as LabRun[]
-}
+import type { LabRun, LabRunConfig, ReusableAdventure } from '../types'
 
 export async function createRun(userId: string, config: LabRunConfig): Promise<LabRun> {
   const { data, error } = await supabase
@@ -28,41 +19,6 @@ export async function cancelRun(runId: string): Promise<void> {
     .eq('id', runId)
     .in('status', ['queued', 'running'])
   if (error) throw error
-}
-
-/** Incremental tail: only rows after `sinceId`, so the poll stays cheap on long runs. */
-export async function listEventsSince(runId: string, sinceId: number): Promise<LabRunEvent[]> {
-  const { data, error } = await supabase
-    .from('lab_run_events')
-    .select('*')
-    .eq('run_id', runId)
-    .gt('id', sinceId)
-    .order('id')
-    .limit(500)
-  if (error) throw error
-  return (data ?? []) as LabRunEvent[]
-}
-
-export async function listComments(runId: string): Promise<LabComment[]> {
-  const { data, error } = await supabase
-    .from('lab_comments')
-    .select('id, run_id, event_id, body, created_at')
-    .eq('run_id', runId)
-    .order('created_at')
-  if (error) throw error
-  return (data ?? []) as LabComment[]
-}
-
-export async function addComment(
-  userId: string, runId: string, body: string, eventId: number | null,
-): Promise<LabComment> {
-  const { data, error } = await supabase
-    .from('lab_comments')
-    .insert({ author_id: userId, run_id: runId, event_id: eventId, body })
-    .select('id, run_id, event_id, body, created_at')
-    .single()
-  if (error) throw error
-  return data as LabComment
 }
 
 /** Adventures earlier lab runs generated - replayable without paying for generation again. */

@@ -216,7 +216,7 @@ export async function runBeatOutcomeMapper(env: AgentEnv, ctx: OutcomeMapperCont
   if (env.demo) {
     return parseOutcomeMaps({
       on_success: [...ctx.spineAtoms.slice(0, 1), ...ctx.localAtoms.slice(0, 1)],
-      on_partial: ctx.localAtoms.slice(0, 1),
+      on_partial: [],
       on_failure: ctx.localAtoms.slice(1, 2),
     }, menu)
   }
@@ -377,8 +377,23 @@ export async function runEncounterDesigner(
           }
         : {}
   if (env.demo) {
+    // `max_failures` is deliberately unreachable in demo (2026-07-27). The $0 suites drive this
+    // challenge with REAL server-side dice and then assert the success path - the outcome map
+    // crediting its spine atom, the objective completing, the quest paying out, the ending
+    // scoring. At 1 success before 3 failures roughly one run in eight rolls three failures first,
+    // resolves `failed`, credits the failure map instead, and every later assertion collapses on
+    // a red herring.
+    //
+    // It only became reachable when `partial` was removed earlier today: this challenge used to
+    // resolve partial in every fixture and could not truly fail. The suite has a 2026-07-21
+    // comment about "unlucky dice" from the same class, patched then by allowing more attempts -
+    // which does not help, because the encounter closes the moment failures run out.
+    //
+    // Demo-only, and it makes the fixture test what it means to test: the machinery after a
+    // success, not the odds of getting one. A suite that fails 12% of the time teaches everyone
+    // to re-run instead of read, which is exactly how this hid behind the word "flake" all day.
     return spec.kind === 'skill_challenge'
-      ? { needed_successes: 1, max_failures: 3, suggested_skills: party.skills.slice(0, 2) }
+      ? { needed_successes: 1, max_failures: 99, suggested_skills: party.skills.slice(0, 2) }
       : fallback
   }
   try {
@@ -612,6 +627,9 @@ export async function runClimaxAuthor(
   env: AgentEnv,
   ending: { title: string; description: string; tone: string },
   condensedEvents: string[],
+  /** Per-character personal outcomes (2026-07-26) - private arcs deserve a line in the epilogue,
+   *  which is where they pay off emotionally without ever having steered the ending. */
+  personalOutcomes: string[] = [],
 ): Promise<string> {
   if (env.demo) return `[demo climax] The story bends toward "${ending.title}" - and someone must choose.`
   try {
@@ -625,7 +643,11 @@ export async function runClimaxAuthor(
       user: [
         `Committed ending: ${ending.title} (${ending.tone}) - ${ending.description}`,
         `What actually happened (condensed):\n${condensedEvents.join('\n')}`,
-      ].join('\n'),
+        personalOutcomes.length > 0
+          ? `Personal threads to acknowledge in a clause each (never invent an outcome that is ` +
+            `not stated here):\n${personalOutcomes.join('\n')}`
+          : '',
+      ].filter(Boolean).join('\n'),
       maxTokens: 400,
     })
   } catch {
@@ -959,5 +981,126 @@ export async function runStallPromoter(env: AgentEnv, ctx: PromoterContext): Pro
     }
   } catch {
     return NO_OPENING // a stalled table is bad; a broken one is worse
+  }
+}
+
+// --- Personal hook slots: bind at first session, then instantiate each intro ------------------
+
+const SLOT_BINDER_SYSTEM =
+  'A tabletop RPG adventure was written before anyone joined it, so its per-player story hooks ' +
+  'were authored as SLOTS keyed to kinds of character. The real party has now assembled. Assign ' +
+  'each character the slot that best fits who they actually are - their background, class, and ' +
+  'the story they wrote for themselves. Assign each slot to AT MOST ONE character and each ' +
+  'character AT MOST ONE slot; leave a character out only if the slots genuinely do not suit ' +
+  'anyone. Reply with ONLY JSON: {"assignments": [{"character_id": "...", "slot_key": "..."}]}'
+
+export interface SlotBinderContext {
+  characters: { id: string; summary: string }[]
+  slots: { key: string; summary: string }[]
+}
+
+/** Menu match, both sides enum-constrained. Returns [] on any failure - the caller then uses the
+ *  deterministic matcher, so session start never blocks on this. */
+export async function runSlotBinder(
+  env: AgentEnv,
+  ctx: SlotBinderContext,
+): Promise<{ characterId: string; slotKey: string }[]> {
+  if (env.demo || ctx.characters.length === 0 || ctx.slots.length === 0) return []
+  const characterIds = ctx.characters.map((c) => c.id)
+  const slotKeys = ctx.slots.map((s) => s.key)
+  try {
+    const raw = await agentJson(
+      env, 'hook_weaver', SLOT_BINDER_SYSTEM,
+      [
+        'Characters:',
+        ...ctx.characters.map((c) => `- ${c.id}: ${c.summary}`),
+        '',
+        'Slots:',
+        ...ctx.slots.map((s) => `- ${s.key}: ${s.summary}`),
+      ].join('\n'),
+      400,
+      {
+        name: 'slot_bindings',
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['assignments'],
+          properties: {
+            assignments: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['character_id', 'slot_key'],
+                properties: {
+                  character_id: { type: 'string', enum: characterIds },
+                  slot_key: { type: 'string', enum: slotKeys },
+                },
+              },
+            },
+          },
+        },
+      },
+    )
+    const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const list = Array.isArray(obj.assignments) ? obj.assignments : []
+    // Uniqueness is enforced HERE, not asked for: a schema enum cannot express "each at most
+    // once", and a double-assigned slot would hand two players the same private story.
+    const takenCharacters = new Set<string>()
+    const takenSlots = new Set<string>()
+    const out: { characterId: string; slotKey: string }[] = []
+    for (const entry of list) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const e = entry as Record<string, unknown>
+      const characterId = typeof e.character_id === 'string' ? e.character_id : ''
+      const slotKey = typeof e.slot_key === 'string' ? e.slot_key : ''
+      if (!characterIds.includes(characterId) || !slotKeys.includes(slotKey)) continue
+      if (takenCharacters.has(characterId) || takenSlots.has(slotKey)) continue
+      takenCharacters.add(characterId)
+      takenSlots.add(slotKey)
+      out.push({ characterId, slotKey })
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+const INTRO_SYSTEM =
+  'You write the opening beat of one player character\'s personal story in a tabletop RPG. ' +
+  'Given that character and the seed of their stake in the adventure, write 2-3 sentences, in ' +
+  'second person, establishing why THEY are here as the story opens. Establish a STAKE, never ' +
+  'an agreement: never write that they have already accepted a job, joined the party\'s cause, ' +
+  'or decided what to do - deciding is the player\'s. Use only what you are given; invent no ' +
+  'new names, relatives, or events beyond the seed. Reply with prose only, no preamble.'
+
+/**
+ * Context is deliberately ONE character's own authored fields plus the opening location - no
+ * cross-party material. Players notice being misremembered more than almost anything, and a
+ * narrower context is the only reliable defence against inventing someone else's backstory.
+ */
+export async function runPersonalIntro(
+  env: AgentEnv,
+  ctx: { characterSummary: string; introSeed: string; openingLocation: string },
+): Promise<string> {
+  if (env.demo) return `[demo] ${ctx.introSeed}`.slice(0, 400)
+  try {
+    const text = await callAgentText({
+      serviceClient: env.service,
+      openRouterApiKey: Deno.env.get('OPENROUTER_API_KEY') ?? '',
+      userId: env.creatorId,
+      adventureId: env.adventureId,
+      agentRole: 'narrator',
+      system: INTRO_SYSTEM,
+      user: [
+        `Character: ${ctx.characterSummary}`,
+        `Their stake (seed): ${ctx.introSeed}`,
+        `The story opens at: ${ctx.openingLocation || 'an unnamed place'}`,
+      ].join('\n'),
+      maxTokens: 220,
+    })
+    return text.trim().slice(0, 600)
+  } catch {
+    return '' // no intro is better than a failed session start
   }
 }

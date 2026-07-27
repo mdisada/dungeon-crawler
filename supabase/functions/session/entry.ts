@@ -34,17 +34,37 @@ import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
 export async function openBeatSpec(
   service: SupabaseClient,
   adventureId: string,
-): Promise<{ beatId: string | null; spec: StoredBeatSpec | null }> {
+): Promise<{ beatId: string | null; spec: StoredBeatSpec | null; nodeId: string | null }> {
   const loop = activeLoop(await loadLoops(service, adventureId))
-  if (!loop?.currentBeatId) return { beatId: null, spec: null }
+  if (!loop?.currentBeatId) return { beatId: null, spec: null, nodeId: null }
   const { data, error } = await service
     .from('beats')
-    .select('id, status, encounter_spec')
+    .select('id, status, encounter_spec, node_id')
     .eq('id', loop.currentBeatId)
     .maybeSingle()
   assertOk(error, 'beat load failed')
-  if (!data || data.status !== 'active') return { beatId: null, spec: null }
-  return { beatId: data.id as string, spec: parseStoredBeatSpec((data.encounter_spec ?? null) as Json) }
+  if (!data || data.status !== 'active') return { beatId: null, spec: null, nodeId: null }
+  return {
+    beatId: data.id as string,
+    spec: parseStoredBeatSpec((data.encounter_spec ?? null) as Json),
+    nodeId: (data.node_id as string | null) ?? null,
+  }
+}
+
+/** The authored affordances of the open node - the closed menu the mapper matches against and
+ *  the chip list the players see. Empty for legacy guides. */
+async function nodeAffordances(
+  service: SupabaseClient,
+  nodeId: string | null,
+): Promise<{ key: string; hint: string }[]> {
+  if (!nodeId) return []
+  const { data } = await service.from('story_nodes').select('affordances').eq('id', nodeId).maybeSingle()
+  const raw = (data?.affordances ?? []) as unknown
+  return (Array.isArray(raw) ? raw : []).flatMap((a) => {
+    if (typeof a !== 'object' || a === null) return []
+    const af = a as Record<string, unknown>
+    return typeof af.key === 'string' ? [{ key: af.key, hint: String(af.hint ?? '') }] : []
+  })
 }
 
 export async function handleCutsceneIntent(
@@ -54,7 +74,7 @@ export async function handleCutsceneIntent(
   character: CharacterRow,
   text: string,
   kind: string,
-  opts?: { lineAlreadyStaged?: boolean },
+  opts?: { lineAlreadyStaged?: boolean; affordanceKey?: string | null },
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   if (!opts?.lineAlreadyStaged) {
     await commitDiffs(service, env.adventureId, (s) => [
@@ -71,7 +91,34 @@ export async function handleCutsceneIntent(
   }
 
   const state = (await loadState(service, env.adventureId)).state
-  const { beatId, spec } = await openBeatSpec(service, env.adventureId)
+  const { beatId, spec, nodeId } = await openBeatSpec(service, env.adventureId)
+  const affordances = await nodeAffordances(service, nodeId)
+
+  // Chip bypass (2026-07-26): an UNEDITED authored choice needs no interpretation at all. The
+  // player picked from the scene's own menu, so the mapper - the last open-judgment call left in
+  // the cutscene path - is skipped entirely. Editing the text drops the key upstream and this
+  // falls through to the mapper as ordinary free text.
+  const bypassKey = opts?.affordanceKey && affordances.some((a) => a.key === opts.affordanceKey)
+    ? opts.affordanceKey
+    : null
+  if (bypassKey && spec) {
+    const party = await loadPartyCharacters(service, env.adventureId)
+    await logEvent(service, env.adventureId, sessionId, 'entry_mapped', {
+      entry: 'offered', character_id: character.id, beat_id: beatId, text: text.slice(0, 200),
+      affordance_key: bypassKey, via: 'chip',
+    })
+    try {
+      return await executeEntry(
+        service, env, sessionId, character, text, 'offered',
+        { interpretation: `chose: ${bypassKey}`, sceneEffects: null }, spec, beatId, party,
+        { alreadyLogged: true },
+      )
+    } catch (err) {
+      await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
+      throw err
+    }
+  }
+
   const [party, locationRows, npcRows, recentEntryRows] = await Promise.all([
     loadPartyCharacters(service, env.adventureId),
     service.from('locations').select('name').eq('adventure_id', env.adventureId),
@@ -102,6 +149,7 @@ export async function handleCutsceneIntent(
       knownNpcs: ((npcRows.data ?? []) as { name: string }[]).map((n) => n.name),
       recentEvents: agentContextLines(state, 5),
       recentFolds,
+      affordances,
     })
   } catch (err) {
     await commitDiffs(service, env.adventureId, () => [typingDiff(false)])
@@ -125,14 +173,22 @@ async function executeEntry(
   character: CharacterRow,
   text: string,
   entry: 'offered' | 'adhoc' | 'fold_in',
-  mapping: { interpretation: string; sceneEffects: SceneEffects | null },
+  mapping: { interpretation: string; sceneEffects: SceneEffects | null; affordanceKey?: string | null },
   spec: StoredBeatSpec | null,
   beatId: string | null,
   party: CharacterRow[],
+  opts?: { alreadyLogged?: boolean },
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  await logEvent(service, env.adventureId, sessionId, 'entry_mapped', {
-    entry, character_id: character.id, beat_id: beatId, text: text.slice(0, 200),
-  })
+  // The mapper audit trail: the player's RAW text beside the key it was filed under. Misfiled
+  // intent (a real off-script move railroaded into an affordance, or an on-script reply bounced
+  // to adhoc) is the mapper's remaining failure mode - this is what makes it measurable in the
+  // lab instead of anecdotal.
+  if (!opts?.alreadyLogged) {
+    await logEvent(service, env.adventureId, sessionId, 'entry_mapped', {
+      entry, character_id: character.id, beat_id: beatId, text: text.slice(0, 200),
+      affordance_key: mapping.affordanceKey ?? null, via: 'mapper',
+    })
+  }
   await recordProposal(service, {
     adventureId: env.adventureId,
     sessionId,
