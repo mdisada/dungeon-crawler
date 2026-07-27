@@ -21,7 +21,9 @@
  * @param {Array} [ctx.resolutions]   encounter_resolved payloads - drives the graph-health checks
  * @returns {{ ok: boolean, violations: string[] }}
  */
-export function checkInvariants({ eventCounts, state, turnStats, incidents, resolutions = [] }) {
+export function checkInvariants({
+  eventCounts, state, turnStats, incidents, resolutions = [], beatOpens = [], objectiveFails = [],
+}) {
   const violations = []
   // Split by what the finding MEANS, not by how alarming it sounds. `fatal` means the story
   // engine cannot advance, so every further turn is wasted money - abort. `warnings` are real
@@ -92,11 +94,25 @@ export function checkInvariants({ eventCounts, state, turnStats, incidents, reso
   // These three ask the sharper question: did the story advance the way it was authored to, or
   // did the fallbacks carry it? A run the safety nets rescued is not a passing run - it is a
   // failing run with the evidence hidden.
-  const barren = resolutions.filter((r) => (r?.milestones ?? []).length === 0).length
-  if (resolutions.length >= 4 && barren >= Math.ceil(resolutions.length * 0.5)) {
+  // RETIRED 2026-07-27: "N/M encounter resolutions credited no milestone - the outcome maps are
+  // not what is moving the story". Outcome maps are deliberately not what moves the story any
+  // more. Objectives resolve because a scene resolved; the atoms a scene credits are flavour. This
+  // invariant asserted the architecture that was just replaced, and would now fire on every
+  // healthy run.
+  //
+  // What replaces it is the sharper question the same evidence supports: was every scene the
+  // party was SHOWN actually playable? A node whose beat opened and narrated but which never
+  // reached a resolution is a scene the party was handed and had taken away - live 2026-07-27,
+  // the rescue node of "Investigate the Tide-Ledger" opened, narrated, and was retired in the same
+  // tail because the resolution pass counted it as played the moment its beat was inserted.
+  const resolvedNodeKeys = new Set(resolutions.map((r) => r?.node_key).filter(Boolean))
+  const staged = beatOpens.map((p) => p?.node_key).filter(Boolean).filter((k) => !resolvedNodeKeys.has(k))
+  // The last node opened is legitimately still in play when the run's turn budget runs out.
+  const abandoned = staged.slice(0, Math.max(staged.length - 1, 0))
+  if (abandoned.length > 0) {
     violations.push(
-      `${barren}/${resolutions.length} encounter resolutions credited no milestone - the outcome ` +
-      'maps are not what is moving the story')
+      `${abandoned.length} authored scene(s) opened and were never played to a resolution ` +
+      `(${abandoned.slice(0, 3).join(', ')}) - the party was shown a scene and had it taken away`)
   }
 
   // The recognition judge exists to catch what the deterministic path missed. When it is
@@ -109,12 +125,15 @@ export function checkInvariants({ eventCounts, state, turnStats, incidents, reso
       'the safety net is doing the spine\'s job')
   }
 
-  // The navigator arriving at the same non-decision over and over. Whatever the reason, a party
-  // that keeps being told "nothing to open" is a party standing still.
-  if (count('graph_navigation_exhausted') >= 3) {
-    violations.push(
-      `the navigator found nothing to open ${count('graph_navigation_exhausted')}x - the authored ` +
-      'graph is running dry mid-objective')
+  // Exhaustion is no longer a stall - it retires the objective the hard way and the story moves on
+  // (2026-07-27). So it is not a structural failure any more, it is a difficulty signal: every
+  // scene of that objective was played and lost. A run where that keeps happening is a run the
+  // party is losing outright, which is worth surfacing even though nothing is broken.
+  const spent = objectiveFails.filter((p) => p?.cause === 'spent').length
+  if (spent >= 3) {
+    warnings.push(
+      `${spent} objectives were lost with every authored scene played - the party is being beaten ` +
+      'by the content, not stalled by it')
   }
 
   // `graph_navigation_stopped` is the HEALTHY stop: an authored success edge saying "the objective

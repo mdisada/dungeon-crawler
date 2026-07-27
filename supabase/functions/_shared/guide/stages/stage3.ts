@@ -78,13 +78,12 @@ export function buildStage3Prompt(ctx: Stage3Context): { system: string; user: s
 Rules:
 - Objective titles are AT MOST ${OBJECTIVE_TITLE_MAX_WORDS} words, phrased short and OPEN ("Defeat Volgarth", "Find the missing caravan") - they must not spoil twists or prescribe a method.
 - hidden_description is DM-only: what this objective is really about, which scenes ground it, and what the party does not yet know. It exists to catch plot holes. Write COMPLETE prose ending on a finished sentence - a description cut off mid-word ships a broken guide.
-- completion_predicates is a JSON predicate over world state, NEVER a reference to a specific encounter. The live engine can ONLY satisfy atoms from this exact vocabulary - anything else never completes. Grammar:
-  atom: {"flag": "<snake_case_milestone>", "eq": true} - a concrete accomplishment live play can recognize ("lantern_relit", "keeper_freed"). PREFER flags.
+- completion_predicates names what ACHIEVING this objective looks like in world state. It does not decide when the objective is done - the scenes authored later do that - so it is a description, not a contract. It is used to flavour the world once the party wins. Grammar:
+  atom: {"flag": "<snake_case_milestone>", "eq": true} - a concrete accomplishment ("lantern_relit", "keeper_freed"). PREFER flags.
   atom: {"event": "<short past-tense marker>"} - e.g. "party entered the sunken crypt", "the ritual was interrupted".
   combinators: {"any": [<predicate>...]}, {"all": [<predicate>...]}
-- NEVER use "fact" atoms - live play does not write them (NPC status is tracked by internal id, not by name).
-- The cast is NOT named yet - NPCs are authored after you. So never invent placeholder identities to stand in for them ("claimant_a_arrived", "guard_b_bribed"): at play time an observer sees "Lady Isolde arrived" and has no way to know which letter she was, so that milestone can never be recognised and the objective never completes. Write each atom as something the PARTY accomplished, recognisable from the scene alone ("all_claimants_received", "passage_secured"). Where a step really is per-person, prefer ONE atom covering the set over one atom each.
-- Prefer "any" combinators that honor multiple resolutions (kill OR ally OR outwit); keep any "all" chain to at most 2 atoms.
+- The cast is NOT named yet - NPCs are authored after you. So never invent placeholder identities to stand in for them ("claimant_a_arrived", "guard_b_bribed"): at play time an observer sees "Lady Isolde arrived" and has no way to know which letter she was. Write each atom as something the PARTY accomplished, recognisable from the scene alone ("all_claimants_received", "passage_secured").
+- Keep it SHORT - one or two atoms. Prefer "any" over "all".
 - Every objective must require NEW play the party has not already done when it becomes their goal. NEVER author a rung the opening setup ALREADY satisfies - most often a "find/meet/reach" step aimed at an NPC or place the party is already with as the chapter begins. The quest-giver who hands them this quest is already found; "locate them" completes the instant it is revealed, flashes up and vanishes "for no reason", and the ladder telescopes to whatever comes next. Each rung is an obstacle still ahead of them, not a restatement of where they start.
 
 ${ctx.adventureType === 'one_shot'
@@ -159,22 +158,13 @@ export function parseStage3(raw: string): ParseResult<ObjectiveDraft[]> {
       if (title && countWords(title) > OBJECTIVE_TITLE_MAX_WORDS) {
         c.errors.push(`${path}.title: "${title}" is over ${OBJECTIVE_TITLE_MAX_WORDS} words`)
       }
-      const predicateErrors = validatePredicate(o.completion_predicates, `${path}.completion_predicates`)
-      c.errors.push(...predicateErrors)
-      if (predicateErrors.length === 0) {
-        if (containsFactAtom(o.completion_predicates)) {
-          // Live play can never write fact atoms (F14 milestone vocabulary is flags + events),
-          // so a fact-based objective would be uncompletable - hard-fail into regeneration.
-          c.errors.push(`${path}.completion_predicates: "fact" atoms are not completable by live play - use flags or events`)
-        } else if (!hasClaimableAtom(o.completion_predicates)) {
-          // A structurally-valid predicate with no {flag,eq:true} and no {event} - e.g. only
-          // eq:false flags - has NO atom live play can ever claim, so the objective could never
-          // complete and the adventure would ship broken. Bind it into the same regeneration loop
-          // that already runs the fact-atom check above, at the stage that AUTHORS objectives - a
-          // later stage's Retry cannot rewrite them (2.1). Structural, no word-signal matching.
-          c.errors.push(`${path}.completion_predicates: has no claimable milestone - live play only completes {flag,eq:true} or {event} atoms, so this objective could never be finished`)
-        }
-      }
+      // Shape only (2026-07-27). Two hard errors used to live here - "fact atoms are not
+      // completable by live play" and "has no claimable milestone" - and both said the same thing:
+      // this predicate can never complete the objective, so regenerate the whole chapter. That
+      // was true when the predicate WAS completion. Objectives now resolve because a scene
+      // resolved, so an unclaimable predicate costs exactly one flavour flag nobody sets, and
+      // failing a paid generation over it is a worse outcome than shipping it.
+      c.errors.push(...validatePredicate(o.completion_predicates, `${path}.completion_predicates`))
       const hiddenDescription = c.str(o.hidden_description, `${path}.hidden_description`)
       if (hiddenDescription && looksCutOff(hiddenDescription)) {
         // "Success here means the pa" shipped live (2026-07-22) and surfaced only as a stage-7

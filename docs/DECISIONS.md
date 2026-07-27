@@ -1248,3 +1248,56 @@ route radio and the run-table "Route" column now show the real provider ("Fish A
 
 **Updated:** `supabase/functions/_shared/fish.ts` + `ai-proxy` (handleFishTts logs cost),
 Assets Lab `route-controls.tsx` / `image-panel.tsx` / `tts-panel.tsx` / `run-table.tsx` / `types.ts`.
+
+---
+
+## 2026-07-27 — Objectives resolve because a scene resolved, not because atoms added up
+
+**What:** Reversed the direction of objective completion. `objectives.completion_predicates` is no
+longer the progression authority for guides that carry an authored story graph. An objective now
+resolves when one of its authored scenes resolves: winning any route node completes it, and running
+out of scenes retires it as `failed`, which advances the story exactly as a win does. The predicate
+is demoted to a description of what achieving the objective looks like, used to seed flavour flags
+and nothing else. Legacy guides (no `story_nodes`) keep the predicate path unchanged.
+
+`nextNode` gained the invariant the rest of this rests on: it answers `open` or `resolve` and
+nothing else. `exhausted` stopped being a stall and became `resolve(outcome: 'failed')`, so an
+objective cannot be left hanging by any sequence of outcomes. The rescue node is the ladder's
+terminal — the scene that resolves the objective whichever way it goes — and is therefore now
+always built (`buildGuaranteedRoute` no longer returns null when the predicate yields no atom).
+
+**Why:** The predicate was the system's only place of *inference*, and it was authored by a model at
+stage 3 — two stages before the nodes that had to match it, and rewritable by stage 7. Every
+mismatch along that chain was either an objective that could never complete in play or a guide that
+could never generate. Live 2026-07-27: `"Cross Mirehaven's Harbour Front" has 0 route node(s)` and
+`credits unregistered atom(s): ettel_guidance_won` blocked one guide across four identical
+attempts, on a graph with three perfectly good authored scenes — the objective's predicate and its
+nodes' awards were both model-written, in different stages, and had to agree as strings.
+
+Owner direction was to make the main spine work like Adventurers League and Baldur's Gate 3: in a
+published module each Part ends with a Success/Failure box and *both* branches hand off to the next
+Part; in BG3 a quest advances because an authored trigger fired, never because a bag of facts was
+inspected. Scene outcome drives progression; facts drive flavour. We had it inverted.
+
+**Consequences:** whole classes of finding became unauthorable and were removed rather than
+weakened — the prover lost `objective_unwinnable` and `resolves_without_completing` (and its atom
+dimension entirely, so it is now a pure structural walk that proves winnability + termination); the
+lint's `routeNodesFor` counts route nodes structurally instead of by atom satisfaction;
+`objective_no_claimable_atom` and `objective_satisfied_at_start` no longer apply to graph-bearing
+guides; `node_outcome_off_registry` dropped from error to warning; stage 3's two completability
+hard-fails are gone. The recognition judge no longer runs on graph-bearing guides — it existed to
+catch a predicate that missed, and there is no miss to catch. The director's rescue rung now opens
+the rescue NODE through navigation, so a rescue already played and lost resolves the objective
+instead of replaying forever.
+
+`failObjective` gained a `cause` ('stalled' | 'spent'). They read very differently to a player and
+had been sharing one line: `stalled` is the director timing out on a party that never engaged;
+`spent` is a party that played every scene and lost them all, and is explicitly not told the chance
+passed them by.
+
+**Updated:** `packages/rules/src/story/navigate.ts`, `guide/prove.ts` (rewritten),
+`guide/graph.ts`, `guide/guaranteed-route.ts`, `guide/stages/stage3.ts`,
+`guide/stages/stage5-nodes.ts`; new `supabase/functions/session/graph-read.ts` (read/decide half
+split out of `graph-navigator.ts` so `progress.ts` can consult the graph without a cycle);
+`session/progress.ts`, `session/director.ts`, `session/graph-navigator.ts`,
+`guide-pipeline/stages-endings.ts`, `tests/lab/prove-guide.ts`.

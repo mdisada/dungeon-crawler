@@ -10,7 +10,7 @@
 
 import { evaluatePredicate, listMilestoneAtoms } from '../story/evaluate.ts'
 import { canonicalizeAtomSlug } from '../story/atoms.ts'
-import { atomsSatisfy, minimalSatisfyingAtoms } from './guaranteed-route.ts'
+import { minimalSatisfyingAtoms } from './guaranteed-route.ts'
 import type { NodeKind, TransitionTier } from './nodes.ts'
 
 /** Combat pacing bounds, mirrored from the runtime (session/beats.ts) so the guide is checked
@@ -127,14 +127,22 @@ function awardableAtoms(graph: StoryGraph): Set<string> {
   return set
 }
 
-/** Route-role nodes whose full success provably completes this objective (any/all aware). */
+/**
+ * Route-role nodes serving this objective.
+ *
+ * This used to filter on `atomsSatisfy(objective.completionPredicates, n.onSuccess)` - only nodes
+ * whose awarded atoms provably satisfied the predicate counted as routes. That coupling is what
+ * reported `"Cross Mirehaven's Harbour Front" has 0 route node(s)` on a guide with three perfectly
+ * good authored scenes, four times in a row, and blocked it from ever shipping: the objective's
+ * predicate and its nodes' awards were both authored by a model, in different stages, and had to
+ * agree as strings.
+ *
+ * A route completes its objective because it is a scene with a winning transition, so counting is
+ * structural now. Whether any of them can actually be won is the prover's question, not the
+ * linter's - and the prover walks the real navigator to answer it.
+ */
 function routeNodesFor(objective: GraphObjective, graph: StoryGraph): GraphNode[] {
-  return (graph.nodes ?? []).filter(
-    (n) =>
-      n.role === 'route' &&
-      n.objectiveId === objective.id &&
-      atomsSatisfy(objective.completionPredicates, n.onSuccess),
-  )
+  return (graph.nodes ?? []).filter((n) => n.role === 'route' && n.objectiveId === objective.id)
 }
 
 /**
@@ -169,8 +177,42 @@ export function lintStoryGraph(graph: StoryGraph): LintFinding[] {
   const hasNodes = (graph.nodes?.length ?? 0) > 0
   const maxObjectiveIndex = graph.objectives.reduce((m, o) => Math.max(m, o.index), -1)
 
-  // 1. Every objective must be completable by SOMETHING.
+  // 1. Every objective must be playable.
   for (const objective of graph.objectives) {
+    const isClimax = objective.index === maxObjectiveIndex
+
+    // GRAPH-BEARING GUIDES (2026-07-27): playability is structural. Every predicate-derived check
+    // below is skipped, because none of them describe how these objectives complete any more - an
+    // objective resolves when one of its scenes resolves. `objective_no_claimable_atom` and
+    // `objective_satisfied_at_start` in particular were both statements about a contract that no
+    // longer exists, and both were blocking errors on a paid generation.
+    if (hasNodes) {
+      const routes = routeNodesFor(objective, graph).length
+      const hasRescue = (graph.nodes ?? []).some((n) => n.objectiveId === objective.id && n.role === 'rescue')
+      if (routes === 0 && !hasRescue) {
+        findings.push({
+          severity: 'error',
+          code: 'objective_unreachable',
+          message: `"${objective.title}" has no authored scene at all - there is nothing here to play.`,
+          target: { table: 'objectives', id: objective.id },
+        })
+      } else if (routes < MIN_ROUTES_PER_OBJECTIVE) {
+        findings.push({
+          severity: 'error',
+          code: isClimax ? 'climax_underfunded' : 'objective_missing_route_nodes',
+          message: isClimax
+            ? `The finale "${objective.title}" has ${routes} route node(s). A climax players can only ` +
+              'win through the rescue route reads as a dead end - author at least two ways to win it.'
+            : `"${objective.title}" has ${routes} route node(s); the Three-Clue Rule wants ` +
+              `${MIN_ROUTES_PER_OBJECTIVE}+ so a party that flubs one still has a way through.`,
+          target: { table: 'objectives', id: objective.id },
+        })
+      }
+      continue
+    }
+
+    // LEGACY GUIDES (no authored nodes) still complete by predicate, so they still need one that
+    // live play can claim.
     const atoms = listMilestoneAtoms(objective.completionPredicates)
     const all = [...atoms.flags, ...atoms.events, ...atoms.facts]
     if (all.length === 0) {
@@ -199,12 +241,8 @@ export function lintStoryGraph(graph: StoryGraph): LintFinding[] {
       })
       continue
     }
-    // Node graph present: routes are authored ROUTE NODES, and "too few" is an error (the graph
-    // is the finished product, not a sketch). Legacy guides keep the encounter/ingredient count
-    // and the softer thin-routes warning.
-    const routes = hasNodes ? routeNodesFor(objective, graph).length : routeCount(objective, graph)
+    const routes = routeCount(objective, graph)
     const rescue = (objective.guaranteedRouteAtoms ?? []).length > 0
-    const isClimax = objective.index === maxObjectiveIndex
     if (routes === 0 && !rescue) {
       findings.push({
         severity: 'error',
@@ -214,18 +252,7 @@ export function lintStoryGraph(graph: StoryGraph): LintFinding[] {
           `(${all.join(', ')}) and no guaranteed route. The party could not finish it by any means.`,
         target: { table: 'objectives', id: objective.id },
       })
-    } else if (hasNodes && routes < MIN_ROUTES_PER_OBJECTIVE) {
-      findings.push({
-        severity: 'error',
-        code: isClimax ? 'climax_underfunded' : 'objective_missing_route_nodes',
-        message: isClimax
-          ? `The finale "${objective.title}" has ${routes} route node(s). A climax players can only ` +
-            'win through the rescue route reads as a dead end - author at least two ways to win it.'
-          : `"${objective.title}" has ${routes} route node(s); the Three-Clue Rule wants ` +
-            `${MIN_ROUTES_PER_OBJECTIVE}+ so a party that flubs one still has a way through.`,
-        target: { table: 'objectives', id: objective.id },
-      })
-    } else if (!hasNodes && routes < MIN_ROUTES_PER_OBJECTIVE) {
+    } else if (routes < MIN_ROUTES_PER_OBJECTIVE) {
       // Three-Clue Rule: the rescue route is the third clue, not the first.
       findings.push({
         severity: 'warning',
@@ -473,12 +500,17 @@ function lintNodes(graph: StoryGraph): LintFinding[] {
           'a scene the party can lose for free. Declare a local atom and reference it in on_failure.' })
     }
 
-    // Outcome atoms must all be registered (a hand-edit could introduce a stray).
+    // Outcome atoms should be registered - but this is a WARNING now (2026-07-27). It was an
+    // error back when a credited atom was how an objective completed, so an unregistered one
+    // meant a scene whose win went nowhere. Atoms are flavour now: an unregistered one is a flag
+    // nobody reads, which is untidy and worth surfacing, and nothing like a reason to refuse a
+    // finished guide. Live 2026-07-27, `credits unregistered atom(s): ettel_guidance_won` blocked
+    // a guide four attempts running.
     if (registry.size > 0) {
       const off = [...node.onSuccess, ...node.onPartial, ...node.onFailure]
         .filter((a) => !registry.has(canonicalizeAtomSlug(a)))
       if (off.length > 0) {
-        findings.push({ severity: 'error', code: 'node_outcome_off_registry', target: at,
+        findings.push({ severity: 'warning', code: 'node_outcome_off_registry', target: at,
           message: `Node "${node.key}" credits unregistered atom(s): ${off.slice(0, 4).join(', ')}.` })
       }
     }

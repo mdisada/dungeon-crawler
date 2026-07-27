@@ -11,121 +11,15 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
-import { advanceBeat, nextNode } from '../_shared/story/index.ts'
-import type { CoreLoop, NavNode, NavTier } from '../_shared/story/index.ts'
+import { advanceBeat } from '../_shared/story/index.ts'
+import type { CoreLoop } from '../_shared/story/index.ts'
 import type { Json } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { parseStoredBeatSpec, runCombatPlaceholderEncounter } from './encounters.ts'
+import { graphDecision } from './graph-read.ts'
+import type { AuthoredNodeRow } from './graph-read.ts'
 import { narrationBeat } from './narration.ts'
 import { assertOk, commitDiffs, logEvent } from './util.ts'
-
-/** One authored node, as stored. `spec` is the same shape beats.encounter_spec has always had. */
-export interface AuthoredNodeRow {
-  id: string
-  key: string
-  objectiveId: string
-  index: number
-  kind: 'skill_challenge' | 'social' | 'puzzle' | 'combat'
-  role: 'route' | 'rescue'
-  label: string
-  narrationSeed: string
-  spec: Record<string, unknown> | null
-  affordances: { key: string; label: string; hint: string }[]
-  transitions: { on: NavTier; toNodeKey: string | null; arrivalContext: string }[]
-}
-
-/** Pass or fail. A `partial` on a row written before 2026-07-27 reads as a pass, matching the
- *  social collapse - a partial was always a win that cost something. */
-function asTier(raw: unknown): NavTier {
-  return raw === 'failed' ? 'failed' : 'full'
-}
-
-/** Every authored node serving one objective. Empty for legacy guides - the caller then falls
- *  back to the runtime planner. */
-export async function loadObjectiveNodes(
-  service: SupabaseClient,
-  adventureId: string,
-  objectiveId: string,
-): Promise<AuthoredNodeRow[]> {
-  const { data, error } = await service
-    .from('story_nodes')
-    .select('id, key, objective_id, index, kind, role, label, narration_seed, encounter_spec, affordances, transitions')
-    .eq('adventure_id', adventureId)
-    .eq('objective_id', objectiveId)
-    .order('index')
-  if (error) {
-    console.error('story_nodes load failed', error)
-    return []
-  }
-  return ((data ?? []) as Record<string, unknown>[]).map((n) => ({
-    id: n.id as string,
-    key: n.key as string,
-    objectiveId: n.objective_id as string,
-    index: Number(n.index ?? 0),
-    kind: n.kind as AuthoredNodeRow['kind'],
-    role: n.role === 'rescue' ? 'rescue' : 'route',
-    label: (n.label as string) ?? '',
-    narrationSeed: (n.narration_seed as string) ?? '',
-    spec: (typeof n.encounter_spec === 'object' && n.encounter_spec !== null
-      ? n.encounter_spec as Record<string, unknown>
-      : null),
-    affordances: (Array.isArray(n.affordances) ? n.affordances : []).flatMap((a) => {
-      if (typeof a !== 'object' || a === null) return []
-      const af = a as Record<string, unknown>
-      return typeof af.key === 'string'
-        ? [{ key: af.key, label: String(af.label ?? af.key), hint: String(af.hint ?? '') }]
-        : []
-    }),
-    transitions: (Array.isArray(n.transitions) ? n.transitions : []).flatMap((t) => {
-      if (typeof t !== 'object' || t === null) return []
-      const tr = t as Record<string, unknown>
-      return [{
-        on: asTier(tr.on),
-        toNodeKey: typeof tr.to_node_key === 'string' ? tr.to_node_key : null,
-        arrivalContext: typeof tr.arrival_context === 'string' ? tr.arrival_context : '',
-      }]
-    }),
-  }))
-}
-
-/** Node keys already instantiated on this loop - `beats.node_id` is the record. */
-export async function usedNodeKeys(
-  service: SupabaseClient,
-  loopId: string,
-  nodes: readonly AuthoredNodeRow[],
-): Promise<string[]> {
-  const { data, error } = await service.from('beats').select('node_id').eq('core_loop_id', loopId)
-  if (error) return []
-  const usedIds = new Set(
-    ((data ?? []) as { node_id: string | null }[]).map((b) => b.node_id).filter((id): id is string => Boolean(id)),
-  )
-  return nodes.filter((n) => usedIds.has(n.id)).map((n) => n.key)
-}
-
-/** The node/tier the party just came off, read from the encounter they last resolved. */
-export async function lastResolvedNode(
-  service: SupabaseClient,
-  adventureId: string,
-  nodes: readonly AuthoredNodeRow[],
-): Promise<{ fromKey: string | null; tier: NavTier | null }> {
-  const { data } = await service
-    .from('event_log')
-    .select('payload')
-    .eq('adventure_id', adventureId)
-    .eq('type', 'encounter_resolved')
-    .order('created_at', { ascending: false })
-    .limit(1)
-  const payload = ((data ?? [])[0]?.payload ?? null) as Record<string, unknown> | null
-  if (!payload) return { fromKey: null, tier: null }
-  const nodeKey = typeof payload.node_key === 'string' ? payload.node_key : null
-  if (!nodeKey || !nodes.some((n) => n.key === nodeKey)) return { fromKey: null, tier: null }
-  return { fromKey: nodeKey, tier: asTier(payload.tier) }
-}
-
-export const toNavNodes = (nodes: readonly AuthoredNodeRow[]): NavNode[] =>
-  nodes.map((n) => ({
-    id: n.id, key: n.key, objectiveId: n.objectiveId, index: n.index, role: n.role, transitions: n.transitions,
-  }))
 
 export interface OpenNodeContext {
   loop: CoreLoop
@@ -249,30 +143,28 @@ export async function navigateAndOpen(
   persist: (before: CoreLoop[], after: CoreLoop[]) => Promise<void>,
   rung: 'replan_beat' | 'guaranteed_route' | null,
 ): Promise<{ status: number; body: Record<string, unknown> } | null> {
-  const nodes = await loadObjectiveNodes(service, env.adventureId, objectiveId)
-  if (nodes.length === 0) return null
+  const read = await graphDecision(service, env.adventureId, objectiveId, rung)
+  if (!read) return null
+  const { nodes, used, decision } = read
 
-  const [used, last] = await Promise.all([
-    usedNodeKeys(service, ctx.loop.id, nodes),
-    lastResolvedNode(service, env.adventureId, nodes),
-  ])
-  const decision = nextNode({
-    nodes: toNavNodes(nodes), fromKey: last.fromKey, tier: last.tier, usedKeys: used, rung,
-  })
-
-  if (decision.action === 'none') {
+  if (decision.action === 'resolve') {
+    // Nothing to open: the graph says this objective is finished, one way or the other. The
+    // progress head owns retiring it (it holds the ladder, the reveal order and the narration),
+    // and it runs on the same pass - so this only records which way the graph landed.
+    //
     // Two very different outcomes used to share one event name, and the healthy one is far more
     // common - so six `graph_navigation_exhausted` rows in the 2026-07-26 heist read as "the graph
-    // ran dry" when every one of them was in fact a clean stop hiding a dead end elsewhere.
-    // `objective_done` is the outcome map completing the objective and progress evaluation taking
-    // over; `exhausted` is the honest "nothing authored is left" the director must see.
+    // ran dry" when every one of them was in fact a clean stop. `objective_done` is a scene won;
+    // `exhausted` is every authored scene spent, which now resolves the objective the hard way
+    // rather than stranding it.
     const type = decision.reason === 'objective_done'
       ? 'graph_navigation_stopped'
       : 'graph_navigation_exhausted'
     await logEvent(service, env.adventureId, sessionId, type, {
-      objective_id: objectiveId, reason: decision.reason, used: used as unknown as Json,
+      objective_id: objectiveId, reason: decision.reason, outcome: decision.outcome,
+      used: used as unknown as Json,
     }).catch(() => {})
-    return { status: 200, body: { ok: true, navigated: false, reason: decision.reason } }
+    return { status: 200, body: { ok: true, navigated: false, reason: decision.reason, outcome: decision.outcome } }
   }
 
   const node = nodes.find((n) => n.key === decision.node.key)!

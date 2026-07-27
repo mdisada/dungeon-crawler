@@ -275,22 +275,19 @@ async function runReachabilityGate(env: StageEnv): Promise<void> {
     })
   }
   // The playability proof. The lint above checks SHAPES someone thought to write a rule about;
-  // this walks every path through the authored graph, carrying the atoms each outcome awards, and
-  // asks the only question that matters: can the party still finish?
+  // this walks every path through the authored graph and asks whether it behaves: is the
+  // objective winnable at all, and does every path terminate?
   //
-  // It earned its place on the first real guide it saw. That guide passed the lint with zero
-  // errors, and the proof found an objective whose second route and rescue were unreachable
-  // because the FIRST node awarded the completion atom on failure as well as on success - losing
-  // the scene won the objective. Nothing structural could see it: the failure map was non-empty,
-  // the transitions were valid, the atom was registered.
+  // It earned its place on the first real guide it saw, catching an objective whose second route
+  // and rescue were unreachable because losing the FIRST node won the objective. The specific
+  // defect it found is now unauthorable (completion is structural, not derived from atoms), but
+  // the walk stays - the whole point of a prover over a linter is catching the shape nobody
+  // predicted, and the next one will not look like the last.
   const proofFindings = proveGraph({
-    objectives: graph.objectives.map((o) => ({
-      id: o.id, title: o.title, completionPredicates: o.completionPredicates,
-    })),
+    objectives: graph.objectives.map((o) => ({ id: o.id, title: o.title })),
     nodes: (graph.nodes ?? []).map((n) => ({
       id: n.id, key: n.key, objectiveId: n.objectiveId, index: n.index, role: n.role,
       transitions: n.transitions,
-      onSuccess: n.onSuccess, onFailure: n.onFailure,
     })),
   })
   if (proofFindings.length > 0) {

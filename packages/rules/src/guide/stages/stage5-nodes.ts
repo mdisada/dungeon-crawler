@@ -168,11 +168,13 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
     if (!objective) continue
     seenObjectives.add(objectiveIndex)
     const objKey = objectiveKeyOf(objective.id)
+    // FLAVOUR, NOT COMPLETION (2026-07-27). These atoms used to BE the completion contract, and an
+    // objective whose stage-3 predicate yielded none had its whole node block rejected - which
+    // then tripped the "no nodes authored for objective N" check below and took the chapter, and
+    // with it the guide, down. Objectives now resolve because a scene resolved, so an empty set
+    // costs nothing: the atoms are still written on a win to colour later narration and feed
+    // ending signals, and their absence is no longer anybody's problem.
     const onSuccess = (minimalSatisfyingAtoms(objective.completionPredicates) ?? []) as string[]
-    if (onSuccess.length === 0) {
-      c.errors.push(`$.objectives[${bi}]: objective "${objective.title}" has no writable completion atom`)
-      continue
-    }
     const rawNodes = c.arr(block.nodes, `$.objectives[${bi}].nodes`, MIN_ROUTE_NODES, 5)
     const nodeCount = rawNodes.length
 

@@ -98,13 +98,17 @@ describe('the core property: a guaranteed route actually completes its objective
     })
   })
 
-  it('predicates already true at the start get no route, but still evaluate true', () => {
+  it('predicates already true at the start award nothing, but still get their terminal scene', () => {
     for (const predicate of freeFromTheStart) {
       expect(minimalSatisfyingAtoms(predicate), JSON.stringify(predicate)).toEqual([])
       expect(atomsSatisfy(predicate, []), JSON.stringify(predicate)).toBe(true)
-      expect(buildGuaranteedRoute({
+      // The rescue is the ladder's terminal now, not a predicate-satisfying device: an objective
+      // whose predicate is free still needs the scene that resolves it.
+      const route = buildGuaranteedRoute({
         objectiveId: 'o', title: 'Already true', completionPredicates: predicate,
-      }), JSON.stringify(predicate)).toBeNull()
+      })
+      expect(route, JSON.stringify(predicate)).not.toBeNull()
+      expect(route!.onSuccess).toEqual([])
     }
   })
 })
@@ -141,8 +145,13 @@ describe('buildGuaranteedRoute', () => {
     expect(route.onFailure).toEqual([])
   })
 
-  it('returns null when the predicate cannot be satisfied by writing atoms', () => {
-    expect(buildGuaranteedRoute({ ...input, completionPredicates: { flag: 'x', eq: false } })).toBeNull()
+  it('still builds when the predicate cannot be satisfied by writing atoms', () => {
+    // This returned null until 2026-07-27, on the reasoning that a rescue which cannot complete
+    // the objective is worse than none. The rescue is the terminal scene now - the one that
+    // resolves the objective whichever way it goes - so an objective without one has no floor.
+    const route = buildGuaranteedRoute({ ...input, completionPredicates: { flag: 'x', eq: false } })
+    expect(route).not.toBeNull()
+    expect(route!.onSuccess).toEqual([])
   })
 })
 
@@ -171,10 +180,12 @@ describe('negative clauses cost nothing (2026-07-23)', () => {
     })).toEqual([])
   })
 
-  it('an objective satisfied by absence alone gets no route - it needs no rescue', () => {
-    expect(buildGuaranteedRoute({
+  it('an objective satisfied by absence alone still gets its terminal scene', () => {
+    const route = buildGuaranteedRoute({
       objectiveId: 'o', title: 'Do not raise the alarm',
       completionPredicates: { flag: 'alarm_raised', eq: false },
-    })).toBeNull()
+    })
+    expect(route).not.toBeNull()
+    expect(route!.onSuccess).toEqual([])
   })
 })

@@ -41,7 +41,7 @@ describe('nextNode', () => {
 
   it('treats a null target on the SUCCESS tier as the objective resolving here', () => {
     const result = nextNode({ nodes: graph, fromKey: 'n0', tier: 'full', usedKeys: ['n0'] })
-    expect(result).toEqual({ action: 'none', reason: 'objective_done' })
+    expect(result).toEqual({ action: 'resolve', outcome: 'completed', reason: 'objective_done' })
   })
 
   it('director replan takes a different unused route', () => {
@@ -71,9 +71,9 @@ describe('nextNode', () => {
     expect(result.node.key).toBe('n0')
   })
 
-  it('reports exhaustion when every node has played', () => {
+  it('retires the objective when every node has played', () => {
     const result = nextNode({ nodes: graph, fromKey: null, tier: null, usedKeys: ['n0', 'n1', 'r0'] })
-    expect(result).toEqual({ action: 'none', reason: 'exhausted' })
+    expect(result).toEqual({ action: 'resolve', outcome: 'failed', reason: 'exhausted' })
   })
 
   it('is deterministic', () => {
@@ -118,21 +118,79 @@ describe('null targets on failure tiers (2026-07-27 regression)', () => {
     expect(r).toMatchObject({ action: 'open', reason: 'rescue' })
   })
 
-  it('reports exhaustion - never objective_done - once a failing party has played everything', () => {
+  it('retires the objective the HARD way once a failing party has played everything', () => {
     const r = nextNode({ nodes: deadEnd, fromKey: 'n0', tier: 'failed', usedKeys: ['n0', 'n1', 'r0'] })
-    expect(r).toEqual({ action: 'none', reason: 'exhausted' })
+    expect(r).toEqual({ action: 'resolve', outcome: 'failed', reason: 'exhausted' })
   })
 
-  it('still resolves the objective when the party actually succeeded', () => {
+  it('still resolves the objective cleanly when the party actually succeeded', () => {
     expect(nextNode({ nodes: deadEnd, fromKey: 'n0', tier: 'full', usedKeys: ['n0'] }))
-      .toEqual({ action: 'none', reason: 'objective_done' })
+      .toEqual({ action: 'resolve', outcome: 'completed', reason: 'objective_done' })
   })
 
-  it('never returns objective_done for a failure tier, whatever has been played', () => {
+  it('never resolves a failure tier as COMPLETED, whatever has been played', () => {
     for (const used of [[], ['n0'], ['n0', 'n1'], ['n0', 'n1', 'r0']]) {
       const r = nextNode({ nodes: deadEnd, fromKey: 'n0', tier: 'failed', usedKeys: used })
-      if (r.action === 'none') expect(r.reason).toBe('exhausted')
+      if (r.action === 'resolve') expect(r.outcome).toBe('failed')
     }
+  })
+})
+
+describe('the termination guarantee (2026-07-27)', () => {
+  // An objective must never be left with nothing to play. Every branch of nextNode returns either
+  // a scene or a resolution, so a party that fails everything is handed the failure ending of the
+  // thread and the story moves on - the Adventurers League failure box, not a stall.
+
+  it('answers open or resolve for every reachable input, never a third thing', () => {
+    const nodes: NavNode[] = [
+      node({ key: 'n0', index: 0, transitions: [
+        { on: 'full', toNodeKey: null, arrivalContext: '' },
+        { on: 'failed', toNodeKey: 'n1', arrivalContext: 'x' },
+      ] }),
+      node({ key: 'n1', index: 1 }),
+      node({ key: 'r0', index: 0, role: 'rescue' }),
+    ]
+    const rungs = [null, 'replan_beat', 'guaranteed_route'] as const
+    for (const used of [[], ['n0'], ['n0', 'n1'], ['n0', 'n1', 'r0']]) {
+      for (const from of [null, 'n0', 'n1', 'r0']) {
+        for (const tier of ['full', 'failed'] as const) {
+          for (const rung of rungs) {
+            const r = nextNode({ nodes, fromKey: from, tier: from ? tier : null, usedKeys: used, rung })
+            expect(['open', 'resolve']).toContain(r.action)
+          }
+        }
+      }
+    }
+  })
+
+  it('resolves rather than replaying a rescue the party already lost', () => {
+    const nodes: NavNode[] = [
+      node({ key: 'n0', index: 0 }),
+      node({ key: 'r0', index: 0, role: 'rescue' }),
+    ]
+    expect(nextNode({ nodes, fromKey: 'r0', tier: 'failed', usedKeys: ['n0', 'r0'], rung: 'guaranteed_route' }))
+      .toEqual({ action: 'resolve', outcome: 'failed', reason: 'exhausted' })
+  })
+
+  it('resolves an objective with no authored nodes left rather than stranding it', () => {
+    expect(nextNode({ nodes: [], fromKey: null, tier: null, usedKeys: [] }))
+      .toEqual({ action: 'resolve', outcome: 'failed', reason: 'exhausted' })
+  })
+
+  it('reaches an unplayed rescue before resolving, with nothing yet resolved', () => {
+    // Every route instantiated but no outcome recorded for this objective yet - the "nothing
+    // resolved" branch. It returned `exhausted` here for as long as `exhausted` opened nothing,
+    // and the moment exhaustion started RETIRING the objective that became a way to throw away
+    // the ladder's terminal scene while it sat unplayed.
+    const nodes: NavNode[] = [
+      node({ key: 'n0', index: 0 }),
+      node({ key: 'n1', index: 1 }),
+      node({ key: 'r0', index: 0, role: 'rescue' }),
+    ]
+    const r = nextNode({ nodes, fromKey: null, tier: null, usedKeys: ['n0', 'n1'] })
+    expect(r).toMatchObject({ action: 'open', reason: 'rescue' })
+    if (r.action !== 'open') return
+    expect(r.node.key).toBe('r0')
   })
 })
 
@@ -168,13 +226,13 @@ describe('failure loops (2026-07-26 regression)', () => {
     expect(r).toMatchObject({ action: 'open', reason: 'rescue' })
   })
 
-  it('reports exhaustion rather than looping when even the rescue is spent', () => {
+  it('retires the objective rather than looping when even the rescue is spent', () => {
     const r = nextNode({ nodes: cycle, fromKey: 'n1', tier: 'failed', usedKeys: ['n0', 'n1', 'r0'] })
-    expect(r).toEqual({ action: 'none', reason: 'exhausted' })
+    expect(r).toEqual({ action: 'resolve', outcome: 'failed', reason: 'exhausted' })
   })
 
   it('a full success still resolves the objective, not a re-route', () => {
     expect(nextNode({ nodes: cycle, fromKey: 'n0', tier: 'full', usedKeys: ['n0'] }))
-      .toEqual({ action: 'none', reason: 'objective_done' })
+      .toEqual({ action: 'resolve', outcome: 'completed', reason: 'objective_done' })
   })
 })

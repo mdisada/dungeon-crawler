@@ -20,6 +20,7 @@ import { loadLoops, planAndOpenBeat } from './beats.ts'
 import { openSkillChallengeFromSpec, resolveOpenEncounter } from './encounters.ts'
 import type { StoredBeatSpec } from './encounters.ts'
 import { deliverRung, promoteOpening } from './escalation.ts'
+import { loadObjectiveNodes } from './graph-read.ts'
 import { narrationBeat } from './narration.ts'
 import { pacingFor } from './pacing.ts'
 import { evaluateStoryProgress, failObjective } from './progress.ts'
@@ -333,7 +334,27 @@ export async function runProgressDirector(
     }
 
     if (decision.action === 'guaranteed_route') {
-      // The authored routes did not work out. Open the code-authored one: its outcome map was
+      // GRAPH-BEARING GUIDES: the rescue is an authored NODE, so open it through navigation.
+      // Opening the stored spec directly runs the same scene without ever writing `beats.node_id`,
+      // which leaves the navigator convinced the rescue is still unplayed - it offers it again on
+      // the next escalation, and the ladder never reaches its terminal. Routing through
+      // planAndOpenBeat also means a rescue the party has ALREADY played and lost resolves the
+      // objective instead of replaying, which is the whole point of the terminal.
+      const graphNodes = currentObjectiveId
+        ? await loadObjectiveNodes(service, env.adventureId, currentObjectiveId)
+        : []
+      if (graphNodes.length > 0 && loop) {
+        try {
+          await planAndOpenBeat(service, env, sessionId, loop.id, 'guaranteed_route')
+        } catch (err) {
+          console.error('director rescue navigation failed', err)
+          await logEvent(service, env.adventureId, sessionId, 'incident', {
+            kind: 'director_rescue_failed', route_health: routeHealth,
+          }).catch(() => {})
+        }
+        return decision
+      }
+      // Legacy guides: open the code-authored route from its stored spec. Its outcome map was
       // generated from the objective's own predicate, so succeeding here provably completes it.
       // The party still has to PLAY it - this is a route, not a handout.
       if (guaranteedRoute) {

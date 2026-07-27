@@ -275,6 +275,10 @@ export async function executeRun(run) {
             `event_log?adventure_id=eq.${advId}&select=payload&type=eq.incident`)).map((e) => e.payload),
           resolutions: (await serviceRest('GET',
             `event_log?adventure_id=eq.${advId}&select=payload&type=eq.encounter_resolved`)).map((e) => e.payload),
+          beatOpens: (await serviceRest('GET',
+            `event_log?adventure_id=eq.${advId}&select=payload&type=eq.beat_opened&order=id`)).map((e) => e.payload),
+          objectiveFails: (await serviceRest('GET',
+            `event_log?adventure_id=eq.${advId}&select=payload&type=eq.objective_failed`)).map((e) => e.payload),
         })
         for (const w of health.warnings ?? []) log('play', 'invariant.warning', w, { at_turn: turn })
         if (!health.ok) {
@@ -421,6 +425,8 @@ export async function executeRun(run) {
     summary.invariants = checkInvariants({
       eventCounts: byType, state, turnStats, incidents: summary.incidents,
       resolutions: events.filter((e) => e.type === 'encounter_resolved').map((e) => e.payload),
+      beatOpens: events.filter((e) => e.type === 'beat_opened').map((e) => e.payload),
+      objectiveFails: events.filter((e) => e.type === 'objective_failed').map((e) => e.payload),
     })
     writeFileSync(`tests/lab/logs/${run.id}.summary.json`, JSON.stringify(summary, null, 2))
     for (const w of summary.invariants.warnings ?? []) log('analysis', 'invariant.warning', w, {})

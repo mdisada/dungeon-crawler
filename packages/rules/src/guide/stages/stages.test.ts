@@ -197,19 +197,20 @@ describe('stage 3 (objectives + predicates)', () => {
     expect(system).toContain('Secure the forged deed')
   })
 
-  it('rejects an objective whose predicate has no atom live play can claim (2.1)', () => {
-    // Structurally valid (validatePredicate passes) but uncompletable: an eq:false flag is never
-    // written by a milestone, so this objective could never finish - it must not ship.
+  it('accepts an objective whose predicate has no claimable atom (2026-07-27)', () => {
+    // This was a hard error until objectives stopped completing by predicate. An eq:false flag is
+    // never written by a milestone, which used to mean "this objective can never finish, so
+    // regenerate the whole chapter". Objectives resolve when a scene resolves now, so the cost of
+    // an unclaimable predicate is one flavour flag nobody sets - not worth failing paid
+    // generation over.
     const result = parseStage3(JSON.stringify({
       objectives: [{
         title: 'Keep the gate shut',
-        hidden_description: 'the party must never open it',
+        hidden_description: 'The party must never open it.',
         completion_predicates: { flag: 'gate_opened', eq: false },
       }],
     }))
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.errors.some((e) => e.includes('no claimable milestone'))).toBe(true)
+    expect(result.ok).toBe(true)
   })
 
   it('accepts an event-only predicate as claimable (2.1)', () => {

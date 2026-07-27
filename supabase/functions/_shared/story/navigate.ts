@@ -45,16 +45,24 @@ export interface NavigateInput {
   rung?: 'replan_beat' | 'guaranteed_route' | null
 }
 
+/**
+ * `resolve` retires the objective. Two tiers, both of which ADVANCE the story (2026-07-27):
+ * `completed` is the clean win, `failed` is "they got through it, and it cost them" - the
+ * Adventurers League failure box, where the party proceeds to Part 2 with the alarm raised.
+ *
+ * Modelled as a distinct action rather than an optional field on `none` so no call site can read
+ * the decision and forget the outcome.
+ */
 export type NavigateResult =
   | { action: 'open'; node: NavNode; arrivalContext: string; reason: NavReason }
-  | { action: 'none'; reason: NavReason }
+  | { action: 'resolve'; outcome: 'completed' | 'failed'; reason: NavReason }
 
 export type NavReason =
   | 'transition'      // the resolved node's authored edge
   | 'first'           // the objective's opening node
   | 'alternate'       // director rung 3: a different authored route
   | 'rescue'          // director rung 4: the guaranteed route
-  | 'exhausted'       // nothing playable left
+  | 'exhausted'       // every authored scene is spent - the objective resolves the hard way
   | 'objective_done'  // the authored edge says the objective resolves here
 
 const byIndex = (a: NavNode, b: NavNode) => a.index - b.index
@@ -65,6 +73,12 @@ const byIndex = (a: NavNode, b: NavNode) => a.index - b.index
  * 2. A director replan request takes the cheapest UNUSED route node.
  * 3. Otherwise follow the resolved node's authored transition for its tier.
  * 4. With nothing resolved yet, open the objective's first route node.
+ *
+ * THE TERMINATION GUARANTEE (2026-07-27). Every branch below ends in either `open` or `resolve` -
+ * there is no third answer, so an objective cannot be left hanging. A party that fails everything
+ * runs out of scenes and the objective resolves `failed`, which advances the story exactly like a
+ * win does. This is what makes the main spine unstallable BY CONSTRUCTION rather than by a lint
+ * rule, and it is why the prover no longer needs to ask whether an objective is winnable.
  */
 export function nextNode(input: NavigateInput): NavigateResult {
   const routes = input.nodes.filter((n) => n.role === 'route').sort(byIndex)
@@ -72,9 +86,11 @@ export function nextNode(input: NavigateInput): NavigateResult {
   const used = new Set(input.usedKeys)
 
   if (input.rung === 'guaranteed_route') {
-    return rescue
+    // `!used` matters: without it the director's last rung re-opens a rescue the party already
+    // played and lost, forever. Re-running a scene they have seen is not a way through.
+    return rescue && !used.has(rescue.key)
       ? { action: 'open', node: rescue, arrivalContext: '', reason: 'rescue' }
-      : { action: 'none', reason: 'exhausted' }
+      : { action: 'resolve', outcome: 'failed', reason: 'exhausted' }
   }
 
   if (input.rung === 'replan_beat') {
@@ -83,7 +99,7 @@ export function nextNode(input: NavigateInput): NavigateResult {
     // Every authored route has been played; the rescue is what is left.
     return rescue && !used.has(rescue.key)
       ? { action: 'open', node: rescue, arrivalContext: '', reason: 'rescue' }
-      : { action: 'none', reason: 'exhausted' }
+      : { action: 'resolve', outcome: 'failed', reason: 'exhausted' }
   }
 
   if (input.fromKey && input.tier) {
@@ -92,16 +108,17 @@ export function nextNode(input: NavigateInput): NavigateResult {
     if (edge) {
       if (edge.toNodeKey === null) {
         // A null target on the SUCCESS tier is the authored graph saying "the objective resolves
-        // here" - the outcome map credited it and progress evaluation takes over.
+        // here". Passing ANY authored scene wins the objective - the routes are alternative ways
+        // through, not steps to accumulate (BG3's persuade/intimidate/bribe converging on one
+        // state transition).
         //
-        // On a FAILURE tier it says nothing of the sort, and reading it as "resolved" strands the
-        // party: the scene opened nothing next, credited nothing, and left the objective open with
-        // everyone standing in a finished room. Live 2026-07-26, three of five resolutions came in
-        // failed or partial, every one of them awarded zero milestones, and one objective arrived
-        // at this same dead end THREE times - identical `used` list each time - before the
-        // recognition judge bailed it out. A failure is a reason to route somewhere else; it is
-        // never a reason to stop. Fall through to the ladder below.
-        if (input.tier === 'full') return { action: 'none', reason: 'objective_done' }
+        // On a FAILURE tier it says nothing of the sort, and reading it as "resolved" would end
+        // the objective on the party's first flub while two unplayed routes sat there. Live
+        // 2026-07-26, three of five resolutions came in failed, every one of them awarded zero
+        // milestones, and one objective arrived at this same dead end THREE times - identical
+        // `used` list each time. A failure routes somewhere else while somewhere else exists;
+        // only when nothing is left does it resolve, and the fall-through below owns that.
+        if (input.tier === 'full') return { action: 'resolve', outcome: 'completed', reason: 'objective_done' }
       } else {
         const target = input.nodes.find((n) => n.key === edge.toNodeKey)
         // Never send them back to a scene they have already played. Authored edges routinely form
@@ -124,13 +141,21 @@ export function nextNode(input: NavigateInput): NavigateResult {
     // here is what stops a failing party circling instead of being handed a way through.
     return rescue && !used.has(rescue.key)
       ? { action: 'open', node: rescue, arrivalContext: '', reason: 'rescue' }
-      : { action: 'none', reason: 'exhausted' }
+      // Nothing authored is left. The objective resolves the hard way and the story moves on -
+      // never a stall. This is the terminal the whole ladder funnels into.
+      : { action: 'resolve', outcome: 'failed', reason: 'exhausted' }
   }
 
   const first = routes.find((n) => !used.has(n.key))
-  return first
-    ? { action: 'open', node: first, arrivalContext: '', reason: 'first' }
-    : { action: 'none', reason: 'exhausted' }
+  if (first) return { action: 'open', node: first, arrivalContext: '', reason: 'first' }
+  // Nothing resolved yet, but every route has been played - reach for the rescue before giving up
+  // on the objective. This branch used to return `exhausted` and stop, which was harmless when
+  // `exhausted` opened nothing; now that it RETIRES the objective, skipping an unplayed rescue
+  // here would throw away the ladder's terminal scene.
+  if (rescue && !used.has(rescue.key)) {
+    return { action: 'open', node: rescue, arrivalContext: '', reason: 'rescue' }
+  }
+  return { action: 'resolve', outcome: 'failed', reason: 'exhausted' }
 }
 
 /** Has this objective any authored node left to play? Feeds route-health's `spent` verdict. */
