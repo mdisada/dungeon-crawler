@@ -90,9 +90,14 @@ export function buildRescueNode(objectiveId: string, route: GuaranteedRoute): St
     // FAILING party is handed as its floor opened on "Scene 5 forces a choice..." and a
     // sentence cut off mid-word. The narrator grounds the rest in the live scene, which is
     // what it does for every authored node whose seed is one line.
+    // Makes NO claim about the other routes (2026-07-28). The first wording said "every other way
+    // has closed behind the party", which is true at RUNTIME - the navigator only reaches a rescue
+    // once the routes are spent - but false on the page the consistency checker reads, where this
+    // is simply one of three authored ways in. It flagged it on all four objectives of the next
+    // guide, and it was right to. The seed describes the scene; the ladder position is the
+    // navigator's business, not the narrator's.
     narrationSeed:
-      `Every other way to ${route.label} has closed behind the party. This is what is left, ` +
-      'and it has to happen here, with what they have on them.',
+      `The party comes at ${route.label} the hard way, with whatever they still have on them.`,
     encounter: {
       kind: 'skill_challenge',
       label: route.label,
@@ -114,6 +119,8 @@ export function buildStage5NodesPrompt(ctx: Stage5NodesContext): { system: strin
 
 Rules:
 - For EACH objective, author at least ${MIN_ROUTE_NODES} DISTINCT route nodes - genuinely different ways to achieve it (a stealth route AND a social route; a clever route AND a forceful route). This is the Three-Clue Rule: a party that flubs one way still has another.
+- Those routes are INTERCHANGEABLE. Whichever one the party wins, they come away knowing and holding the SAME things - this objective's conclusion. Everything authored after this point is written against that shared conclusion and CANNOT TELL which route was taken, so a route that teaches something the others do not leaves every later scene guessing. If only one of your routes reveals who was really responsible, that is a bug: either they all reveal it, or none of them does and it belongs to a later objective.
+- SAME CONCLUSION, DIFFERENT COST. What legitimately differs between routes is the method, who helps and who is crossed, what is spent, and what it costs the party to get there. The "setback" is where a route's identity lives - keep it specific to THAT route and never make two routes cost the same thing.
 - Each node has ONE kind: "skill_challenge", "social", "puzzle", or "combat". Vary them - do not make every route a skill_challenge. At least one combat somewhere in the adventure.
 - A "social" node MUST name at least one living NPC by key from the list.
 - You do NOT author outcomes, edges, or what a success awards. The engine derives every one of those. You write the FICTION and pick from the menus.

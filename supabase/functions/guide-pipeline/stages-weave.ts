@@ -534,7 +534,21 @@ export async function runStage7(env: StageEnv): Promise<void> {
     // The round's editable surface: flagged rows that exist, are editable, and are not
     // human-edited. Loaded sequentially - burst DB fetches share the same outbound-fetch
     // ceiling the parallel repairs died on.
+    // MAJOR ONLY (2026-07-28). `minor` is defined as "clarity and polish"; `major` is a
+    // contradiction, an unreachable thing, something broken. The filter never looked at severity,
+    // so the three rounds were spent rewriting prose to satisfy polish nitpicks - and every such
+    // rewrite shifts the digest the checker reads next round, which invites a fresh crop of
+    // different nitpicks.
+    //
+    // The loop was measurably diverging because of it: guide de701722 went in with 8 findings,
+    // applied 24 of 24 planned edits across all 3 rounds, and came out with 10. It reported total
+    // success while leaving more problems than it started with, and the contradictions that
+    // actually matter survived alongside the churn.
+    //
+    // Minors are still reported to the creator as `info`; they are simply not worth a repair
+    // round, and they are the reason the majors never got one.
     const targeted = findings.filter((w): w is WarningDraft & { targetHandle: string } => {
+      if (w.severity !== 'major') return false
       const ref = w.targetHandle ? current.refs.get(w.targetHandle) : null
       return Boolean(ref && (REPAIRABLE_FIELDS[ref.table] ?? []).length > 0)
     })
@@ -626,6 +640,7 @@ export async function runStage7(env: StageEnv): Promise<void> {
     // Re-check describes the guide as it now IS - and feeds the next round. A re-check
     // failure is not worth the stage: ship the last round's findings as the residue
     // (over-warning about content that may now be fixed beats dying after rows were written).
+    const majorsBefore = findings.filter((w) => w.severity === 'major').length
     try {
       current = await buildDigest(env.db, env.adventure.id)
       findings = await env.generate(
@@ -637,6 +652,16 @@ export async function runStage7(env: StageEnv): Promise<void> {
       console.error('stage-7 re-check failed, shipping last findings', err)
       break
     }
+    // A round that did not REDUCE the contradictions has stopped helping, and the next one edits
+    // prose against a checker that is no longer converging. Stop rather than spend the remaining
+    // rounds making the guide different instead of better.
+    const majorsAfter = findings.filter((w) => w.severity === 'major').length
+    if (majorsAfter >= majorsBefore) {
+      await logPipelineEvent(env.db, env.adventure.id, 'guide_repair_stalled', {
+        round: rounds, majors_before: majorsBefore, majors_after: majorsAfter,
+      })
+      break
+    }
   }
   const residue = findings
 
@@ -646,6 +671,8 @@ export async function runStage7(env: StageEnv): Promise<void> {
     attempted: totalPlanned,
     applied: totalApplied,
     residual: residue.length,
+    residual_major: residue.filter((w) => w.severity === 'major').length,
+    residual_minor: residue.filter((w) => w.severity === 'minor').length,
   })
 
   const { error: deleteError } = await env.db

@@ -59,6 +59,26 @@ Look for:
   never established, or an arrival line that reads as a success when the party got there by
   failing.
 
+A line ending in an ellipsis has been SHORTENED to fit this digest - the full text exists in the
+guide and is complete. Never report such a line as cut off, truncated or incomplete; you are
+looking at an excerpt, not the row.
+
+The scene graph BRANCHES. The route nodes serving one objective are ALTERNATIVES - the party plays
+at most one of them and the rest never happen. They are supposed to describe incompatible worlds:
+one route breaks a barred door, another has the owner open it; one leaves a witness hostile,
+another leaves them dead. That is the design, not a contradiction. Compare two scenes ONLY when
+both can happen in the same playthrough - scenes serving DIFFERENT objectives, or a scene against
+the meta loop. Never flag two routes of the same objective for disagreeing with each other.
+
+Do NOT report:
+- An NPC, location, item or rumour that no scene happens to use. An adventure carries TEXTURE -
+  people to talk to, places to look at, rumours to chase - and live play improvises with it.
+  Unused is not broken. Non-use is worth reporting ONLY when something DEPENDS on it: an
+  objective's completion predicate, a hook that points at it, or a scene that assumes the party
+  already has it.
+- Detail that merely could be tighter, better connected, or more integrated. That is the
+  creator's taste, not a defect.
+
 Report each problem against the most specific handle you can. If the guide is coherent, return an empty list - do not invent problems.
 
 Rate each finding's severity honestly:
