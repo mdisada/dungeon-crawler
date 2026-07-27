@@ -199,15 +199,36 @@ export async function openAuthoredNode(
       'form: a confrontation, a desperate escape, a reckoning, an irreversible choice. '
     : ''
   const stakes = typeof node.spec?.stakes === 'string' ? node.spec.stakes : ''
+  // ONE MENU, NOT TWO (2026-07-28). The affordances published as chips just above were never shown
+  // to the narrator, so it invented its own ways in - and they disagreed with the chips on every
+  // node of a live run: chips offered "persuade Tomalen / offer him coin" while the prose asked
+  // "Are you going out there, then?". A player who follows the prose is typing something the scene
+  // was not built to take, which is exactly the misfiling the entry mapper's audit trail measures.
+  //
+  // The single-way case matters most: node r0 had ONE authored affordance and the prose offered
+  // three invented directions - the precise padding the exposition brief already forbids.
+  const ways = node.affordances.map((a) => a.hint || a.label).filter(Boolean)
+  const waysLine = ways.length === 0
+    ? ''
+    : ways.length === 1
+      ? ` There is ONE way onward here - ${ways[0]} - so carry the party to it and end at what it ` +
+        'demands of them. Do NOT offer a menu of alternatives.'
+      : ` The ways in are exactly these: ${ways.join('; ')}. Close on THESE and no others - never ` +
+        'invent a different set, and never list more than the party actually has.'
   await narrationBeat(
     service, env, sessionId,
     `${ctx.narrationContext ? `${ctx.narrationContext} ` : ''}${arrivalContext ? `${arrivalContext} ` : ''}` +
       `${climaxFraming}Open this scene: ${node.narrationSeed} ` +
-      'Pick up from where the party actually stands - never presume travel or actions they did not take.' +
+      'Pick up from where the party actually stands - never presume travel or actions they did not take. ' +
+      // The scene-opening cutscene lands with the previous narration still in the context window,
+      // and once reproduced it verbatim - closing menu included - so the node's authored seed never
+      // reached the page at all (live 2026-07-27).
+      'This OPENS A NEW SCENE: never restate or paraphrase the previous narration.' +
       (node.spec
         ? ` Telegraph what lies ahead - "${String(node.spec.label ?? node.label)}"` +
           `${stakes ? ` (at stake: ${stakes})` : ''} - and make the closing ask invite the party into it.`
-        : ''),
+        : '') +
+      waysLine,
     'Beat opened',
     'exposition',
   )
