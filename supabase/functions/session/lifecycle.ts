@@ -362,6 +362,7 @@ async function buildStartDiffs(
         activeLineId: `recap-${sessionId}`,
         speakers: [],
         typing: false,
+        typingSince: null,
         pending: null,
         openings: [],
         addressedCharacterId: null,
@@ -561,6 +562,7 @@ export async function endSession(service: SupabaseClient, adventureId: string, u
       domain: 'dialogue',
       patch: asPatch({
         typing: false,
+        typingSince: null,
         pending: null,
         openings: [],
         speakers: [],

@@ -76,8 +76,12 @@ export function checkInvariants({
     violations.push(`${rejected}/${turnStats.length} turns rejected - the table is locked`)
   }
 
-  // Nothing the player could read.
-  const blind = turnStats.filter((t) => (t.narrations ?? 0) === 0 && (t.replies ?? 0) === 0).length
+  // Nothing the player could read - counted over turns the API ACCEPTED. A rejected turn never
+  // reached the story engine, and it is already reported as `rejected` above; counting it twice
+  // blamed the narrator for a delivery failure (2026-07-27).
+  const blind = turnStats
+    .filter((t) => (t.status ?? 200) === 200 && (t.narrations ?? 0) === 0 && (t.replies ?? 0) === 0)
+    .length
   if (blind >= 5) warnings.push(`${blind} turns produced neither narration nor dialogue`)
   if (turnStats.length >= 20 && blind >= turnStats.length * 0.5) {
     violations.push(`${blind}/${turnStats.length} turns produced nothing the player could read`)

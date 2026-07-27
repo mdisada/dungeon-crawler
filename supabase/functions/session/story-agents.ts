@@ -617,7 +617,33 @@ export async function runSteward(
   }
 }
 
-const CLIMAX_SYSTEM =
+/**
+ * TWO BRIEFS, BECAUSE THIS AGENT HAS TWO JOBS (2026-07-27).
+ *
+ * It was written in f455e67 to produce a SEED that publishNarration then expanded ("Narrate this
+ * climax opening, ending at a decision point"), so a scene-opening brief was right. b20ffa9
+ * (2026-07-24) removed that narrator hop to stop the ending disappearing when the extra call died,
+ * and began publishing this output VERBATIM as the last line the player ever reads - but the brief
+ * was never revisited. `git log -S"CLIMAX_SYSTEM"` returns only f455e67.
+ *
+ * The model obeyed it exactly. Live 2026-07-27, the final words of a finished adventure were "Do
+ * you go up alone to face Maren, or do you hand the letter to Harriet and Dermot and climb
+ * together?" - a choice that could never be taken.
+ *
+ * When the ladder still has an objective left this really IS a scene opening (a long ladder commits
+ * at `remaining <= 1`), so that branch keeps the decision-point brief.
+ */
+const CLIMAX_ENDING_SYSTEM =
+  'You write the LAST thing the players will ever read of this adventure. Your text is published ' +
+  'exactly as written, with no narrator pass after it, and the ending TITLE is already printed ' +
+  'above it - never restate it. Author the climax and its aftermath from what ACTUALLY happened; ' +
+  'the authored sketch was only illustrative. Write 4-6 sentences: resolve the final confrontation ' +
+  'concretely and in the tone the committed ending calls for, then close on where that leaves ' +
+  'the world and ' +
+  'the party. The story is OVER - never end at a decision point, never ask a question, never offer ' +
+  'a choice, and never leave a thread to pull. Output only the text.'
+
+const CLIMAX_OPENING_SYSTEM =
   'You author the concrete climax of a tabletop RPG adventure from what ACTUALLY happened - ' +
   'the authored sketch was only illustrative. Write 3-5 sentences the Narrator will use to ' +
   'open the finale, grounded in the real event log and committed relationships, ending at a ' +
@@ -630,8 +656,14 @@ export async function runClimaxAuthor(
   /** Per-character personal outcomes (2026-07-26) - private arcs deserve a line in the epilogue,
    *  which is where they pay off emotionally without ever having steered the ending. */
   personalOutcomes: string[] = [],
+  /** True when no objective remains - this prose IS the adventure's final line, not a scene opening. */
+  ladderFinished = false,
 ): Promise<string> {
-  if (env.demo) return `[demo climax] The story bends toward "${ending.title}" - and someone must choose.`
+  if (env.demo) {
+    return ladderFinished
+      ? `[demo climax] The threads draw together, and "${ending.title}" is how it ends.`
+      : `[demo climax] The story bends toward "${ending.title}" - and someone must choose.`
+  }
   try {
     return await callAgentText({
       serviceClient: env.service,
@@ -639,7 +671,7 @@ export async function runClimaxAuthor(
       userId: env.creatorId,
       adventureId: env.adventureId,
       agentRole: 'meta_loop_steward',
-      system: CLIMAX_SYSTEM,
+      system: ladderFinished ? CLIMAX_ENDING_SYSTEM : CLIMAX_OPENING_SYSTEM,
       user: [
         `Committed ending: ${ending.title} (${ending.tone}) - ${ending.description}`,
         `What actually happened (condensed):\n${condensedEvents.join('\n')}`,
@@ -648,10 +680,16 @@ export async function runClimaxAuthor(
             `not stated here):\n${personalOutcomes.join('\n')}`
           : '',
       ].filter(Boolean).join('\n'),
-      maxTokens: 400,
+      // 600, not 400: the closing brief asks for 4-6 sentences AND an aftermath, and the ending
+      // is the one piece of prose that must never arrive half-written.
+      maxTokens: 600,
     })
   } catch {
-    return `The threads draw together toward ${ending.title}.`
+    // The outage floor has to SETTLE on the closing branch - "draw together toward" points forward,
+    // which is the very shape this agent stopped being allowed to write.
+    return ladderFinished
+      ? `${ending.title} closes here: the threads have drawn together, and the story is done.`
+      : `The threads draw together toward ${ending.title}.`
   }
 }
 

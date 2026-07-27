@@ -162,3 +162,105 @@ describe('alive means present and not dead (2026-07-24)', () => {
     expect(s.scores.justice).toBe(2) // alive signal fires on undefined -> -3
   })
 })
+
+describe('a contradicted climax cannot land the ending (2026-07-27)', () => {
+  // The Lantern of Saltmarsh Reach, verbatim: the climax objective resolved `failed`, yet the
+  // restoration ending outscored the tragedy 7 to 5 on side signals alone.
+  const CLIMAX = 'climax'
+  const saltmarsh: EndingCandidate[] = [
+    {
+      id: 'light-restored', index: 0,
+      signals: [
+        { when: { objective_id: CLIMAX, outcome: 'completed' }, weight: 5 },
+        { when: { objective_id: 'evidence-a', outcome: 'completed' }, weight: 2 },
+        { when: { objective_id: 'evidence-b', outcome: 'completed' }, weight: 2 },
+        { when: { dial: 'force_at_the_tower', gte: 2 }, weight: 3 },
+      ],
+    },
+    {
+      id: 'next-wreck', index: 1,
+      signals: [{ when: { objective_id: CLIMAX, outcome: 'failed' }, weight: 5 }],
+    },
+  ]
+  const played: EndingWorld = {
+    objectiveOutcomes: { 'evidence-a': 'completed', 'evidence-b': 'completed' },
+    npcStates: {},
+    dialValues: { force_at_the_tower: 2 },
+    climaxObjectiveId: CLIMAX,
+  }
+
+  it('the ending that claims a climax the party failed cannot lead', () => {
+    const s = scoreEndings(saltmarsh, { ...played, objectiveOutcomes: { ...played.objectiveOutcomes, [CLIMAX]: 'failed' } })
+    expect(s.leadingId).toBe('next-wreck')
+    expect(s.contradictedIds).toEqual(['light-restored'])
+    expect(s.vetoFallback).toBe(false)
+    // The raw score is untouched - only eligibility moved, so stored ending_scores stay comparable.
+    expect(s.scores['light-restored']).toBe(7)
+  })
+
+  it('the commitment margin is judged on the eligible field', () => {
+    const s = scoreEndings(saltmarsh, { ...played, objectiveOutcomes: { ...played.objectiveOutcomes, [CLIMAX]: 'failed' } })
+    const ladder = { total: 3, remaining: 0 }
+    expect(commitmentReady(s.scores, s.leadingId, COMMIT_MIN_EVENTS, ladder)).toBe(false)
+    expect(commitmentReady(s.eligibleScores, s.leadingId, COMMIT_MIN_EVENTS, ladder)).toBe(true)
+  })
+
+  it('an unresolved climax never vetoes - unrecorded is not refuted', () => {
+    const s = scoreEndings(saltmarsh, played)
+    expect(s.contradictedIds).toEqual([])
+    expect(s.leadingId).toBe('light-restored')
+    expect(s.vetoFallback).toBe(false)
+  })
+
+  it('a NEGATIVE climax signal is an argument against, not a claim', () => {
+    const tragedy: EndingCandidate[] = [
+      { id: 'grim', index: 0, signals: [{ when: { objective_id: CLIMAX, outcome: 'completed' }, weight: -4 }] },
+    ]
+    const s = scoreEndings(tragedy, { ...played, objectiveOutcomes: { [CLIMAX]: 'completed' } })
+    expect(s.contradictedIds).toEqual([])
+  })
+
+  it('an ending covering BOTH climax branches is never vetoed', () => {
+    const both: EndingCandidate[] = [
+      {
+        id: 'keeper-consumed', index: 0,
+        signals: [
+          { when: { objective_id: CLIMAX, outcome: 'completed' }, weight: 2 },
+          { when: { objective_id: CLIMAX, outcome: 'failed' }, weight: 2 },
+        ],
+      },
+    ]
+    for (const outcome of ['completed', 'failed'] as const) {
+      expect(scoreEndings(both, { ...played, objectiveOutcomes: { [CLIMAX]: outcome } }).contradictedIds).toEqual([])
+    }
+  })
+
+  it('a MID-LADDER contradiction is ordinary variance, not a veto', () => {
+    const s = scoreEndings(saltmarsh, {
+      ...played,
+      objectiveOutcomes: { 'evidence-a': 'failed', 'evidence-b': 'completed' },
+    })
+    expect(s.contradictedIds).toEqual([])
+  })
+
+  it('when every ending is refuted the veto stands down rather than stranding the story', () => {
+    const allClaimVictory: EndingCandidate[] = [
+      { id: 'a', index: 0, signals: [{ when: { objective_id: CLIMAX, outcome: 'completed' }, weight: 5 }, { when: { dial: 'force_at_the_tower', gte: 2 }, weight: 1 }] },
+      { id: 'b', index: 1, signals: [{ when: { objective_id: CLIMAX, outcome: 'completed' }, weight: 5 }] },
+    ]
+    const s = scoreEndings(allClaimVictory, { ...played, objectiveOutcomes: { [CLIMAX]: 'failed' } })
+    expect(s.vetoFallback).toBe(true)
+    expect(s.leadingId).toBe('a')
+    expect(s.contradictedIds).toEqual(['a', 'b'])
+  })
+
+  it('no climaxObjectiveId means the old behaviour, exactly', () => {
+    const s = scoreEndings(saltmarsh, {
+      objectiveOutcomes: { ...played.objectiveOutcomes, [CLIMAX]: 'failed' },
+      npcStates: {},
+      dialValues: { force_at_the_tower: 2 },
+    })
+    expect(s.leadingId).toBe('light-restored')
+    expect(s.contradictedIds).toEqual([])
+  })
+})

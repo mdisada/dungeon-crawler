@@ -28,6 +28,11 @@ export interface EndingWorld {
   objectiveOutcomes: Record<string, 'completed' | 'failed'>
   npcStates: Record<string, string>
   dialValues: Record<string, number>
+  /**
+   * The last objective on the ladder - the climax. Optional so legacy callers keep the old
+   * behaviour exactly; when supplied it enables the contradiction veto below.
+   */
+  climaxObjectiveId?: string
 }
 
 export const DIAL_MIN = -5
@@ -59,10 +64,50 @@ function signalHolds(when: EndingSignalWhen, world: EndingWorld): boolean {
   return when.gte !== undefined || when.lte !== undefined
 }
 
+/**
+ * Does this ending REQUIRE a climax outcome the story did not produce? (2026-07-27)
+ *
+ * `signalHolds` has no notion of a refuted signal - a false one simply contributes nothing, so a
+ * positively-weighted {objective_id, outcome} costs an ending only its own weight when it turns out
+ * false, and side signals can carry it home anyway. Live 2026-07-27, The Lantern of Saltmarsh
+ * Reach: the climax objective resolved `failed`, yet "The Light Restored" - whose top signal reads
+ * "The party stopped Maren and saved the Lindworm at the climax" - won 7 to 5 over the tragedy
+ * whose {climax, failed} signal actually fired. The player was handed a restoration they had not
+ * achieved. No weighting fixes that: a contradicted ending's side-signal total is unbounded above.
+ *
+ * Deliberately narrow in three ways:
+ * - CLIMAX ONLY. A mid-ladder objective that went the other way is ordinary story variance, and
+ *   vetoing on it would empty the field on any mixed-outcome run.
+ * - POSITIVE signals only. A tragedy that carries {climax, completed, weight: -4} is describing
+ *   what would ARGUE AGAINST it, not claiming it happened.
+ * - GROUPED. An ending legitimately allowed to carry both {climax, completed} and {climax, failed}
+ *   (stage 8 permits it, and "The Keeper Consumed" did) is never vetoed - one of its claims holds.
+ *
+ * Unrecorded is not refuted: an objective still in play has no entry in `objectiveOutcomes`, and
+ * that must never veto, or an early pass would disqualify the whole field.
+ */
+function contradictsClimax(candidate: EndingCandidate, world: EndingWorld): boolean {
+  const climaxId = world.climaxObjectiveId
+  if (!climaxId) return false
+  const actual = world.objectiveOutcomes[climaxId]
+  if (!actual) return false
+  const claims = candidate.signals.filter(
+    (s) => s.weight > 0 && 'objective_id' in s.when && s.when.objective_id === climaxId,
+  )
+  if (claims.length === 0) return false
+  return claims.every((s) => 'objective_id' in s.when && s.when.outcome !== actual)
+}
+
 export interface EndingScores {
   scores: Record<string, number>
   /** Never null while candidates exist - ties break by lowest index (no dead-end). */
   leadingId: string | null
+  /** Endings whose climax claim was refuted by what actually happened. */
+  contradictedIds: string[]
+  /** True when EVERY candidate was contradicted, so the veto was stood down to avoid a dead end. */
+  vetoFallback: boolean
+  /** `scores` minus the contradicted endings - what the commitment margin is judged on. */
+  eligibleScores: Record<string, number>
 }
 
 export function scoreEndings(candidates: EndingCandidate[], world: EndingWorld): EndingScores {
@@ -73,11 +118,21 @@ export function scoreEndings(candidates: EndingCandidate[], world: EndingWorld):
       0,
     )
   }
-  const leading = [...candidates].sort((a, b) => {
+  const contradictedIds = candidates.filter((c) => contradictsClimax(c, world)).map((c) => c.id)
+  const contradicted = new Set(contradictedIds)
+  const eligible = candidates.filter((c) => !contradicted.has(c.id))
+  // Every ending refuted: an authoring accident, not a reason to strand the story with no finale.
+  // Stand the veto down and rank the whole field, exactly as before this rule existed.
+  const vetoFallback = eligible.length === 0
+  const field = vetoFallback ? candidates : eligible
+  const leading = [...field].sort((a, b) => {
     const diff = (scores[b.id] ?? 0) - (scores[a.id] ?? 0)
     return diff !== 0 ? diff : a.index - b.index
   })[0]
-  return { scores, leadingId: leading?.id ?? null }
+  const eligibleScores = vetoFallback
+    ? scores
+    : Object.fromEntries(field.map((c) => [c.id, scores[c.id] ?? 0]))
+  return { scores, leadingId: leading?.id ?? null, contradictedIds, vetoFallback, eligibleScores }
 }
 
 /** Commitment gate (F08 SS8.1): decisive margin + enough recorded play, near the climax. */

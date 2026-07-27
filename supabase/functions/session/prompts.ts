@@ -81,7 +81,7 @@ async function resolveOutcome(
       createdAt: new Date().toISOString(),
     }
     await commitDiffs(service, env.adventureId, () => [
-      { domain: 'dialogue', patch: { pending: null, typing: false } },
+      { domain: 'dialogue', patch: { pending: null, typing: false, typingSince: null } },
       { domain: 'dm', patch: { pendingReview: ruling as unknown as Json } },
     ])
     await logEvent(service, env.adventureId, sessionId, 'ruling_staged', {

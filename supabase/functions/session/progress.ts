@@ -7,13 +7,13 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import type { GameState, Json, StateDiff } from '../_shared/state/index.ts'
 import {
-  activeLoop, commitmentReady, evaluatePredicate, ladderReady, listMilestoneAtoms,
+  commitmentReady, evaluatePredicate, ladderReady, listMilestoneAtoms,
   parseEndingSignals, scoreEndings,
 } from '../_shared/story/index.ts'
 import type { EndingCandidate, EndingWorld, WorldFacts } from '../_shared/story/index.ts'
 import { runClaimCheck, runConsistency, runObjectiveJudge } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
-import { loadLoops, planAndOpenBeat } from './beats.ts'
+import { ensureSpineLoop, loadLoops, planAndOpenBeat } from './beats.ts'
 import { graphDecision, inPlayNodeKey, loadObjectiveNodes } from './graph-read.ts'
 import { recordSceneLedger } from './ledger.ts'
 import { applyMilestones } from './milestones.ts'
@@ -207,7 +207,14 @@ async function completeObjective(
   // a silent reveal. When nothing new surfaced (next is null), the quest/final-objective resolution
   // narration stands alone.
   if (questCompleted) {
-    if (next) {
+    // On a graph-bearing guide the tail is about to open the next objective's first authored node,
+    // and that cutscene already carries this exact "a new thread draws them on" line (see
+    // ensureSpineLoop's threadContext). Publishing here too puts three narrations on one turn -
+    // the payout handover, this bridge, and the scene opening - all saying the same thing.
+    const bridgeIsRedundant = next
+      ? (await loadObjectiveNodes(service, env.adventureId, next.id)).length > 0
+      : false
+    if (next && !bridgeIsRedundant) {
       await narrationBeat(
         service, env, sessionId,
         `With that resolved, a new thread now draws the party on: "${next.title}". Do not restate it ` +
@@ -368,16 +375,24 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
     ),
     npcStates: await endingNpcStates(service, env.adventureId, state),
     dialValues: (adventureRow.dial_values ?? {}) as Record<string, number>,
+    // The last rung of the ladder is the climax, and an ending that CLAIMS a climax outcome the
+    // party did not produce is not a candidate - however well its side signals score. Live
+    // 2026-07-27 the climax was failed and "The Light Restored" still landed, 7 to 5, over the
+    // tragedy whose {climax, failed} signal actually fired. See contradictsClimax in endings.ts.
+    ...(ordered.length > 0 ? { climaxObjectiveId: ordered[ordered.length - 1].id } : {}),
   }
-  const { scores, leadingId } = scoreEndings(candidates, world)
+  const { scores, leadingId, contradictedIds, vetoFallback, eligibleScores } = scoreEndings(candidates, world)
 
   const previousLeading = endings.find((e) => e.status === 'leading')?.id ?? null
+  // `scores` stays the RAW sum so stored ending_scores remain comparable run to run; only
+  // eligibility moved.
   await service.from('adventures').update({ ending_scores: scores as unknown as Json }).eq('id', env.adventureId)
   if (leadingId && leadingId !== previousLeading) {
     if (previousLeading) await service.from('endings').update({ status: 'candidate' }).eq('id', previousLeading)
     await service.from('endings').update({ status: 'leading' }).eq('id', leadingId)
     await logEvent(service, env.adventureId, sessionId, 'ending_leading_changed', {
       from: previousLeading, to: leadingId, scores: scores as unknown as Json,
+      contradicted: contradictedIds as unknown as Json, veto_fallback: vetoFallback,
     })
   }
 
@@ -395,10 +410,12 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
     .from('event_log')
     .select('id', { count: 'exact', head: true })
     .eq('adventure_id', env.adventureId)
-  if (!allTerminal && !commitmentReady(scores, leadingId, count ?? 0, ladder)) return
+  // Judged on the ELIGIBLE field: a contradicted ending must not deny the honest one its margin.
+  if (!allTerminal && !commitmentReady(eligibleScores, leadingId, count ?? 0, ladder)) return
   if (allTerminal) {
     await logEvent(service, env.adventureId, sessionId, 'ending_forced', {
       reason: 'all objectives terminal', scores: scores as unknown as Json,
+      contradicted: contradictedIds as unknown as Json, veto_fallback: vetoFallback,
     }).catch(() => {})
   }
 
@@ -479,6 +496,9 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
   let climax = (await runClimaxAuthor(
     env, { title: leading.title, description: leading.description, tone: leading.tone }, condensed,
     personalOutcomes,
+    // Nothing left to play: this prose is the adventure's final line, not the opening of a finale
+    // the party still has to fight through. The two need opposite endings.
+    ladder.remaining === 0,
   ).catch(() => '')) || leading.climax_summary || leading.description
 
   // Consistency, cheaply and deterministically. Publishing the climax directly (above) removed
@@ -528,7 +548,7 @@ declare const EdgeRuntime: { waitUntil?: (p: Promise<unknown>) => void } | undef
  * WORKER_RESOURCE_LIMIT is a per-worker ceiling, not a timeout, so deferring within the same
  * worker would not help - only a new invocation gets a new budget.
  */
-function kickTail(env: AgentEnv, sessionId: string): boolean {
+function kickTail(env: AgentEnv, sessionId: string, ctx: TailContext): boolean {
   // Demo adventures run canned agents: no cost, no resource pressure, and the $0 suites assert
   // immediately after each intent - deferring there would only introduce a race.
   if (env.demo) return false
@@ -536,7 +556,19 @@ function kickTail(env: AgentEnv, sessionId: string): boolean {
   const request = fetch(`${SUPABASE_URL}/functions/v1/session`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'story_progress_tail', adventure_id: env.adventureId, session_id: sessionId }),
+    // THE HEAD'S CONTEXT TRAVELS WITH IT (2026-07-27). The body used to carry only the ids, so
+    // every flag the head computed died at this boundary - and since kickTail returns true for
+    // every non-demo adventure, that is ALL real play. `recognitionRung` (the director's escalation
+    // asking "did the fiction already do this?") only ever reached the judge in demo mode, and
+    // `questJustCompleted` was silently false in the tail, defeating the 2026-07-21 guard.
+    body: JSON.stringify({
+      action: 'story_progress_tail',
+      adventure_id: env.adventureId,
+      session_id: sessionId,
+      objective_just_completed: ctx.objectiveJustCompleted,
+      quest_just_completed: ctx.questJustCompleted,
+      recognition_rung: ctx.recognitionRung ?? null,
+    }),
   }).catch((err) => console.error('story tail kick failed', err))
   const grace = new Promise((resolve) => setTimeout(resolve, 3000))
   if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) {
@@ -570,11 +602,11 @@ export async function evaluateStoryProgress(
   service: SupabaseClient,
   env: AgentEnv,
   sessionId: string,
-  opts?: { forceRecognition?: boolean },
+  opts?: { recognitionRung?: number | null },
 ): Promise<void> {
   await commitDiffs(service, env.adventureId, () => [typingDiff(true)]).catch(() => {})
   try {
-    await runStoryProgressHead(service, env, sessionId, opts?.forceRecognition ?? false)
+    await runStoryProgressHead(service, env, sessionId, opts?.recognitionRung ?? null)
   } finally {
     await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
   }
@@ -638,7 +670,7 @@ async function runStoryProgressHead(
   service: SupabaseClient,
   env: AgentEnv,
   sessionId: string,
-  forceRecognition: boolean,
+  recognitionRung: number | null,
 ): Promise<void> {
   // 1. Active objective completion (F08 SS9).
   // Loops, because the vocabulary now looks one objective ahead: by the time an objective becomes
@@ -671,17 +703,21 @@ async function runStoryProgressHead(
     objectiveJustCompleted = true
   }
 
-  if (kickTail(env, sessionId)) return
-  await runStoryProgressTail(service, env, sessionId, {
-    objectiveJustCompleted, questJustCompleted, forceRecognition,
-  })
+  const ctx: TailContext = { objectiveJustCompleted, questJustCompleted, recognitionRung }
+  if (kickTail(env, sessionId, ctx)) return
+  await runStoryProgressTail(service, env, sessionId, ctx)
 }
 
-interface TailContext {
+export interface TailContext {
   objectiveJustCompleted: boolean
   questJustCompleted: boolean
-  /** Ask the recognition judge even though no beat ended - see the judge's own comment. */
-  forceRecognition?: boolean
+  /**
+   * The director rung that asked for this pass, or null. Non-null means "you are escalating, so
+   * ask the recognition judge whether the fiction already did the deed" - see the judge's own
+   * comment. Carries the RUNG rather than a boolean so the judge can be capped to one call per
+   * (objective, rung) instead of firing on every escalation.
+   */
+  recognitionRung?: number | null
 }
 
 /**
@@ -698,7 +734,7 @@ export async function runStoryProgressTail(
   service: SupabaseClient,
   env: AgentEnv,
   sessionId: string,
-  ctx?: TailContext,
+  ctx: TailContext,
 ): Promise<void> {
   try {
     const state = (await loadState(service, env.adventureId)).state
@@ -706,10 +742,11 @@ export async function runStoryProgressTail(
     const world = worldFacts(state, events)
     const ordered = await orderedObjectives(service, env.adventureId)
 
-    // A tail running in its own worker did not see the head's locals - recover them from the
-    // rows the head already wrote, so a re-plan still fires on a completed objective.
-    const objectiveJustCompleted = ctx?.objectiveJustCompleted ?? (await justCompletedObjective(service, env.adventureId))
-    const questJustCompleted = ctx?.questJustCompleted ?? false
+    // The head's own values, carried across the worker boundary by kickTail. This used to be
+    // recovered by scanning the event log, because the kick body carried no context at all - a
+    // heuristic that could not see `questJustCompleted` in the first place and, whenever a re-plan
+    // was skipped, kept reporting true on every later turn.
+    const { objectiveJustCompleted, questJustCompleted } = ctx
 
     // 2. Open beat exit conditions -> the next beat opens (event-driven pacing, F08 SS9.1).
     // A completed objective also forces a re-plan: the old beat's encounter spec and outcome
@@ -718,11 +755,33 @@ export async function runStoryProgressTail(
     // objective closed a whole quest: its loop is done and completeQuest may have resumed a
     // suspended loop whose preserved beat we must not discard - only its own exit predicate reopens it.
     const loops = await loadLoops(service, env.adventureId)
-    const loop = activeLoop(loops)
-    if (loop?.currentBeatId) {
+    const currentObjectiveId = state.objectives.currentId ?? null
+    // An active objective with nothing on the stack cannot be given a beat at all - the shape that
+    // cost a live run its climax. Opening the loop here, on the pass that noticed, is what keeps
+    // the spine playable across a quest boundary. See beats.ts ensureSpineLoop.
+    const spine = await ensureSpineLoop(service, env, sessionId, loops, currentObjectiveId)
+    const loop = spine.loop
+    if (spine.created && loop) {
+      const title = ordered.find((o) => o.id === currentObjectiveId)?.title ?? ''
+      try {
+        await planAndOpenBeat(
+          service, env, sessionId, loop.id, 'objective_revealed',
+          title
+            ? `A new thread now draws the party on: "${title}". Surface it in the fiction rather ` +
+              'than restating it as a task.'
+            : undefined,
+        )
+      } catch (err) {
+        console.error('spine beat open failed', err)
+        await logEvent(service, env.adventureId, sessionId, 'incident', {
+          kind: 'beat_open_failed', trigger: 'spine_continues',
+          error: String(err instanceof Error ? err.message : err).slice(0, 300),
+        }).catch(() => {})
+      }
+    } else if (loop?.currentBeatId) {
       const { data: beat } = await service
         .from('beats')
-        .select('id, exit_conditions, status, encounter_spec')
+        .select('id, exit_conditions, status, encounter_spec, node_id')
         .eq('id', loop.currentBeatId)
         .maybeSingle()
       const exitMet = beat?.status === 'active' && beat.exit_conditions && evaluatePredicate(beat.exit_conditions, world)
@@ -749,7 +808,21 @@ export async function runStoryProgressTail(
         : 'missing'
       const beatSpent = !exitMet && (health === 'spent' || health === 'stillborn')
       const trigger = exitMet ? 'beat_exit' : beatSpent ? 'beat_spent' : 'objective_completed'
-      if (exitMet || beatSpent || (objectiveJustCompleted && !questJustCompleted && beat?.status === 'active')) {
+      // NODE-AWARE (2026-07-27). The `!questJustCompleted` guard exists for a real case: a quest
+      // closing may RESUME a suspended loop whose preserved beat must not be discarded (2026-07-21).
+      // But on a graph-bearing guide a beat is bound to one objective's node, so once that
+      // objective is retired the beat is stale whether or not a quest closed with it - and leaving
+      // it in place is how the next objective inherits a scene that can never serve it.
+      const beatNodeId = (beat as { node_id?: string | null } | null)?.node_id ?? null
+      const currentNodeIds = new Set(
+        currentObjectiveId
+          ? (await loadObjectiveNodes(service, env.adventureId, currentObjectiveId)).map((n) => n.id)
+          : [],
+      )
+      const staleNode = beatNodeId !== null && !currentNodeIds.has(beatNodeId)
+      const replanOnCompletion = objectiveJustCompleted && beat?.status === 'active' &&
+        (staleNode || (beatNodeId === null && !questJustCompleted))
+      if (exitMet || beatSpent || replanOnCompletion) {
         await logEvent(service, env.adventureId, sessionId, 'beat_exit_met', {
           beat_id: beat!.id, ...(exitMet ? {} : { reason: trigger }),
         })
@@ -785,10 +858,26 @@ export async function runStoryProgressTail(
       // there is no miss for it to catch: crediting an atom cannot complete anything, and the call
       // would be a paid LLM roll of the dice with no effect on progression. Legacy guides still
       // run on predicates and still need it.
+      //
+      // ONE CALL PER (OBJECTIVE, RUNG) (2026-07-27). Until now `forceRecognition` never survived the
+      // tail's worker hop at all, so the escalation path was dead in real play; plumbing it through
+      // would otherwise have fired a paid judge call on EVERY escalating pass at the same rung.
       const graphBearing = state.objectives.currentId
         ? (await graphDecision(service, env.adventureId, state.objectives.currentId)) !== null
         : false
-      if ((exitMet || beatSpent || ctx?.forceRecognition) && !objectiveJustCompleted && !graphBearing) {
+      const escalationRung = ctx.recognitionRung ?? null
+      const alreadyAsked = escalationRung !== null && state.objectives.currentId
+        ? ((await service
+            .from('event_log')
+            .select('id')
+            .eq('adventure_id', env.adventureId)
+            .eq('type', 'objective_recognized')
+            .eq('payload->>objective_id', state.objectives.currentId)
+            .eq('payload->>rung', String(escalationRung))
+            .limit(1)).data ?? []).length > 0
+        : false
+      if ((exitMet || beatSpent || (escalationRung !== null && !alreadyAsked)) &&
+        !objectiveJustCompleted && !graphBearing) {
         const current = ordered.find((o) => o.id === state.objectives.currentId)
         const atoms = current && current.reveal_state === 'active'
           ? listMilestoneAtoms(current.completion_predicates)
@@ -808,6 +897,7 @@ export async function runStoryProgressTail(
               objective_id: current.id,
               title: current.title,
               trigger: exitMet ? 'beat_exit' : beatSpent ? 'beat_spent' : 'director_escalation',
+              rung: escalationRung,
               completed: verdict.completed,
               atom: verdict.atom,
               evidence: verdict.evidence,
@@ -835,15 +925,3 @@ export async function runStoryProgressTail(
   }
 }
 
-/** Did the most recent progress-relevant event complete an objective? (tail-worker recovery) */
-async function justCompletedObjective(service: SupabaseClient, adventureId: string): Promise<boolean> {
-  const { data } = await service
-    .from('event_log')
-    .select('type')
-    .eq('adventure_id', adventureId)
-    .in('type', ['objective_completed', 'beat_exit_met'])
-    .order('id', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  return data?.type === 'objective_completed'
-}

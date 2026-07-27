@@ -52,7 +52,8 @@ export type {
 export { evaluatePredicate, listMilestoneAtoms } from './evaluate.ts'
 export type { MilestoneAtoms, WorldFacts } from './evaluate.ts'
 export {
-  activeLoop, advanceBeat, completeLoop, pushLoop, resumeLoop, suspendLoop,
+  activeLoop, advanceBeat, completeLoop, needsSpineLoop, pushLoop, resumeLoop, SPINE_LOOP_TYPE,
+  spineLoopId, suspendLoop,
 } from './loops.ts'
 export type { LoopOpResult, LoopSeed } from './loops.ts'
 export {

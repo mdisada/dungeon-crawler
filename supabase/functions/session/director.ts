@@ -197,7 +197,14 @@ export async function runProgressDirector(
     let routeHealth: 'healthy' | 'stillborn' | 'spent' | 'missing' = 'healthy'
     if (currentObjectiveId && !pendingOffer) {
       if (!loop?.currentBeatId) {
-        routeHealth = loop ? 'missing' : 'healthy' // no loop at all = story not started yet
+        // `missing` fires rung 3 immediately - it carries no threshold (see decideDirector's
+        // stillborn/missing branch) - so a loop that legitimately has no beat YET must not report
+        // it. That is exactly the state on the turn the spine loop is opened: the tail creates the
+        // loop and opens its first beat in the same pass, and the director runs alongside. Reading
+        // `missing` there raced the tail into opening the objective's first node twice, and
+        // closeOutgoingNode would then log the loser as an abandoned failure - burning the
+        // climax's opening scene before the party saw it. A turn that PROGRESSED is never stuck.
+        routeHealth = loop && !progressed ? 'missing' : 'healthy'
       } else {
         const { data: beat } = await service
           .from('beats')
@@ -283,7 +290,7 @@ export async function runProgressDirector(
     // signal we have that the deterministic path has missed something, so it is the right moment
     // to check - and a `completed` verdict credits its atom, which resolves the stall outright.
     if (decision.rung >= 2) {
-      await evaluateStoryProgress(service, env, sessionId, { forceRecognition: true })
+      await evaluateStoryProgress(service, env, sessionId, { recognitionRung: decision.rung })
         .catch((err) => console.error('recognition pass failed', err))
     }
 

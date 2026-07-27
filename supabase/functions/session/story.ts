@@ -717,6 +717,14 @@ export async function completeQuest(
     const done = completeLoop(loops, questLoop.id)
     if (done.ok) {
       await persistLoops(service, env.adventureId, loops, done.loops)
+      // The quest's own beat dies with it (2026-07-27). Nothing closed it before, so once the
+      // spine opens its own loop the adventure carries two `active` beats, and route health -
+      // which reads the loop's currentBeatId - can be judged against a scene belonging to a
+      // finished quest.
+      const { error: beatError } = await service
+        .from('beats').update({ status: 'completed' })
+        .eq('core_loop_id', questLoop.id).eq('status', 'active')
+      assertOk(beatError, 'quest beat close failed')
       if (done.resumedId) {
         await logEvent(service, env.adventureId, sessionId, 'loop_resumed', { core_loop_id: done.resumedId })
       }

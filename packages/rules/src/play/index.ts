@@ -27,7 +27,7 @@ export {
   SOLO_PROMPT_WINDOW_S,
 } from './checks.ts'
 export {
-  EVENT_SILENCE_MS, isLogSilent, isTypingStale, TYPING_STALE_MS,
+  EVENT_SILENCE_MS, isLogSilent, isTypingStale, TYPING_STALE_MS, typingPatch,
 } from './liveness.ts'
 export {
   checkGateActive, DEFAULT_DM_SETTINGS, dialogueGateActive, dmSettings, GIST_COUNT, parseGists,

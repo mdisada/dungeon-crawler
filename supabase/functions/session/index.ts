@@ -62,7 +62,17 @@ Deno.serve(async (req) => {
         creatorId: adventure.creator_id as string,
         demo: Boolean(adventure.demo),
         mode: adventure.mode as 'full_ai' | 'assist' | null,
-      }, String(internalBody.session_id ?? ''))
+      }, String(internalBody.session_id ?? ''), {
+        // The head's context, carried across the worker boundary (2026-07-27). This branch is
+        // service-role-gated above, so trusting these adds no surface. A kick from an older bundle
+        // omits them and they read false - one turn of the pre-fix behaviour during a deploy, which
+        // is strictly better than the row-scan heuristic this replaced.
+        objectiveJustCompleted: internalBody.objective_just_completed === true,
+        questJustCompleted: internalBody.quest_just_completed === true,
+        recognitionRung: typeof internalBody.recognition_rung === 'number'
+          ? internalBody.recognition_rung
+          : null,
+      })
       return json(200, { ok: true, resolved: 'story_progress_tail' })
     }
 
