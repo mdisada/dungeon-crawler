@@ -4,6 +4,7 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { AgentCallError, callAgentText } from '../_shared/llm.ts'
+import { charsetError } from '../_shared/guide/charset.ts'
 import type { ParseResult } from '../_shared/guide/types.ts'
 import type { StageEnv, StagePrompt } from './stage-env.ts'
 import { runStage1, runStage2, runStage3 } from './stages-story.ts'
@@ -143,6 +144,23 @@ function runStage(env: StageEnv, stage: number, chapterId: string | null): Promi
   throw new Error(`unknown stage ${stage}`)
 }
 
+/**
+ * Reject a reply carrying characters from outside the adventure's language, whatever its shape.
+ *
+ * Every stage validator asks whether the SHAPE is right; none asked whether the TEXT was readable,
+ * and a guide shipped an ending summary reading "not the官方 story" - published to the player
+ * verbatim, because climax_summary is the floor used when the live author fails.
+ *
+ * Applied here rather than per stage so one check covers all eight, and it rides the retry
+ * machinery that already exists: the model is told which characters offended, which is what lets
+ * the second attempt fix them instead of rolling the same dice again.
+ */
+function checkCharset<T>(raw: string, parsed: ParseResult<T>): ParseResult<T> {
+  const error = charsetError(raw)
+  if (!error) return parsed
+  return { ok: false, errors: [error, ...(parsed.ok ? [] : parsed.errors)] }
+}
+
 /** LLM call + parse, with one retry that feeds the validator's complaints back to the model. */
 export async function generateParsed<T>(
   db: SupabaseClient,
@@ -172,7 +190,7 @@ export async function generateParsed<T>(
     ? `${prompt.user}\n\nYour previous attempt was rejected by the schema validator:\n${priorError.slice(0, 1500)}\n\nFix exactly these problems. Respond with ONLY the corrected JSON object.`
     : prompt.user
   const first = await call(firstUser)
-  const parsed = parse(first)
+  const parsed = checkCharset(first, parse(first))
   if (parsed.ok) return parsed.data
 
   // No wall-clock budget left for a second call in THIS invocation - fail now so the runner's
@@ -214,7 +232,7 @@ Respond again with ONLY the corrected JSON object.`
   // Bounded, not doubled: these budgets are sized against the 150s edge-invocation kill, so an
   // unbounded raise would trade a parse failure for a killed invocation - the worse of the two.
   const second = await call(feedback, truncated ? Math.min(prompt.maxTokens * 2, 6000) : prompt.maxTokens)
-  const reparsed = parse(second)
+  const reparsed = checkCharset(second, parse(second))
   if (reparsed.ok) return reparsed.data
   throw new AgentCallError(`stage output failed validation after retry: ${reparsed.errors.slice(0, 8).join('; ')}`)
 }
