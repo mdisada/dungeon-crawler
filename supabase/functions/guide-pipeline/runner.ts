@@ -186,7 +186,21 @@ export async function generateParsed<T>(
   // multi-chapter stage 4 (every NPC, location and ingredient for a chapter) outgrew its 4000
   // token budget and no adventure could be generated at all. Retry with room to finish. The cap
   // is a ceiling, not a spend: a reply that already fits costs exactly the same as before.
-  const truncated = !parsed.ok && parsed.errors.some((e) => e.includes('does not parse'))
+  //
+  // But "does not parse" covers TWO opposite failures, and they need opposite corrections
+  // (2026-07-27). json.ts wraps every JSON.parse throw in that one phrase, so a COMPLETE reply
+  // with a stray quote was classified as cut off: the model was told "you were CUT OFF", had its
+  // own draft withheld - the one thing that would show it the bad character - and got a token cap
+  // raise that was never the problem. Live, stage 5 burned 7 attempts on a syntax error at
+  // position 5604 of a document far longer than that, and no adventure could be generated.
+  //
+  // The offset separates them: a truncation fails at the very end of what arrived, a syntax error
+  // fails in the middle. An error carrying no offset ("Unexpected end of JSON input") IS a
+  // truncation, so absence defaults to cut-off.
+  const parseError = parsed.ok ? undefined : parsed.errors.find((e) => e.includes('does not parse'))
+  const offset = Number(parseError?.match(/at position (\d+)/)?.[1] ?? NaN)
+  const truncated = Boolean(parseError) &&
+    (!Number.isFinite(offset) || offset >= first.length * 0.9)
   const feedback = `${prompt.user}
 
 Your previous response was rejected by the schema validator:
