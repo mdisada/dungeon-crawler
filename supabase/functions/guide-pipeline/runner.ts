@@ -102,7 +102,22 @@ export async function processNextJob(
     console.error(`guide-pipeline stage ${job.stage} failed (attempt ${job.attempts + 1})`, message)
     // First failure gets an automatic fresh-invocation retry; after that the queue pauses with
     // the error surfaced on the job row (F04 SS2 failure handling).
-    const requeue = job.attempts + 1 < MAX_ATTEMPTS
+    //
+    // A retry that reproduces the PREVIOUS failure verbatim has made no progress, and no further
+    // attempt can either. Stage 8's gate is deterministic over stored rows, so when the defect
+    // sits upstream - a stale derived atom from stage 3, an objective stage 5 skipped - every
+    // remaining attempt re-authors endings, re-runs the same check over the same data, and fails
+    // identically. Live 2026-07-27: four attempts, four byte-identical gate errors, one guide's
+    // worth of spend and nothing to show. Retries exist to re-roll a model that produced
+    // something invalid, not to re-ask a deterministic question.
+    //
+    // Deliberately exact-match: anything fuzzier risks abandoning a genuinely different failure
+    // that a retry could have cleared, and a wasted retry is much cheaper than a lost guide.
+    const repeated = priorError !== null && priorError === message.slice(0, 2000)
+    const requeue = job.attempts + 1 < MAX_ATTEMPTS && !repeated
+    if (repeated) {
+      console.error(`guide-pipeline stage ${job.stage}: identical failure repeated - not retrying`)
+    }
     await db
       .from('guide_jobs')
       .update(
