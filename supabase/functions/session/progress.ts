@@ -569,7 +569,27 @@ function kickTail(env: AgentEnv, sessionId: string, ctx: TailContext): boolean {
       quest_just_completed: ctx.questJustCompleted,
       recognition_rung: ctx.recognitionRung ?? null,
     }),
-  }).catch((err) => console.error('story tail kick failed', err))
+  })
+    .then(async (res) => {
+      // A lost tail costs this pass its beat re-plan and its ending scoring, and until now said so
+      // only to `console.error` - invisible to the event log, so every analysis of a stalled run
+      // has had to guess whether the tail ran at all. It is NOT retried here: awaiting or falling
+      // back inline would hold `typing` across the tail and reject every turn arriving behind it
+      // (the 2026-07-21 failure, 6 of 26 turns lost). The director re-plans on the next turn; this
+      // just makes the loss measurable so it can be judged on evidence rather than suspicion.
+      if (!res.ok) {
+        await logEvent(env.service, env.adventureId, sessionId, 'incident', {
+          kind: 'tail_kick_failed', status: res.status,
+        }).catch(() => {})
+      }
+      return res
+    })
+    .catch(async (err) => {
+      console.error('story tail kick failed', err)
+      await logEvent(env.service, env.adventureId, sessionId, 'incident', {
+        kind: 'tail_kick_failed', error: String(err instanceof Error ? err.message : err).slice(0, 200),
+      }).catch(() => {})
+    })
   const grace = new Promise((resolve) => setTimeout(resolve, 3000))
   if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) {
     EdgeRuntime.waitUntil(Promise.race([request, grace]))

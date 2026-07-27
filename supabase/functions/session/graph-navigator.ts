@@ -11,7 +11,7 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
-import { advanceBeat } from '../_shared/story/index.ts'
+import { advanceBeat, nodeBeatId } from '../_shared/story/index.ts'
 import type { CoreLoop } from '../_shared/story/index.ts'
 import type { Json } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
@@ -118,17 +118,22 @@ export async function openAuthoredNode(
   persist: (before: CoreLoop[], after: CoreLoop[]) => Promise<void>,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   await closeOutgoingNode(service, env, sessionId, ctx.loop.id, node.id, ctx.trigger)
-  const { error: closeError } = await service
-    .from('beats').update({ status: 'completed' }).eq('core_loop_id', ctx.loop.id).eq('status', 'active')
-  assertOk(closeError, 'beat close failed')
 
   // The stored spec travels verbatim - its outcome maps were authored against the registry and
   // lint-proved, so nothing here may rewrite them. `node_key` rides along so the resolution
   // event can tell the navigator which edge to follow next.
   const spec = node.spec ? { ...node.spec, node_key: node.key } : null
+  // CLAIM THE NODE FIRST (2026-07-27). The insert is the lock: `nodeBeatId` is derived from the
+  // node, so a concurrent pass that picked the same node loses to the primary key here.
+  //
+  // Ordered BEFORE the close deliberately. Closing first would let a losing pass complete the
+  // winner's freshly-inserted beat, leaving the loop pointing at a completed beat - route health
+  // 'missing', and a re-plan of a scene that had just opened correctly.
+  const beatId = nodeBeatId(node.id)
   const { data: beatRow, error: beatError } = await service
     .from('beats')
     .insert({
+      id: beatId,
       core_loop_id: ctx.loop.id,
       index: ctx.beatCount,
       name: node.label || node.key,
@@ -145,7 +150,25 @@ export async function openAuthoredNode(
     })
     .select('id')
     .single()
-  assertOk(beatError, 'beat insert failed')
+  if (beatError) {
+    // Someone else instantiated this node between our navigation read and this write. It is the
+    // SAME authored scene, so the right answer is to defer to it - never to open it twice.
+    const { data: winner } = await service.from('beats').select('id').eq('id', beatId).maybeSingle()
+    if (winner) {
+      await logEvent(service, env.adventureId, sessionId, 'incident', {
+        kind: 'beat_open_race', node_key: node.key, beat_id: beatId, trigger: ctx.trigger,
+      }).catch(() => {})
+      return { status: 200, body: { ok: true, beat_id: beatId, name: node.label, node_key: node.key, deduped: true } }
+    }
+    assertOk(beatError, 'beat insert failed')
+  }
+
+  // Every OTHER active beat on this loop now closes. Excluding our own row is what makes the
+  // claim above hold - without it this statement would immediately undo it.
+  const { error: closeError } = await service
+    .from('beats').update({ status: 'completed' })
+    .eq('core_loop_id', ctx.loop.id).eq('status', 'active').neq('id', beatId)
+  assertOk(closeError, 'beat close failed')
 
   const advanced = advanceBeat(ctx.loops, ctx.loop.id, beatRow.id as string)
   if (advanced.ok) await persist(ctx.loops, advanced.loops)
