@@ -85,9 +85,14 @@ export function buildRescueNode(objectiveId: string, route: GuaranteedRoute): St
     // shipping it here put mechanical template text straight into the player-facing prompt
     // (caught in the first authored-graph guide, 2026-07-26). It rides in params instead, which
     // is where the director's rung-4 delivery already reads it from.
-    narrationSeed: route.stakes
-      ? `The way forward narrows to one thing: ${route.label}. ${route.stakes}`
-      : `The way forward narrows to one thing: ${route.label}.`,
+    // Reads as FICTION and carries no authoring metadata (2026-07-28). It used to append
+    // `route.stakes`, which was the objective's DM-only hidden_description - so the scene a
+    // FAILING party is handed as its floor opened on "Scene 5 forces a choice..." and a
+    // sentence cut off mid-word. The narrator grounds the rest in the live scene, which is
+    // what it does for every authored node whose seed is one line.
+    narrationSeed:
+      `Every other way to ${route.label} has closed behind the party. This is what is left, ` +
+      'and it has to happen here, with what they have on them.',
     encounter: {
       kind: 'skill_challenge',
       label: route.label,
