@@ -208,13 +208,21 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
           return name ? [{ name, kind: akind }] : []
         })
       localAtoms.push(...declared)
-      const outcomeMenu = [...menu, ...declared.map((a) => a.name)]
+      // A SETBACK MAY ONLY SPEND LOCAL ATOMS. The failure menu deliberately excludes the
+      // objective's own spine atoms: awarding one on failure means losing the scene COMPLETES the
+      // objective, which is not a setback at all. Live 2026-07-27, "Breach the Harbourmaster's
+      // Office" authored on_failure:["office_breached"] - the same atom as on_success - so the
+      // objective finished whatever happened, and its second route and its rescue became content
+      // the party could never reach. Nothing structural could see it: the failure map was
+      // non-empty, the transitions were valid, and the atom was registered. The playability
+      // prover found it by walking the paths.
+      const failureMenu = declared.map((a) => a.name)
       const resolveAtoms = (key: 'on_failure'): string[] => {
         const list = Array.isArray(n[key]) ? (n[key] as unknown[]) : []
         const out: string[] = []
         for (const entry of list) {
           if (typeof entry !== 'string' || !entry.trim()) continue
-          const res = resolveAtomText(entry, outcomeMenu)
+          const res = resolveAtomText(entry, failureMenu)
           if (res.ok && !out.includes(res.text)) out.push(res.text)
         }
         return out

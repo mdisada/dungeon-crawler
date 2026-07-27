@@ -12,6 +12,7 @@ import {
   type Stage8Context,
 } from '../_shared/guide/stages/stage8.ts'
 import { hasBlockingErrors, lintStoryGraph } from '../_shared/guide/graph.ts'
+import { proveGraph } from '../_shared/guide/prove.ts'
 import type { StoryGraph } from '../_shared/guide/graph.ts'
 import type { StageEnv } from './stage-env.ts'
 import { assertOk, logPipelineEvent, syncSpineAtoms } from './util.ts'
@@ -273,9 +274,48 @@ async function runReachabilityGate(env: StageEnv): Promise<void> {
       codes: findings.map((f) => f.code),
     })
   }
-  if (REACHABILITY_GATE === 'fail' && hasBlockingErrors(findings)) {
-    throw new Error(
-      `reachability gate: ${findings.filter((f) => f.severity === 'error').map((f) => f.message).join(' | ')}`,
+  // The playability proof. The lint above checks SHAPES someone thought to write a rule about;
+  // this walks every path through the authored graph, carrying the atoms each outcome awards, and
+  // asks the only question that matters: can the party still finish?
+  //
+  // It earned its place on the first real guide it saw. That guide passed the lint with zero
+  // errors, and the proof found an objective whose second route and rescue were unreachable
+  // because the FIRST node awarded the completion atom on failure as well as on success - losing
+  // the scene won the objective. Nothing structural could see it: the failure map was non-empty,
+  // the transitions were valid, the atom was registered.
+  const proofFindings = proveGraph({
+    objectives: graph.objectives.map((o) => ({
+      id: o.id, title: o.title, completionPredicates: o.completionPredicates,
+    })),
+    nodes: (graph.nodes ?? []).map((n) => ({
+      id: n.id, key: n.key, objectiveId: n.objectiveId, index: n.index, role: n.role,
+      transitions: n.transitions,
+      onSuccess: n.onSuccess, onFailure: n.onFailure,
+    })),
+  })
+  if (proofFindings.length > 0) {
+    await env.db.from('guide_warnings').insert(
+      proofFindings.map((f) => ({
+        adventure_id: adventureId,
+        stage: 8,
+        target_table: 'objectives',
+        target_id: f.objectiveId,
+        kind: 'warning',
+        message: `[playability:${f.code}] ${f.message}${f.path?.length ? ` (path: ${f.path.join(' -> ')})` : ''}`,
+      })),
     )
+    await logPipelineEvent(env.db, adventureId, 'playability_proof', {
+      findings: proofFindings.length,
+      codes: proofFindings.map((f) => f.code),
+    })
+  }
+
+  const blocking = proofFindings.filter((f) => f.code !== 'node_unreachable')
+  if (REACHABILITY_GATE === 'fail' && (hasBlockingErrors(findings) || blocking.length > 0)) {
+    const reasons = [
+      ...findings.filter((f) => f.severity === 'error').map((f) => f.message),
+      ...blocking.map((f) => f.message),
+    ]
+    throw new Error(`reachability gate: ${reasons.join(' | ')}`)
   }
 }

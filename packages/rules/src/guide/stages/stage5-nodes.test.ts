@@ -185,6 +185,16 @@ describe('parseStage5Nodes', () => {
       expect(node.encounter.onFailure).toEqual(['watch_alerted'])
     })
 
+    it('refuses to let a setback award the objective itself', () => {
+      // Live 2026-07-27: a node authored on_failure with the SAME atom as on_success, so losing
+      // the scene completed the objective and the rest of its graph became unreachable. The
+      // failure menu is local atoms only; a spine atom named here is dropped, then repaired.
+      const spineAtom = 'ledger_recovered'
+      const node = firstNode(withFailureMap([spineAtom], [{ name: 'watch_alerted', kind: 'flag' }]))
+      expect(node.encounter.onFailure).not.toContain(spineAtom)
+      expect(node.encounter.onFailure).toEqual(['watch_alerted'])
+    })
+
     it('synthesizes a setback when the model declared no atoms to spend', () => {
       // Without this the stage-8 `failure_writes_nothing` gate would refuse the guide over an
       // omission code can fill in - a hard blocker on generation, not a safety net.
