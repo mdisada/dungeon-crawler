@@ -296,6 +296,15 @@ export async function publishNarration(
   style: NarrationStyle = 'beat',
 ): Promise<string> {
   const state = (await loadState(service, env.adventureId)).state
+  // This session's story has ended - the epilogue was the last thing the player should read.
+  // The ending itself publishes directly (see updateEndings), so it is never suppressed here.
+  if (state.dm?.story?.endedSessionId && state.dm.story.endedSessionId === sessionId) {
+    await logEvent(service, env.adventureId, sessionId, 'narration_suppressed', {
+      reason: 'session_story_ended', prompt: prompt.slice(0, 140),
+    }).catch(() => {})
+    await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
+    return ''
+  }
   const npcStates = state.dm?.facts.npcStates ?? {}
   // CANON ONLY for the checker (Phase 6). It used to receive the live transcript plus the
   // generating prompt verbatim - so a draft that correctly followed its instruction was flagged as

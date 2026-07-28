@@ -526,6 +526,19 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
   await logEvent(service, env.adventureId, sessionId, 'narration_published', {
     text: endingText, source: 'ending_climax',
   })
+  // THE WORLD STOPS TALKING (2026-07-28). Until now nothing marked the story finished, so whatever
+  // was still in flight kept narrating past the epilogue: live, the player read the closing text
+  // and then two more beats of an adventure that had already ended ("The flame catches the page's
+  // corner, but the phosphorescent ink fights back...").
+  //
+  // SESSION-scoped on purpose. Marking the ADVENTURE terminal is the larger change that was
+  // deferred here for real reasons - the $0 suite commits an ending mid-run and keeps testing
+  // seven more sections on the same adventure, and a hard terminal guard would 410 all of them.
+  // Scoped to the session, the suppression covers exactly the leak (everything after the epilogue,
+  // in the session that produced it) and a later session on the same adventure narrates normally.
+  await commitDiffs(service, env.adventureId, () => [
+    { domain: 'dm', patch: { story: { endedSessionId: sessionId } } },
+  ]).catch(() => {})
 
   // NOTE: marking the adventure terminal (status -> 'completed') and refusing further play is
   // deferred. It has real blast radius - the $0 story-live suite commits an ending mid-run and
