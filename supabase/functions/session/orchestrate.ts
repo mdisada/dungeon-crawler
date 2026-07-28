@@ -10,11 +10,11 @@ import {
 import type { AbilityKey, AbilityScores, SkillName } from '../_shared/character/index.ts'
 import { typingPatch } from '../_shared/play/index.ts'
 import type { PendingPromptState } from '../_shared/state/index.ts'
-import { agentContextLines, nextDigests } from '../_shared/state/index.ts'
+import { agentContextLines, agentContextSplit, nextDigests } from '../_shared/state/index.ts'
 import type { DialogueLine, GameState, Json, StateDiff } from '../_shared/state/index.ts'
 import { assertOk, loadContext } from './util.ts'
 
-export { agentContextLines }
+export { agentContextLines, agentContextSplit }
 import type { AdventureRow, MemberRow } from './util.ts'
 
 const LINE_HISTORY_LIMIT = 100

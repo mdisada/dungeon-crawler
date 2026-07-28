@@ -14,7 +14,8 @@ import type { AgentEnv, NarrationStyle } from './agents.ts'
 import { buildCanon } from './canon.ts'
 import { retrieveMemories } from './memory.ts'
 import {
-  agentContextLines, appendLinesDiff, loadPartyCharacters, newLine, partyProfileLines, typingDiff,
+  agentContextLines, agentContextSplit, appendLinesDiff, loadPartyCharacters, newLine,
+  partyProfileLines, typingDiff,
 } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
 import { assertOk, commitDiffs, loadContext, loadState, logEvent } from './util.ts'
@@ -381,6 +382,7 @@ export async function publishNarration(
   // moved into the system prompt and only the facts travel per turn - which paid for the three
   // things that were missing (the goal, who the cast ARE, the story so far) without the prompt
   // getting bigger.
+  const transcript = agentContextSplit(state, 6)
   const grounded = [
     prompt,
     '',
@@ -389,7 +391,11 @@ export async function publishNarration(
     ...roster,
     canon.story,
     profiles.length > 0 ? `PARTY  ${profiles.join(' // ')}` : '',
-    `LAST   ${agentContextLines(state, 6).join(' | ')}`,
+    // SOFAR and LAST are separate fields because they answer separate questions: what has happened
+    // across the story, and what was said a moment ago. Joined into one LAST they became peers in a
+    // pipe-separated run-on, six phases ago sitting beside one second ago.
+    transcript.digests.length > 0 ? `SOFAR  ${transcript.digests.join(' // ')}` : '',
+    `LAST   ${transcript.recent.join(' | ')}`,
     memories.length > 0 ? `EARLIER ${memories.join(' // ')}` : '',
   ].filter(Boolean).join('\n')
 

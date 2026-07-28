@@ -995,7 +995,8 @@ const NARRATOR_CONTEXT_KEY =
   'GONE: discuss freely, never stage or voice. FORCES: proper nouns that exist in this world - ' +
   'you may NAME one, and you do not know what any of them mean: never explain, define, or ' +
   'attach workings to one. DONE/CLOCK/PROPS: established - build on, never redefine. Spell ' +
-  'names EXACTLY. Unnamed newcomers are always allowed.'
+  'names EXACTLY. SOFAR: the story so far, oldest first - already told, never retell. LAST: the ' +
+  'last few lines, the moment you are continuing from. Unnamed newcomers are always allowed.'
 
 /**
  * LENGTH, IN WORDS (2026-07-27). The old brief said "2-4 sentences, vivid but concise" and could
