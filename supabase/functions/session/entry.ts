@@ -298,6 +298,13 @@ async function executeEntry(
     await logEvent(service, env.adventureId, sessionId, 'narration_suppressed', {
       reason: 'scene_opening_already_narrated', node_key: spec?.nodeKey ?? null, entry,
     }).catch(() => {})
+    // AND LOWER THE FLAG. `publishNarration` is the only thing that clears `typing`, so skipping
+    // a narration also skips the unlock - the table is left "the DM is thinking" forever and every
+    // later turn 409s. Live on the very first run carrying this suppression: turns 1-28 played,
+    // the echo fired at turn 29, and turns 29-50 were rejected without exception, 22 in a row.
+    //
+    // Any future early return from a narrating path has the same obligation.
+    await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
   }
 
   if (entry === 'offered') {
