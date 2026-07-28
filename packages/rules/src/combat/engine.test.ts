@@ -5,8 +5,8 @@ import type { Rng } from '../play/rng.ts'
 import { attackAdvantageDetail } from './attack.ts'
 import { expectedDamage, formatDiceExpr, parseDiceExpr } from './dice.ts'
 import { DIFFICULTY_PRESETS } from './difficulty.ts'
-import { createCombat, editCombatant, resolveAction, setDifficulty } from './engine.ts'
-import { runAutoTurn } from './heuristic.ts'
+import { activeCombatant, createCombat, editCombatant, resolveAction, setDifficulty } from './engine.ts'
+import { chooseAutoAction, runAutoTurn } from './heuristic.ts'
 import { predictOpportunityAttacks } from './queries.ts'
 import { CombatError } from './types.ts'
 import type { CombatantSetup, CombatEngineState, CombatEvent } from './types.ts'
@@ -278,6 +278,80 @@ describe('difficulty and edits', () => {
     expect(combatant(state, 'g').dead).toBe(true)
     expect(kinds(events)).toEqual(['edit', 'combat_end'])
     expect(state.winner).toBe('party')
+  })
+})
+
+describe('morale and withdrawal', () => {
+  // Initiative rolls are consumed in setup order [party, enemy], so a low-then-high pair puts the
+  // enemy on the clock first - which is the combatant these tests want to withdraw.
+  const enemyFirst = () => stubRng(face(1, 20), face(20, 20))
+
+  it('a side that fully withdraws loses without being eliminated', () => {
+    const rng = enemyFirst()
+    const start = createCombat({ combatants: [pc('a', 0, 0), foe('g', 10, 10)], obstacles: [] }, rng)
+    const { state, events } = resolveAction(start.state, { type: 'flee' }, rng)
+    expect(combatant(state, 'g').fled).toBe(true)
+    expect(combatant(state, 'g').dead).toBe(false)
+    expect(combatant(state, 'g').hp.current).toBe(10)
+    expect(state.status).toBe('ended')
+    expect(state.winner).toBe('party')
+    expect(kinds(events)).toEqual(['flee', 'combat_end', 'turn_end'])
+  })
+
+  it('withdrawing from melee provokes a parting shot', () => {
+    // 2 initiative rolls, then the parting attack: d20 (nat 20 -> crit) + 2 damage dice.
+    const rng = stubRng(face(1, 20), face(20, 20), face(20, 20), 0.5, 0.5)
+    const start = createCombat({ combatants: [pc('a', 0, 0), foe('g', 1, 0)], obstacles: [] }, rng)
+    const { state, events } = resolveAction(start.state, { type: 'flee' }, rng)
+    const attack = events.find((e) => e.kind === 'attack') as Extract<CombatEvent, { kind: 'attack' }>
+    expect(attack.attackerId).toBe('a')
+    expect(attack.reaction).toBe(true)
+    expect(combatant(state, 'g').fled).toBe(true)
+  })
+
+  it('a Disengage covers the withdrawal, so no parting shot lands', () => {
+    const rng = enemyFirst()
+    const start = createCombat({ combatants: [pc('a', 0, 0), foe('g', 1, 0)], obstacles: [] }, rng)
+    const disengaged = resolveAction(start.state, { type: 'disengage' }, rng)
+    const { events } = resolveAction(disengaged.state, { type: 'flee' }, rng)
+    expect(kinds(events)).not.toContain('attack')
+  })
+
+  it('skips a fled combatant when the turn order comes back around', () => {
+    const rng = stubRng(face(1, 20), face(20, 20), face(10, 20))
+    const start = createCombat(
+      { combatants: [pc('a', 0, 0), foe('g', 10, 10), foe('h', 11, 11)], obstacles: [] },
+      rng,
+    )
+    const fled = resolveAction(start.state, { type: 'flee' }, rng)
+    expect(fled.state.status).toBe('active')
+    // Round the order back to the fled combatant: it is passed over, never made active.
+    let state = fled.state
+    const seen: string[] = []
+    for (let i = 0; i < 6; i++) {
+      seen.push(activeCombatant(state).id)
+      state = resolveAction(state, { type: 'end_turn' }, rng).state
+    }
+    expect(seen).not.toContain('g')
+  })
+
+  it('the heuristic withdraws once the side drops past its morale threshold', () => {
+    const rng = enemyFirst()
+    const start = createCombat(
+      { combatants: [pc('a', 0, 0), foe('g', 10, 10, { morale: 0.5 })], obstacles: [] },
+      rng,
+    )
+    // At full strength it engages; at 4/10 HP the side is below the 0.5 threshold and it breaks.
+    expect(chooseAutoAction(start.state)).toEqual({ type: 'move', to: [4, 4] })
+    const hurt = editCombatant(start.state, 'g', { hpCurrent: 4 })
+    expect(chooseAutoAction(hurt.state)).toEqual({ type: 'flee' })
+  })
+
+  it('leaves a combatant with no morale threshold fighting to the death', () => {
+    const rng = enemyFirst()
+    const start = createCombat({ combatants: [pc('a', 0, 0), foe('g', 10, 10)], obstacles: [] }, rng)
+    const hurt = editCombatant(start.state, 'g', { hpCurrent: 1 })
+    expect(chooseAutoAction(hurt.state)).not.toEqual({ type: 'flee' })
   })
 })
 

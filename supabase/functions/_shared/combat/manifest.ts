@@ -79,8 +79,21 @@ export interface BuildManifestInput {
   intensity?: number
   /** Lab override: a hand-picked preset wins over baseline x intensity. */
   difficultyOverride?: DifficultySetting
+  /** Override the party's retreat threshold; see DEFAULT_PARTY_MORALE for the default policy. */
+  partyMorale?: number
   beatSpec?: ManifestBeatSpec
 }
+
+/**
+ * Party retreat threshold (F09 SS8.3). A party of two or more withdraws once it is down to a
+ * quarter of its strength, so a lost fight ends as a retreat instead of a wipe - measured over the
+ * fixture ladder, that drops TPK-on-loss from ~100% to ~3% for a few points of win rate.
+ *
+ * A SOLO party keeps fighting (threshold 0): the morale check only fires on the character's own
+ * turn, so a lone PC is usually killed outright before it can trigger - the threshold costs win
+ * rate without buying survival. Revisit for solo once PC defence is fixed.
+ */
+export const DEFAULT_PARTY_MORALE = 0.25
 
 /** The INPUT artifact that crosses the isolation boundary (F09 SS3.2). */
 export interface CombatManifest {
@@ -194,7 +207,8 @@ export function buildManifest(input: BuildManifestInput): CombatManifest {
     bossRef = enemies.find((e) => e.refId === bossNpc.id)?.id ?? null
   }
 
-  const party = input.party.map((m) => characterToSetup(m))
+  const partyMorale = input.partyMorale ?? (input.party.length >= 2 ? DEFAULT_PARTY_MORALE : 0)
+  const party = input.party.map((m) => characterToSetup(m, { morale: partyMorale }))
   const difficulty = input.difficultyOverride ?? resolveDifficulty(input.baselinePreset, input.intensity)
 
   const bounds: GridBounds = { width: input.map.gridWidth, height: input.map.gridHeight }
@@ -294,8 +308,10 @@ export function manifestToSetup(manifest: CombatManifest): CombatSetup {
 export function fightIsOver(state: CombatEngineState, bossRef: string | null): boolean {
   if (state.status !== 'active') return true
   if (bossRef) {
+    // A boss that broke and ran ends the fight the same way a dead one does - the minions have
+    // nothing left to hold them (F09 SS8.3); deriveResult reports it as `escaped`, not `killed`.
     const boss = state.combatants.find((c) => c.id === bossRef)
-    if (boss?.dead) return true
+    if (boss?.dead || boss?.fled) return true
   }
   return false
 }
@@ -313,9 +329,10 @@ export function deriveResult(
 ): CombatResult {
   const boss = manifest.bossRef ? state.combatants.find((c) => c.id === manifest.bossRef) : null
   const bossDown = !!boss?.dead
-  // Boss down => the party wins even with minions still standing (they rout). If the party was also
-  // wiped (winner 'enemy') that still counts as a loss.
-  const partyWins = state.winner === 'party' || (bossDown && state.winner !== 'enemy')
+  // Boss gone (killed OR routed) => the party wins even with minions still standing, since the
+  // minions rout too. If the party was also wiped (winner 'enemy') that still counts as a loss.
+  const bossGone = bossDown || !!boss?.fled
+  const partyWins = state.winner === 'party' || (bossGone && state.winner !== 'enemy')
   const pcIds = state.combatants
     .filter((c) => c.side === 'party' && (c.dead || c.conditions.includes('unconscious')))
     .map((c) => c.id)

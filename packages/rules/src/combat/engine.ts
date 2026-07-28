@@ -5,10 +5,11 @@
 
 import type { Rng } from '../play/rng.ts'
 import { GRID_SIZE } from '../state/types.ts'
-import { applyDamage, checkCombatEnd, conscious, resolveAttack } from './attack.ts'
+import { applyDamage, checkCombatEnd, conscious, inPlay, resolveAttack } from './attack.ts'
 import { rollD20 } from './dice.ts'
 import { scaledHpMax, STANDARD_DIFFICULTY } from './difficulty.ts'
 import { blockedCells, cellKey, chebyshev, findPath, gridBounds, inBounds, lineOfSight } from './grid.ts'
+import { sideStrength } from './queries.ts'
 import { resolveCast, spellAffects } from './spells.ts'
 import { CombatError } from './types.ts'
 import type {
@@ -64,6 +65,10 @@ function advanceTurn(state: CombatEngineState, events: CombatEvent[]): void {
       events.push({ kind: 'turn_skip', id: next.id, name: next.name, reason: 'dead' })
       continue
     }
+    if (next.fled) {
+      events.push({ kind: 'turn_skip', id: next.id, name: next.name, reason: 'fled' })
+      continue
+    }
     if (next.conditions.includes('unconscious')) {
       events.push({ kind: 'turn_skip', id: next.id, name: next.name, reason: 'unconscious' })
       continue
@@ -116,6 +121,8 @@ export function createCombat(setup: CombatSetup, rng: Rng): EngineResult {
       spells: c.spells ?? [],
       conditions: [],
       dead: false,
+      fled: false,
+      morale: Math.max(0, Math.min(1, c.morale ?? 0)),
       dodging: false,
       disengaged: false,
       reactionAvailable: true,
@@ -163,6 +170,25 @@ export function createCombat(setup: CombatSetup, rng: Rng): EngineResult {
   return { state, events }
 }
 
+/**
+ * One reaction attack from `enemy` against `mover` (opportunity attack or parting shot). Returns
+ * true when the mover has dropped, so the caller stops handing out further reactions.
+ */
+function partingAttack(
+  state: CombatEngineState,
+  enemy: Combatant,
+  mover: Combatant,
+  rng: Rng,
+  events: CombatEvent[],
+): boolean {
+  if (enemy.side === mover.side || !inPlay(enemy) || !enemy.reactionAvailable) return false
+  const melee = enemy.attacks.find((a) => a.kind === 'melee')
+  if (!melee) return false
+  enemy.reactionAvailable = false
+  resolveAttack(state, enemy, mover, melee, true, rng, events)
+  return mover.hp.current === 0
+}
+
 /** Opportunity attacks triggered by the mover leaving `from` for `to` (F09 SS4.1). */
 function opportunityAttacks(
   state: CombatEngineState,
@@ -173,17 +199,11 @@ function opportunityAttacks(
   events: CombatEvent[],
 ): void {
   if (mover.disengaged) return
+  const fromPos = { x: from[0], y: from[1] }
+  const toPos = { x: to[0], y: to[1] }
   for (const enemy of state.combatants) {
-    if (enemy.side === mover.side || !conscious(enemy) || !enemy.reactionAvailable) continue
-    const melee = enemy.attacks.find((a) => a.kind === 'melee')
-    if (!melee) continue
-    const fromPos = { x: from[0], y: from[1] }
-    const toPos = { x: to[0], y: to[1] }
-    if (chebyshev(fromPos, enemy) === 1 && chebyshev(toPos, enemy) > 1) {
-      enemy.reactionAvailable = false
-      resolveAttack(state, enemy, mover, melee, true, rng, events)
-      if (mover.hp.current === 0) return
-    }
+    if (chebyshev(fromPos, enemy) !== 1 || chebyshev(toPos, enemy) <= 1) continue
+    if (partingAttack(state, enemy, mover, rng, events)) return
   }
 }
 
@@ -240,6 +260,7 @@ function resolveAttackAction(
   const target = state.combatants.find((c) => c.id === targetId)
   if (!target || target.id === active.id) throw new CombatError('Invalid target')
   if (target.dead) throw new CombatError(`${target.name} is already dead`)
+  if (target.fled) throw new CombatError(`${target.name} has left the fight`)
   const attack = active.attacks[attackIndex] as AttackSpec | undefined
   if (!attack) throw new CombatError('Unknown attack')
   if (chebyshev(active, target) > (attack.longRange ?? attack.range)) throw new CombatError('Target out of range')
@@ -270,7 +291,7 @@ function resolveCastAction(
   const obstacleSet = new Set(state.obstacles.map(([x, y]) => cellKey(x, y)))
   if (spell.area.shape === 'single') {
     const target = state.combatants.find((c) => c.id === targetId)
-    if (!target || target.dead) throw new CombatError('Invalid target')
+    if (!target || target.dead || target.fled) throw new CombatError('Invalid target')
     if (!sideAllowed(spell, active, target)) throw new CombatError('Not a legal target for this spell')
     if (chebyshev(active, target) > spell.range) throw new CombatError('Target out of range')
     if (!lineOfSight([active.x, active.y], [target.x, target.y], obstacleSet)) throw new CombatError('No line of sight')
@@ -336,6 +357,27 @@ export function resolveAction(prev: CombatEngineState, action: CombatAction, rng
       state.economy.move -= cost
       active.conditions = active.conditions.filter((c) => c !== 'prone')
       events.push({ kind: 'action', id: active.id, action: 'stand_up' })
+      break
+    }
+    // Withdraw from the fight (F09 SS8.3). Costs the whole turn and provokes a parting shot from
+    // every adjacent enemy unless the withdrawal was covered by a Disengage - so routing is a real
+    // decision, not a free escape. A side that fully withdraws loses without being eliminated.
+    case 'flee': {
+      if (active.fled) throw new CombatError('Already withdrawn')
+      const strength = sideStrength(state, active.side)
+      const covered = active.disengaged
+      active.fled = true
+      active.dodging = false
+      active.disengaged = false
+      events.push({ kind: 'flee', id: active.id, name: active.name, side: active.side, strength })
+      if (!covered) {
+        for (const enemy of state.combatants) {
+          if (chebyshev(active, enemy) !== 1) continue
+          if (partingAttack(state, enemy, active, rng, events)) break
+        }
+      }
+      checkCombatEnd(state, events)
+      advanceTurn(state, events)
       break
     }
     case 'end_turn':

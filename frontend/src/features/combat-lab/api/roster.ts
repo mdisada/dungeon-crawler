@@ -15,6 +15,7 @@ interface CharacterRosterRow {
   id: string
   name: string
   level: number
+  class_key: string | null
   abilities: Partial<Record<AbilityKey, number>> | null
   ability_bonuses: Partial<Record<AbilityKey, number>> | null
   hp_max: number | null
@@ -22,7 +23,7 @@ interface CharacterRosterRow {
 
 function characterStats(row: CharacterRosterRow): LabStats {
   return labStatsFromSetup(characterToSetup({
-    id: row.id, name: row.name, level: row.level,
+    id: row.id, name: row.name, level: row.level, classKey: row.class_key,
     abilities: row.abilities, abilityBonuses: row.ability_bonuses, hpMax: row.hp_max,
   }))
 }
@@ -30,7 +31,7 @@ function characterStats(row: CharacterRosterRow): LabStats {
 export async function listRosterCharacters(): Promise<RosterCharacter[]> {
   const { data, error } = await supabase
     .from('characters')
-    .select('id, name, level, abilities, ability_bonuses, hp_max')
+    .select('id, name, level, class_key, abilities, ability_bonuses, hp_max')
     .eq('is_complete', true)
     .order('name')
   if (error) throw new Error(`Characters load failed: ${error.message}`)

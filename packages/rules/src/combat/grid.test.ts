@@ -74,8 +74,8 @@ describe('blockedCells', () => {
     id, name: id, side: 'enemy', kind: 'npc', refId: null, imageUrl: null, x, y,
     hp: { current: dead ? 0 : 5, max: 5, temp: 0 }, baseHpMax: 5, ac: 10, speed: 6, dexMod: 0,
     saves: { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 },
-    attacks: [], spells: [], conditions: [], dead, dodging: false, disengaged: false,
-    reactionAvailable: true, auto: false,
+    attacks: [], spells: [], conditions: [], dead, fled: false, morale: 0, dodging: false,
+    disengaged: false, reactionAvailable: true, auto: false,
   })
 
   it('blocks obstacles and living combatants but not the mover or the dead', () => {

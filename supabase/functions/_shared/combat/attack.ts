@@ -16,10 +16,19 @@ function conscious(c: Combatant): boolean {
   return !c.dead && !c.conditions.includes('unconscious')
 }
 
-/** Living, conscious opponent within melee reach - imposes disadvantage on ranged attacks. */
+/**
+ * Still on the field: conscious AND not withdrawn. Everything that asks "is this combatant a
+ * participant" - threat, reactions, targeting, the end-of-combat check - wants THIS, not
+ * `conscious`, because a fled combatant is unharmed but gone (F09 SS8.3).
+ */
+function inPlay(c: Combatant): boolean {
+  return conscious(c) && !c.fled
+}
+
+/** Opponent still in play within melee reach - imposes disadvantage on ranged attacks. */
 function inEnemyReach(state: CombatEngineState, c: Combatant): boolean {
   return state.combatants.some(
-    (other) => other.side !== c.side && conscious(other) && chebyshev(other, c) === 1,
+    (other) => other.side !== c.side && inPlay(other) && chebyshev(other, c) === 1,
   )
 }
 
@@ -152,15 +161,18 @@ export function applyHeal(target: Combatant, amount: number, events: CombatEvent
   events.push({ kind: 'heal', id: target.id, amount, hp: { ...target.hp } })
 }
 
-/** A side with no conscious living combatant loses (all-unconscious counts as defeated). */
+/**
+ * A side with nobody left on the field loses - whether they were dropped or withdrew. A side that
+ * routs therefore hands the win to the other one WITHOUT being eliminated (F09 SS8.3).
+ */
 export function checkCombatEnd(state: CombatEngineState, events: CombatEvent[]): void {
   if (state.status !== 'active') return
-  const partyUp = state.combatants.some((c) => c.side === 'party' && conscious(c))
-  const enemyUp = state.combatants.some((c) => c.side === 'enemy' && conscious(c))
+  const partyUp = state.combatants.some((c) => c.side === 'party' && inPlay(c))
+  const enemyUp = state.combatants.some((c) => c.side === 'enemy' && inPlay(c))
   if (partyUp && enemyUp) return
   state.status = 'ended'
   state.winner = partyUp ? 'party' : 'enemy'
   events.push({ kind: 'combat_end', winner: state.winner })
 }
 
-export { conscious }
+export { conscious, inPlay }

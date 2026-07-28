@@ -86,6 +86,12 @@ export interface CombatantSetup {
   spells?: SpellSpec[]
   /** Driver hint: the minion heuristic takes this combatant's turns. The engine ignores it. */
   auto?: boolean
+  /**
+   * Morale (F09 SS8.3): the side-strength fraction at or below which this combatant withdraws.
+   * 0 or omitted = fights to the death. The engine only resolves the `flee` action; deciding to
+   * take it is the driver's call (the heuristic checks this threshold).
+   */
+  morale?: number
 }
 
 export interface CombatantHp {
@@ -115,6 +121,10 @@ export interface Combatant {
   conditions: ConditionName[]
   /** NPCs die at 0 HP; PCs fall unconscious instead (death saves are a later slice). */
   dead: boolean
+  /** Withdrew from the fight under its own power (F09 SS8.3) - off the field, alive, not a casualty. */
+  fled: boolean
+  /** Side-strength fraction at or below which this combatant withdraws; 0 = never. */
+  morale: number
   /** Dodge lasts until the start of this combatant's next turn. */
   dodging: boolean
   /** Disengage lasts until the end of this combatant's turn. */
@@ -167,6 +177,8 @@ export type CombatAction =
   | { type: 'dash' }
   | { type: 'disengage' }
   | { type: 'stand_up' }
+  /** Withdraw from the fight entirely; ends the turn and provokes parting attacks. */
+  | { type: 'flee' }
   | { type: 'end_turn' }
 
 export interface RollBreakdown {
@@ -192,7 +204,7 @@ export type CombatEvent =
   | { kind: 'initiative'; order: { id: string; name: string; roll: RollBreakdown }[] }
   | { kind: 'round_start'; round: number }
   | { kind: 'turn_start'; id: string; name: string }
-  | { kind: 'turn_skip'; id: string; name: string; reason: 'dead' | 'unconscious' }
+  | { kind: 'turn_skip'; id: string; name: string; reason: 'dead' | 'unconscious' | 'fled' }
   | { kind: 'move'; id: string; path: [number, number][]; cost: number; remaining: number }
   | {
       kind: 'attack'
@@ -227,6 +239,8 @@ export type CombatEvent =
       success: boolean
     }
   | { kind: 'down'; id: string; name: string; result: 'dead' | 'unconscious' }
+  /** Morale broke: this combatant left the field. `strength` is the side fraction that triggered it. */
+  | { kind: 'flee'; id: string; name: string; side: CombatSide; strength: number }
   | { kind: 'action'; id: string; action: 'dodge' | 'dash' | 'disengage' | 'stand_up' }
   | { kind: 'edit'; id: string; note: string }
   | { kind: 'difficulty'; name: string; note: string }

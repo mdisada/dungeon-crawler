@@ -8,7 +8,8 @@ import { DIFFICULTY_PRESETS } from './difficulty.ts'
 import { activeCombatant, createCombat } from './engine.ts'
 import { runAutoTurn } from './heuristic.ts'
 import {
-  bossNpcStateForOutcome, buildManifest, deriveResult, fightIsOver, manifestToSetup, resolveDifficulty,
+  bossNpcStateForOutcome, buildManifest, DEFAULT_PARTY_MORALE, deriveResult, fightIsOver,
+  manifestToSetup, resolveDifficulty,
 } from './manifest.ts'
 import type { BuildManifestInput, CombatManifest, ManifestMapInput } from './manifest.ts'
 import type { Combatant, CombatEngineState, CombatEvent, CombatSide } from './types.ts'
@@ -39,7 +40,7 @@ const fakeState = (winner: CombatSide | null, combatants: Array<Partial<Combatan
   ({
     status: winner ? 'ended' : 'active',
     winner,
-    combatants: combatants.map((c) => ({ dead: false, conditions: [], kind: c.side === 'party' ? 'pc' : 'npc', ...c })),
+    combatants: combatants.map((c) => ({ dead: false, fled: false, conditions: [], kind: c.side === 'party' ? 'pc' : 'npc', ...c })),
   } as unknown as CombatEngineState)
 
 describe('buildManifest', () => {
@@ -126,6 +127,18 @@ describe('buildManifest', () => {
     expect(cells).not.toContain('5,5')
   })
 
+  it('gives a party of two or more a retreat threshold, and a solo character none', () => {
+    const group = buildManifest(baseInput({ party: [member('pc-a'), member('pc-b')] }))
+    expect(group.party.map((p) => p.morale)).toEqual([DEFAULT_PARTY_MORALE, DEFAULT_PARTY_MORALE])
+    const solo = buildManifest(baseInput({ party: [member('pc-a')] }))
+    expect(solo.party[0].morale).toBe(0)
+  })
+
+  it('lets an explicit partyMorale override the size-based default', () => {
+    const m = buildManifest(baseInput({ party: [member('pc-a')], partyMorale: 0.4 }))
+    expect(m.party[0].morale).toBe(0.4)
+  })
+
   it('produces a manifest that createCombat accepts without throwing', () => {
     const m = buildManifest(baseInput({ party: [member('pc-a'), member('pc-b')] }))
     expect(() => createCombat(manifestToSetup(m), seededRng(1))).not.toThrow()
@@ -198,6 +211,32 @@ describe('deriveResult', () => {
     expect(r.outcome).toBe('victory')
     expect(r.tier).toBe('full')
     expect(r.bossOutcome).toBe('killed')
+  })
+
+  it('a boss that breaks and runs ends the fight as a win, reported as escaped', () => {
+    const state = fakeState(null, [
+      { id: 'pc-a', side: 'party' },
+      { id: 'boss', side: 'enemy', fled: true },
+      { id: 'e1', side: 'enemy' },
+    ])
+    expect(fightIsOver(state, 'boss')).toBe(true)
+    const r = deriveResult(state, manifest('boss'))
+    expect(r.outcome).toBe('victory')
+    expect(r.bossOutcome).toBe('escaped')
+    // It ran off alive, so it is not an enemy casualty.
+    expect(r.casualties.npcIds).toEqual([])
+  })
+
+  it('a party that withdraws loses without being counted as casualties', () => {
+    const state = fakeState('enemy', [
+      { id: 'pc-a', side: 'party', fled: true },
+      { id: 'pc-b', side: 'party', conditions: ['unconscious'] },
+      { id: 'e0', side: 'enemy' },
+    ])
+    const r = deriveResult(state, manifest(null))
+    expect(r.outcome).toBe('defeat')
+    expect(r.tier).toBe('failed')
+    expect(r.casualties.pcIds).toEqual(['pc-b'])
   })
 
   it('a spared boss on victory never scores as a defeat ending (2026-07-24 regression guard)', () => {

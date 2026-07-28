@@ -199,7 +199,9 @@ function CombatLab({ userId }: { userId: string }) {
   }, [engine, active, activeIsManual, targeting, casting])
 
   const mapTokens: LabMapToken[] = engine
-    ? engine.combatants.map((c) => ({
+    ? // A combatant that withdrew has left the field, so it stops being drawn on it (it stays in
+      // the initiative rail, dimmed, so the turn order is still readable).
+      engine.combatants.filter((c) => !c.fled).map((c) => ({
         id: c.id,
         name: c.name,
         side: c.side,
