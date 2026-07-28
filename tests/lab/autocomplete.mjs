@@ -57,6 +57,21 @@ export async function completeActiveObjective({ act, serviceRest, token, advId, 
   const objectiveId = state?.objectives?.currentId
   if (!objectiveId) return { done: false, reason: 'no active objective' }
 
+  // NEVER drive mid-scene (2026-07-28). `objectiveOutcome` refuses to resolve an objective while an
+  // encounter is open - a deliberate guard, because `used` is written when a beat is INSERTED, so
+  // asking the navigator mid-scene reports the ladder exhausted and retires the objective out from
+  // under the party. Injecting an `encounter_resolved` row does not close the encounter FRAME
+  // (only resolveOpenEncounter does that, through the real path), so a drive attempted here is a
+  // silent no-op: the row lands, the progress pass runs, and nothing completes. Wait for the gap
+  // between scenes - the player agent resolves encounters on its own, and this is called every
+  // couple of turns, so a window comes round quickly.
+  if (state?.encounter) {
+    log('autocomplete', 'objective.deferred', 'an encounter is open - waiting for the scene to close', {
+      objective_id: objectiveId, encounter: state.encounter.label ?? null,
+    })
+    return { done: false, reason: 'encounter open' }
+  }
+
   // Drive the story UP TO the finale, then get out of the way. Injecting the final objective's
   // atoms directly would complete it without the climax beat ever opening - which is exactly how
   // the plain autocomplete skipped the climax. Leaving the last objective for natural play lets
@@ -93,12 +108,28 @@ export async function completeActiveObjective({ act, serviceRest, token, advId, 
   // would. This is still not faking the ending: the navigator, the ladder, ending scoring and the
   // commitment gate all run for real.
   const nodes = await serviceRest(
-    'GET', `story_nodes?objective_id=eq.${objectiveId}&select=key,encounter_spec&order=index`)
+    'GET', `story_nodes?objective_id=eq.${objectiveId}&select=id,key,role,encounter_spec&order=index`)
   if (nodes.length > 0) {
     const resolved = await serviceRest(
       'GET', `event_log?adventure_id=eq.${advId}&type=eq.encounter_resolved&select=payload`)
     const done = new Set(resolved.map((e) => e?.payload?.node_key).filter(Boolean))
-    const target = nodes.find((n) => !done.has(n.key)) ?? nodes[0]
+    // Resolve the scene the party is actually IN - the active beat's node - not an arbitrary
+    // unplayed one. `objectiveOutcome` refuses to retire an objective while a beat is active and
+    // unresolved (inPlayNodeKey), so resolving some OTHER node leaves the objective open and the
+    // drive is a silent no-op. Live 2026-07-28: the rescue node sorts first (buildRescueNode uses
+    // index 0), so the driver kept winning r0 while the party stood in n0, and nothing completed.
+    const loops = await serviceRest('GET', `core_loops?adventure_id=eq.${advId}&select=current_beat_id,status`)
+    const activeLoop = loops.find((l) => l.status === 'active')
+    let inPlay = null
+    if (activeLoop?.current_beat_id) {
+      const [beat] = await serviceRest('GET', `beats?id=eq.${activeLoop.current_beat_id}&select=node_id,status`)
+      if (beat?.status === 'active' && beat.node_id) inPlay = nodes.find((n) => n.id === beat.node_id) ?? null
+    }
+    // Otherwise the first unplayed ROUTE - never the rescue, which is the ladder's terminal.
+    const target = inPlay
+      ?? nodes.find((n) => n.role === 'route' && !done.has(n.key))
+      ?? nodes.find((n) => !done.has(n.key))
+      ?? nodes[0]
     const onSuccess = Array.isArray(target.encounter_spec?.on_success) ? target.encounter_spec.on_success : []
     await serviceRest('POST', 'event_log', {
       adventure_id: advId, session_id: state?.session?.id ?? null, type: 'encounter_resolved',
@@ -108,6 +139,7 @@ export async function completeActiveObjective({ act, serviceRest, token, advId, 
     await dm({ command: 'set_fact', fact: `lab_drove_${objectiveId.slice(0, 8)}`, value: true })
     log('autocomplete', 'objective.driven', objective.title, {
       objective_id: objectiveId, via: 'graph', node_key: target.key, milestones: onSuccess,
+      picked: inPlay ? 'active beat' : 'first unplayed route',
     })
     return { done: true, objectiveId, title: objective.title }
   }
