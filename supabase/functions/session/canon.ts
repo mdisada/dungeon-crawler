@@ -130,6 +130,20 @@ export async function buildCanon(
   const registry = ((adventureRow?.meta_loop as { entities?: { kind: string; name: string; note: string }[] } | null)
     ?.entities ?? []).filter((e) => e.kind === 'lore')
   const loreText = registry.map((e) => `${e.name} (${e.note})`).join('; ')
+  // NAMES TRAVEL, NOTES DO NOT (2026-07-28). A lore note is the DM's briefing on what a force
+  // MEANS, and the narrator was being handed the whole registry with "name and describe them
+  // freely". In run 1de855de the notes were "the family that has held the harbourmaster's position
+  // for three generations, bound to the ledger's upkeep" and "the Collector will settle all debts
+  // if the ledger reaches 448 entries" - the answers to objectives 1 and 2. Narration #11 wrote
+  // them out nearly verbatim, in a scene whose whole point was that the party FAILED to get down
+  // the cellar stairs, and then the scene ledger recorded `party_learned_the_ledger_must_not_reach_
+  // 448_entries_tonight` off the back of it. The leak became canon, and the objective that existed
+  // to reveal it opened 19 narrations later already answered, closing in 5.
+  //
+  // The narrator's stated need is "which named forces exist" - so it does not invent a rival
+  // faction that contradicts the guide. Names alone serve that. What a force MEANS is precisely
+  // what the party is playing to find out.
+  const loreNames = registry.map((e) => e.name).join('; ')
   if (registry.length > 0) {
     lines.push(
       `Forces and factions at work (real parts of the world - name and describe them freely; ` +
@@ -201,7 +215,7 @@ export async function buildCanon(
   // rules that used to travel with this text now live in the narrator's system prompt, where they
   // are sent once instead of re-explained on every call.
   const story = [
-    loreText ? `FORCES ${loreText}` : '',
+    loreNames ? `FORCES ${loreNames}` : '',
     trueFlags.length > 0 ? `DONE   ${trueFlags.slice(0, 12).map((f) => f.replaceAll('_', ' ')).join('; ')}` : '',
     pressure.length > 0 ? `CLOCK  ${pressure.join(' ')}` : '',
     props.length > 0 ? `PROPS  ${props.map((p) => p.text).join('; ')}` : '',

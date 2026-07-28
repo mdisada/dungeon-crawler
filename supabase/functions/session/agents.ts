@@ -992,8 +992,10 @@ export async function runReplyGists(env: AgentEnv, ctx: NpcContext, rejected?: s
 const NARRATOR_CONTEXT_KEY =
   ' Labelled facts follow. GOAL: never state as a task. HERE: who is in this scene and who they ' +
   'ARE - hold every detail true, their role and their gender included. CAST: exist, but elsewhere. ' +
-  'GONE: discuss freely, never stage or voice. FORCES/DONE/CLOCK/PROPS: established - build on, ' +
-  'never redefine. Spell names EXACTLY. Unnamed newcomers are always allowed.'
+  'GONE: discuss freely, never stage or voice. FORCES: proper nouns that exist in this world - ' +
+  'you may NAME one, and you do not know what any of them mean: never explain, define, or ' +
+  'attach workings to one. DONE/CLOCK/PROPS: established - build on, never redefine. Spell ' +
+  'names EXACTLY. Unnamed newcomers are always allowed.'
 
 /**
  * LENGTH, IN WORDS (2026-07-27). The old brief said "2-4 sentences, vivid but concise" and could
