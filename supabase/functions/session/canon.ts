@@ -143,7 +143,26 @@ export async function buildCanon(
   // The narrator's stated need is "which named forces exist" - so it does not invent a rival
   // faction that contradicts the guide. Names alone serve that. What a force MEANS is precisely
   // what the party is playing to find out.
-  const loreNames = registry.map((e) => e.name).join('; ')
+  // ...but a note the party has EARNED may now be spoken (2026-07-28). Withholding always was the
+  // right emergency stop and the wrong resting place: it left the narrator unable to explain a
+  // force even after the objective that exists to reveal it had been won.
+  //
+  // The gate is authored at guide time (objectives.reveals_lore, derived in lore-reveals.ts) and
+  // simply read here. Failed objectives do not release anything - the party did not accomplish
+  // them, so they have not earned the explanation - and a force no objective names appears in no
+  // reveal list at all, which is exactly the pre-gate behaviour.
+  const { data: doneObjectives } = await service
+    .from('objectives')
+    .select('reveals_lore')
+    .eq('adventure_id', adventureId)
+    .eq('reveal_state', 'completed')
+    .neq('outcome', 'failed')
+  const revealed = new Set(
+    ((doneObjectives ?? []) as { reveals_lore: string[] | null }[]).flatMap((o) => o.reveals_lore ?? []),
+  )
+  const loreNames = registry
+    .map((e) => (revealed.has(e.name) ? `${e.name} (${e.note})` : e.name))
+    .join('; ')
   if (registry.length > 0) {
     lines.push(
       `Forces and factions at work (real parts of the world - name and describe them freely; ` +

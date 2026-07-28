@@ -12,6 +12,7 @@ import {
   type Stage8Context,
 } from '../_shared/guide/stages/stage8.ts'
 import { hasBlockingErrors, lintStoryGraph } from '../_shared/guide/graph.ts'
+import { deriveLoreReveals } from '../_shared/guide/lore-reveals.ts'
 import { proveGraph } from '../_shared/guide/prove.ts'
 import type { StoryGraph } from '../_shared/guide/graph.ts'
 import type { StageEnv } from './stage-env.ts'
@@ -20,8 +21,7 @@ import { assertOk, logPipelineEvent, syncSpineAtoms } from './util.ts'
 export async function runStage8(env: StageEnv): Promise<void> {
   if (!env.adventure.meta_loop) throw new Error('meta_loop missing - stage 1 must run first')
 
-  // Final authoritative registry pass: stage 7's repair loop may have rewritten predicates
-  // since stage 3 emitted the spine atoms (overhaul Phase 1).
+  // Final authoritative registry pass over the spine atoms stage 3 emitted (overhaul Phase 1).
   await syncSpineAtoms(env.db, env.adventure.id)
 
   const [chapters, objectives, npcs] = await Promise.all([
@@ -40,6 +40,30 @@ export async function runStage8(env: StageEnv): Promise<void> {
     (a, b) => (chapterNumber.get(a.chapter_id) ?? 0) - (chapterNumber.get(b.chapter_id) ?? 0) || a.index - b.index,
   )
   const sortedNpcs = npcs.data ?? []
+
+  // WHEN MAY THE NARRATOR EXPLAIN A FORCE (2026-07-28). Derived here because this is the first
+  // whole-guide stage that can see every objective at once, and stored so it can be inspected and
+  // corrected before play rather than recomputed mid-story. A force no objective names resolves
+  // nowhere and stays withheld - the pre-gate behaviour - so this can only loosen, never leak.
+  const loreNames = ((env.adventure.meta_loop.entities ?? []) as { kind: string; name: string }[])
+    .filter((e) => e.kind === 'lore')
+    .map((e) => e.name)
+  const revealsByObjective = deriveLoreReveals(
+    loreNames,
+    sortedObjectives.map((o) => ({
+      id: o.id as string, index: o.index as number,
+      title: (o.title as string) ?? '', hiddenDescription: (o.hidden_description as string) ?? '',
+    })),
+  )
+  for (const [objectiveId, names] of revealsByObjective) {
+    const { error } = await env.db.from('objectives').update({ reveals_lore: names }).eq('id', objectiveId)
+    assertOk(error, 'lore reveal write failed')
+  }
+  await logPipelineEvent(env.db, env.adventure.id, 'lore_reveals_derived', {
+    lore: loreNames.length,
+    resolved: [...revealsByObjective.values()].flat().length,
+    unresolved: loreNames.filter((n) => ![...revealsByObjective.values()].flat().includes(n)),
+  })
 
   const ctx: Stage8Context = {
     metaLoop: env.adventure.meta_loop,
