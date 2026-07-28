@@ -151,10 +151,30 @@ Respond with ONLY a JSON object, no prose, in exactly this shape:
     .map((e) => `- [${e.kind}] ${e.name}: ${e.note}`)
     .join('\n')
 
+  // PUT WHAT IS KNOWN INTO PEOPLE, NOT ONLY ROOMS (2026-07-28).
+  //
+  // The response shape offers `location_key` and `npc_key` and said nothing about the balance, so
+  // the model reached for rooms almost every time: across two measured guides, 10 of 17 clues were
+  // location-placed and only 3 were on an NPC.
+  //
+  // That decides what play FEELS like, because the two are gated by different machinery. A
+  // location clue is found by searching (discovery.ts, on a passed check). An NPC clue is
+  // released by the reveal gate in a conversation. With the evidence in rooms, talking to people
+  // yields nothing an investigation needs - live, 10 social encounters produced zero reveals while
+  // every discovery came from a search.
+  const placementRule =
+    'PLACEMENT DECIDES HOW THE PARTY PLAYS. A clue on a LOCATION is found by searching it; a clue ' +
+    'on an NPC is prised out of them in conversation. Put roughly half of what matters in ' +
+    "people's heads - what someone saw, is hiding, will trade or lets slip - and reserve locations " +
+    'for physical evidence that has to exist somewhere. An adventure whose every clue sits in a ' +
+    'room gives the party no reason to talk to anyone, and its social scenes have nothing to give.'
+
   const user = `Meta loop antagonist: ${ctx.metaLoop.antagonist}
 
 Chapter ${ctx.chapterNumber}: ${ctx.chapter.title}
 Arc summary: ${ctx.chapter.arcSummary}
+
+${placementRule}
 
 REQUIRED entities (every one must become a row, exact names):
 ${required || '(none)'}

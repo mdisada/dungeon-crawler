@@ -277,6 +277,30 @@ async function rosterLines(
   ].filter(Boolean)
 }
 
+/**
+ * What the party has ALREADY LEARNED, verbatim as authored (2026-07-28).
+ *
+ * `ingredients.discovered` is written by exactly two gates - a passed search in the right room
+ * (discovery.ts) and the reveal gate inside a conversation (npc-dialogue.ts) - so it is a precise
+ * record of what this party has earned, and nothing else. That makes it the one source that can
+ * be handed over whole without leaking: an undiscovered clue is simply not in it.
+ *
+ * It answers the case retrieval handles badly. A player asking "what did that ledger page say?"
+ * two scenes later needs the AUTHORED text, not a semantic neighbour of it - memories are
+ * embeddings of scene summaries and will paraphrase, or miss. This is the exact sentence.
+ */
+async function knownLine(service: SupabaseClient, adventureId: string): Promise<string> {
+  const { data } = await service
+    .from('ingredients')
+    .select('reveals')
+    .eq('adventure_id', adventureId)
+    .eq('discovered', true)
+  const facts = ((data ?? []) as { reveals: string | null }[])
+    .map((r) => (r.reveals ?? '').trim())
+    .filter(Boolean)
+  return facts.length > 0 ? `KNOWN  ${facts.slice(0, 12).join(' // ')}` : ''
+}
+
 /** The thread the party is actually pulling on. Read from state - no query. */
 function goalLine(state: GameState): string {
   const active = state.objectives?.list?.find((o) => o.id === state.objectives?.currentId)
@@ -392,11 +416,19 @@ export async function publishNarration(
   // forces at work, what the party has already achieved, what is on a clock. Withholding it left
   // the fact-checker better informed about the story than its author.
   const canon = await buildCanon(service, env.adventureId, state)
-  const [roster, profiles, memories] = await Promise.all([
+  const [roster, profiles, memories, known] = await Promise.all([
     rosterLines(service, env.adventureId, state),
     partyProfileLines(service, await loadPartyCharacters(service, env.adventureId)),
-    // Retrieval memory (Slice 7): long-form cutscenes ground on what past sessions established.
-    style === 'exposition' ? retrieveMemories(service, env, prompt) : Promise.resolve([]),
+    // Retrieval memory (Slice 7): ground on what past sessions established.
+    //
+    // UNGATED (2026-07-28). This ran only for `exposition`, so the two styles that answer a player
+    // ASKING about something - "what was that ledger we found?" - got no memory at all. `outcome`
+    // narrates the result of a player's action and `beat` opens on what they can engage with;
+    // those are exactly the moments recall matters, and they were the ones excluded.
+    //
+    // One embedding call per narration. It degrades to no-memories on any failure, by design.
+    retrieveMemories(service, env, prompt),
+    knownLine(service, env.adventureId),
   ])
 
   // LABELLED DATA, NOT PROSE (2026-07-27). This block used to be four paragraphs of English that
@@ -418,6 +450,7 @@ export async function publishNarration(
     // pipe-separated run-on, six phases ago sitting beside one second ago.
     transcript.digests.length > 0 ? `SOFAR  ${transcript.digests.join(' // ')}` : '',
     `LAST   ${transcript.recent.join(' | ')}`,
+    known,
     memories.length > 0 ? `EARLIER ${memories.join(' // ')}` : '',
   ].filter(Boolean).join('\n')
 
