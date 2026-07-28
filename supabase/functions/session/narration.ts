@@ -223,7 +223,29 @@ async function rosterLines(
   state: GameState,
 ): Promise<string[]> {
   const npcStates = state.dm?.facts.npcStates ?? {}
-  const staged = new Set(state.dialogue?.speakers?.map((sp) => sp.npcId) ?? [])
+  // PRESENT IS NOT THE SAME QUESTION AS SPEAKING (2026-07-28).
+  //
+  // `dialogue.speakers` is the ROUTING field: whoever is in it takes absolute priority over the
+  // encounter, so entry.ts deliberately refuses to stage speakers when a non-social encounter
+  // opens - otherwise every subsequent input becomes NPC dialogue and starves the challenge (an
+  // NPC staged into a solo search scene, seen live). That guard is right and stays.
+  //
+  // But HERE was reading that same field to answer a different question - who is in this scene -
+  // so a combat or skill challenge with an authored cast told the narrator its cast was
+  // ELSEWHERE. Run 15fc82be had zero social encounters across 26 narrations, so HERE was empty
+  // for every single one and every NPC in the story was described to the narrator as absent,
+  // including the boss the party was fighting.
+  //
+  // The node already records who it stages. Reading presence from there leaves routing untouched.
+  const params = state.dm?.encounterSpec?.params
+  const encounterCast = (typeof params === 'object' && params !== null && !Array.isArray(params) &&
+      Array.isArray((params as Record<string, unknown>).npc_ids)
+    ? ((params as Record<string, unknown>).npc_ids as unknown[]).filter((v): v is string => typeof v === 'string')
+    : [])
+  const staged = new Set([
+    ...(state.dialogue?.speakers?.map((sp) => sp.npcId) ?? []),
+    ...encounterCast,
+  ])
   const { data } = await service
     .from('npcs')
     .select('id, name, initial_state, description, personality')
