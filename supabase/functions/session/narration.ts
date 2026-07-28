@@ -434,6 +434,26 @@ export async function publishNarration(
     throw err
   }
 
+  // RE-CHECK AT WRITE TIME, NOT LOAD TIME (2026-07-28). The `endedSessionId` guard at the top of
+  // this function reads state from BEFORE the narrator ran, and the narrator runs for 9-33s. A
+  // scene that began drafting while the story was still live published 5.4s AFTER
+  // `adventure_ended` in run 0bcf6d87 - the player read the epilogue, then a new scene opened
+  // under it. `narration_suppressed` was 0 for that run: the guard is not weak, it is early.
+  //
+  // commitDiffs re-loads state for the builder and retries on stale versions, so the builder is
+  // the only place in this function that sees the state the write actually lands on.
+  let suppressed = false
+  await commitDiffs(service, env.adventureId, (s) => {
+    suppressed = Boolean(s.dm?.story?.endedSessionId) && s.dm?.story?.endedSessionId === sessionId
+    if (suppressed) return [typingDiff(false)]
+    return [appendLinesDiff(s, [newLine(null, null, text)]), typingDiff(false)]
+  })
+  if (suppressed) {
+    await logEvent(service, env.adventureId, sessionId, 'narration_suppressed', {
+      reason: 'story_ended_during_generation', style, prompt: prompt.slice(0, 140),
+    }).catch(() => {})
+    return ''
+  }
   await recordProposal(service, {
     adventureId: env.adventureId,
     sessionId,
@@ -443,10 +463,6 @@ export async function publishNarration(
     blocking: true,
     summary: text.slice(0, 80),
   })
-  await commitDiffs(service, env.adventureId, (s) => [
-    appendLinesDiff(s, [newLine(null, null, text)]),
-    typingDiff(false),
-  ])
   // `style` rides along so length can be judged per style (2026-07-27). Without it the measured
   // 868-char median mixes 2-4-sentence beats with 4-8-sentence cutscenes, and "are beats too long?"
   // has no answer - which is precisely why a length ceiling could not be set responsibly.
