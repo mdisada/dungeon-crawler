@@ -76,6 +76,15 @@ Do NOT report:
   Unused is not broken. Non-use is worth reporting ONLY when something DEPENDS on it: an
   objective's completion predicate, a hook that points at it, or a scene that assumes the party
   already has it.
+- Something the party has not learned or reached YET. You are reading the DM's reference, not a
+  script in play order: a clue names what it reveals before anyone finds it, a location describes
+  what is there before anyone walks in, an objective states what is true before the party can see
+  it, and a secret is written down long before it is told. "The party has no access to this at
+  this point", "this is not established until later", "there is no context for them to notice
+  this yet", "this is only a clue and not a scene" - every one of those describes a mystery
+  working as intended. Discovery is the game. Report unreachability ONLY when NOTHING anywhere in
+  the guide could ever deliver it - no scene, no NPC, no clue, in any chapter - and say which
+  thing has no possible source.
 - Detail that merely could be tighter, better connected, or more integrated. That is the
   creator's taste, not a defect.
 
