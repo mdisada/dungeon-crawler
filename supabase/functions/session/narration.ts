@@ -278,6 +278,47 @@ async function rosterLines(
 }
 
 /**
+ * WHERE THIS SCENE IS, which is not always where `state.scene` says (2026-07-28).
+ *
+ * A node carries the place it happens. The runtime narrates a "pull" when the party is elsewhere
+ * and opens the encounter when they engage - but nothing ever moves `scene.locationId` to the
+ * node, because travel is only committed when the intent mapper spots the player SAYING they
+ * travel. So the fiction walks into the room and the state stays outside it.
+ *
+ * Run 6d9b2aeb: the party broke into the harbourmaster's office at narration #8 and every
+ * narration through #21 was still stamped `Marenfleet`, thirteen scenes later. #21 then wrote
+ * "somewhere beyond the quay, the Harbourmaster's office waits empty" while the party, Edric and
+ * Wenna were all standing in it.
+ *
+ * This corrects what the NARRATOR is told, which is the half that reaches the page. It does not
+ * move the party: `scene.locationId` still drives discovery, props and travel, and changing that
+ * needs `setScene` and a creator id that this path does not have. The divergence is logged so the
+ * remaining half is measurable rather than invisible.
+ */
+async function sceneLocation(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  state: GameState,
+): Promise<string> {
+  const stated = state.scene.locationName || ''
+  const nodeKey = state.dm?.encounterSpec?.nodeKey
+  if (!nodeKey || !state.encounter) return stated || 'unknown'
+  const { data } = await service
+    .from('story_nodes')
+    .select('location_id, locations(name)')
+    .eq('adventure_id', env.adventureId)
+    .eq('key', nodeKey)
+    .maybeSingle()
+  const actual = (data as { locations?: { name?: string } | null } | null)?.locations?.name ?? ''
+  if (!actual || actual === stated) return stated || 'unknown'
+  await logEvent(service, env.adventureId, sessionId, 'incident', {
+    kind: 'scene_location_diverged', stated, actual, node_key: nodeKey,
+  }).catch(() => {})
+  return actual
+}
+
+/**
  * What the party has ALREADY LEARNED, verbatim as authored (2026-07-28).
  *
  * `ingredients.discovered` is written by exactly two gates - a passed search in the right room
@@ -416,7 +457,7 @@ export async function publishNarration(
   // forces at work, what the party has already achieved, what is on a clock. Withholding it left
   // the fact-checker better informed about the story than its author.
   const canon = await buildCanon(service, env.adventureId, state)
-  const [roster, profiles, memories, known] = await Promise.all([
+  const [roster, profiles, memories, known, whereWeAre] = await Promise.all([
     rosterLines(service, env.adventureId, state),
     partyProfileLines(service, await loadPartyCharacters(service, env.adventureId)),
     // Retrieval memory (Slice 7): ground on what past sessions established.
@@ -429,6 +470,7 @@ export async function publishNarration(
     // One embedding call per narration. It degrades to no-memories on any failure, by design.
     retrieveMemories(service, env, prompt),
     knownLine(service, env.adventureId),
+    sceneLocation(service, env, sessionId, state),
   ])
 
   // LABELLED DATA, NOT PROSE (2026-07-27). This block used to be four paragraphs of English that
@@ -440,7 +482,7 @@ export async function publishNarration(
   const grounded = [
     prompt,
     '',
-    `SCENE  ${state.scene.locationName || 'unknown'} | ${state.scene.mode} | day ${state.scene.day}`,
+    `SCENE  ${whereWeAre} | ${state.scene.mode} | day ${state.scene.day}`,
     goalLine(state),
     ...roster,
     canon.story,
@@ -572,7 +614,7 @@ export async function publishNarration(
   // question behind narration #19 of run 15fc82be inventing a location. One field, and the class
   // of bug where prose and state disagree about place becomes checkable without a code read.
   await logEvent(service, env.adventureId, sessionId, 'narration_published', {
-    text, style, prompt: prompt.slice(0, 2000), location: state.scene.locationName || null,
+    text, style, prompt: prompt.slice(0, 2000), location: whereWeAre,
   })
   return text
 }

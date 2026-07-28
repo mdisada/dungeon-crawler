@@ -37,6 +37,7 @@ import { evaluateStoryProgress } from './progress.ts'
 import { recordProposal } from './proposals.ts'
 import { applySceneEffects } from './scene-director.ts'
 import { detectSocialExit, recordSocialExchange, resolveSocialExit } from './social-encounter.ts'
+import { foreignCharacters, stripForeign } from '../_shared/guide/charset.ts'
 import { applyDispositionDelta, dispositionMap } from './disposition.ts'
 import { endEncounter, loadNpc, startSocial } from './social-staging.ts'
 import type { NpcRow } from './social-staging.ts'
@@ -251,6 +252,27 @@ export async function npcReply(
     if (env.demo || !verdict.ok) {
       await logEvent(service, env.adventureId, sessionId, 'incident', { kind: 'npc_consistency_failure', npc_id: npcId })
       output = { ...output, dialogue: `${npc.name} says nothing for a long moment.`, reveals: [], opening: null }
+    }
+  }
+
+  // CHARSET, SAME AS NARRATION (2026-07-28). The narrator has had a charset gate since spliced CJK
+  // reached published prose ("*Drift彤* glide past the harbor stones"). NPC dialogue never did, and
+  // it reaches the player through exactly the same channel - run 6d9b2aeb logged an NPC tone of
+  // "cracking through the harbour-formal veneer as the举".
+  //
+  // Stripped rather than regenerated: this is not a judgement call, the surrounding words are
+  // fine, and a second model call to remove three characters is not worth a turn's latency.
+  const strayDialogue = foreignCharacters(output.dialogue)
+  const strayTone = foreignCharacters(output.tone ?? '')
+  if (strayDialogue.length > 0 || strayTone.length > 0) {
+    await logEvent(service, env.adventureId, sessionId, 'incident', {
+      kind: 'npc_charset_stripped', npc_id: npcId,
+      characters: [...strayDialogue, ...strayTone].slice(0, 8).join(''),
+    }).catch(() => {})
+    output = {
+      ...output,
+      dialogue: stripForeign(output.dialogue),
+      ...(output.tone ? { tone: stripForeign(output.tone) } : {}),
     }
   }
 
