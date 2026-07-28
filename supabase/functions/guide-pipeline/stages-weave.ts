@@ -1,9 +1,6 @@
 // Stages 6-7: Hook Weaver cross-links and the Consistency pass over the whole guide.
 import { buildStage6Prompt, parseStage6 } from '../_shared/guide/stages/stage6.ts'
-import {
-  buildStage7EditPlanPrompt, buildStage7Prompt, parseStage7, parseStage7EditPlan,
-  REPAIRABLE_FIELDS, validateRegistryCoverage,
-} from '../_shared/guide/stages/stage7.ts'
+import { buildStage7Prompt, parseStage7, validateRegistryCoverage } from '../_shared/guide/stages/stage7.ts'
 import { buildGroupClassifierPrompt, groupNpcIds, parseGroupClassifier } from '../_shared/guide/group-npcs.ts'
 import { buildPersonalSlotsPrompt, parsePersonalSlots, personalAtoms } from '../_shared/guide/personal.ts'
 import { downgradeUnstageableNodes, pruneNodeNpcIds } from '../_shared/guide/nodes.ts'
@@ -393,350 +390,32 @@ async function authorPersonalSlots(env: StageEnv): Promise<void> {
  * the residue goes to the review popup. The loop also breaks early when a round applies
  * nothing: re-checking unchanged content would only re-report the same findings.
  */
-const MAX_REPAIR_ROUNDS = 3
-
-/** The repairable fields of one row, loaded verbatim for the repair prompt. */
-async function loadRepairFields(
-  env: StageEnv,
-  table: string,
-  id: string,
-  chapters: { id: string; number: number; title: string }[],
-): Promise<
-  { fields: Record<string, string>; humanEdited: boolean; content: Record<string, unknown> | null; raw: Record<string, unknown> } | null
-> {
-  // Every column applyEdit can patch must be selected here, or a revert cannot restore it.
-  // `index` is not repairable itself but rides along with an objective's chapter move.
-  const columns: Record<string, string> = {
-    objectives: 'title, hidden_description, chapter_id, completion_predicates, index, human_edited',
-    npcs: 'description, chapter_id, human_edited',
-    locations: 'description, chapter_id, human_edited',
-    ingredients: 'content, reveals, human_edited',
-    story_nodes: 'narration_seed, label, human_edited',
-  }
-  const { data, error } = await env.db.from(table).select(columns[table]).eq('id', id).maybeSingle()
-  if (error || !data) return null
-  const row = data as Record<string, unknown>
-  const content = (row.content ?? null) as Record<string, unknown> | null
-  const fields: Record<string, string> = {}
-  for (const field of REPAIRABLE_FIELDS[table] ?? []) {
-    if (field === 'chapter') {
-      // Current placement, in the same vocabulary the patch uses ("2" | "global").
-      fields.chapter = row.chapter_id ? String(chapters.find((c) => c.id === row.chapter_id)?.number ?? '?') : 'global'
-      continue
-    }
-    if (field === 'completion_predicates') {
-      // Shown (and patched) as a JSON string; stored as jsonb.
-      fields.completion_predicates = JSON.stringify(row.completion_predicates ?? null)
-      continue
-    }
-    const value = field === 'text' ? content?.text : row[field]
-    fields[field] = typeof value === 'string' ? value : ''
-  }
-  return { fields, humanEdited: row.human_edited === true, content, raw: row }
-}
-
-/**
- * Apply ONE validated edit from the round's plan: logical fields become columns (ingredient
- * 'text' -> content jsonb; 'chapter' -> chapter_id, the structural MOVE), guarded by the
- * stage-6 invariant (the entry contract's giver never leaves chapter 1) and objective-index
- * appending. Logs the guide_repair event with before/after - loud by design (F04 SS2
- * amendment).
- *
- * Returns the column values needed to UNDO this edit, or null when nothing was written. The undo
- * is captured here rather than derived later because `patch` is where logical fields have already
- * become columns - by the time the round is judged, that mapping is gone.
- */
-async function applyEdit(
-  env: StageEnv,
-  edit: { handle: string; patch: Record<string, string>; note: string },
-  ref: { table: string; id: string },
-  loaded: { fields: Record<string, string>; content: Record<string, unknown> | null; raw: Record<string, unknown> },
-  chapters: { id: string; number: number; title: string }[],
-  entryGiverIds: Set<string>,
-  findingsForHandle: string[],
-): Promise<Record<string, unknown> | null> {
-  try {
-    const patch: Record<string, unknown> = {}
-    for (const [field, value] of Object.entries(edit.patch)) {
-      if (ref.table === 'ingredients' && field === 'text') {
-        patch.content = { ...(loaded.content ?? {}), text: value }
-      } else if (field === 'completion_predicates') {
-        // Parser already validated grammar/no-facts/claimability; stored as jsonb.
-        patch.completion_predicates = JSON.parse(value)
-      } else if (field === 'chapter') {
-        // Drop only a guarded move; the edit's text fields still apply.
-        if (ref.table === 'npcs' && entryGiverIds.has(ref.id)) continue
-        // A "move" to the current chapter is a no-op - and for objectives it would still
-        // append-to-end, silently reordering the ladder (chapter "3" -> "3", live 2026-07-22).
-        if (value === (loaded.fields.chapter ?? '')) continue
-        const target = value === 'global' ? null : chapters.find((ch) => ch.number === Number(value))?.id
-        if (value !== 'global' && !target) continue
-        patch.chapter_id = target
-        if (ref.table === 'objectives' && target) {
-          // Append to the target chapter's ladder - deterministic ordering, no index collisions.
-          const { data: siblings } = await env.db
-            .from('objectives')
-            .select('index')
-            .eq('chapter_id', target)
-            .order('index', { ascending: false })
-            .limit(1)
-          patch.index = ((siblings?.[0]?.index as number | undefined) ?? -1) + 1
-        }
-      } else {
-        patch[field] = value
-      }
-    }
-    if (Object.keys(patch).length === 0) return null
-    const { error } = await env.db.from(ref.table).update(patch).eq('id', ref.id)
-    if (error) return null
-
-    await logPipelineEvent(env.db, env.adventure.id, 'guide_repair', {
-      handle: edit.handle,
-      table: ref.table,
-      warning: findingsForHandle.join(' | '),
-      note: edit.note,
-      before: Object.fromEntries(
-        Object.keys(edit.patch).map((f) => [f, (loaded.fields[f] ?? '').slice(0, 300)]),
-      ),
-      after: Object.fromEntries(Object.entries(edit.patch).map(([f, v]) => [f, v.slice(0, 300)])),
-    })
-    // A column absent from the select is SKIPPED, not nulled: a partial revert beats wiping a
-    // field whose prior value was never read.
-    const undo: Record<string, unknown> = {}
-    for (const column of Object.keys(patch)) {
-      if (column in loaded.raw) undo[column] = loaded.raw[column]
-    }
-    return undo
-  } catch (err) {
-    console.error(`stage-7 edit failed for ${edit.handle}`, err)
-    return null
-  }
-}
-
-/**
- * Put the guide back as it was before a round that made it worse.
- *
- * The divergence guard used to stop the LOOP while leaving the round's writes in place, so a
- * guide that went into round 2 with 6 major findings shipped with 14 - the guard noticed the
- * damage and kept it (live 2026-07-28, guide c29038df). Detecting a bad round is only useful if
- * the round can be taken back.
- */
-async function revertRound(
-  env: StageEnv,
-  undos: { table: string; id: string; patch: Record<string, unknown> }[],
-  created: { table: string; id: string }[],
-): Promise<number> {
-  let reverted = 0
-  // Newest first: two edits to one row in the same round unwind to the earliest capture, which
-  // is the only one holding the pre-round value.
-  for (const undo of [...undos].reverse()) {
-    const { error } = await env.db.from(undo.table).update(undo.patch).eq('id', undo.id)
-    if (error) {
-      console.error(`stage-7 revert failed for ${undo.table}/${undo.id}`, error)
-      continue
-    }
-    reverted++
-  }
-  for (const row of created) {
-    const { error } = await env.db.from(row.table).delete().eq('id', row.id)
-    if (error) console.error(`stage-7 revert delete failed for ${row.table}/${row.id}`, error)
-    else reverted++
-  }
-  return reverted
-}
 
 export async function runStage7(env: StageEnv): Promise<void> {
   const arc = env.adventure.meta_loop?.arc ?? ''
-  // The entry contract's giver must stay a chapter-1/global NPC (stage-6 invariant) - loaded
-  // once; ids are stable across rounds even when rows move.
-  const { data: entryContracts } = await env.db
-    .from('quest_contracts')
-    .select('giver_npc_id')
-    .eq('adventure_id', env.adventure.id)
-    .eq('is_entry', true)
-  const entryGiverIds = new Set(((entryContracts ?? []) as { giver_npc_id: string | null }[])
-    .map((k) => k.giver_npc_id)
-    .filter((id): id is string => id !== null))
-
-  // Convergence loop (user-directed 2026-07-22): check -> ONE edit-plan call that fixes every
-  // row-targeted finding together -> re-check the CHANGED guide -> again, until clean or
-  // MAX_REPAIR_ROUNDS. A single planned call is what fixes contradiction CLUSTERS (five
-  // findings, one root, every affected row aligned in one pass) - and it replaced the per-row
-  // parallel fan-out that tripped the edge runtime's concurrent-fetch ceiling (7 parallel
-  // repairs, 0 completed, live 2026-07-22). Each round re-derives digest AND refs: a chapter
-  // move renumbers handles, so the previous round's refs are stale the moment a move applies.
-  // Row-less findings (coverage, guide-level observations) and human-edited rows stay warnings.
-  let current = await buildDigest(env.db, env.adventure.id)
-  let findings = await env.generate(
+  // CHECK ONLY (2026-07-28). Stage 7 reports contradictions; it no longer rewrites rows.
+  //
+  // The convergence loop that used to live here - check, plan one batch of edits, re-check, revert
+  // the round if majors did not fall - was measured over every guide generated to date and stalled
+  // on all eight, reverting each time. 28 edits planned across the sample, 0 survived; majors rose
+  // in seven of eight (5 -> 14 on 77451545, 1 -> 6 on 98a5ea7d). It cost a checker pass plus an
+  // edit-plan call per round and never once left a guide better.
+  //
+  // Detection is worth keeping and is genuinely good - stage 7 independently caught the
+  // unregistered ship "Miriam's Promise" that the structural gates cannot see. So the findings
+  // still ship as warnings for the creator, and the guide reaches guide_ready describing itself
+  // honestly instead of having been edited toward a checker that was not converging.
+  const current = await buildDigest(env.db, env.adventure.id)
+  const residue = await env.generate(
     'consistency_checker',
     buildStage7Prompt(current.digest, arc),
     (raw) => parseStage7(raw, current.digest),
   )
-  const firstFound = findings.length
-  let rounds = 0
-  let totalPlanned = 0
-  let totalApplied = 0
-  while (rounds < MAX_REPAIR_ROUNDS && findings.length > 0) {
-    // The round's editable surface: flagged rows that exist, are editable, and are not
-    // human-edited. Loaded sequentially - burst DB fetches share the same outbound-fetch
-    // ceiling the parallel repairs died on.
-    // MAJOR ONLY (2026-07-28). `minor` is defined as "clarity and polish"; `major` is a
-    // contradiction, an unreachable thing, something broken. The filter never looked at severity,
-    // so the three rounds were spent rewriting prose to satisfy polish nitpicks - and every such
-    // rewrite shifts the digest the checker reads next round, which invites a fresh crop of
-    // different nitpicks.
-    //
-    // The loop was measurably diverging because of it: guide de701722 went in with 8 findings,
-    // applied 24 of 24 planned edits across all 3 rounds, and came out with 10. It reported total
-    // success while leaving more problems than it started with, and the contradictions that
-    // actually matter survived alongside the churn.
-    //
-    // Minors are still reported to the creator as `info`; they are simply not worth a repair
-    // round, and they are the reason the majors never got one.
-    const targeted = findings.filter((w): w is WarningDraft & { targetHandle: string } => {
-      if (w.severity !== 'major') return false
-      const ref = w.targetHandle ? current.refs.get(w.targetHandle) : null
-      return Boolean(ref && (REPAIRABLE_FIELDS[ref.table] ?? []).length > 0)
-    })
-    if (targeted.length === 0) break
-    const rowByHandle = new Map<string, { table: string; id: string; fields: Record<string, string>; content: Record<string, unknown> | null; raw: Record<string, unknown> }>()
-    for (const handle of new Set(targeted.map((w) => w.targetHandle))) {
-      const ref = current.refs.get(handle)!
-      const loaded = await loadRepairFields(env, ref.table, ref.id, current.chapters)
-      if (loaded && !loaded.humanEdited) {
-        rowByHandle.set(handle, { table: ref.table, id: ref.id, fields: loaded.fields, content: loaded.content, raw: loaded.raw })
-      }
-    }
-    const planWarnings = targeted.filter((w) => rowByHandle.has(w.targetHandle))
-    // Row-less findings (registry coverage, guide-level) reach the planner too - their fix,
-    // when one exists, is CREATING the missing entity (user-directed 2026-07-22).
-    const rowless = findings.filter((w) => !w.targetHandle).map((w) => w.message)
-    if (planWarnings.length === 0 && rowless.length === 0) break
 
-    // Existing cast names guard creates against duplicates; reloaded per round because a
-    // create changes the answer.
-    const [{ data: npcNames }, { data: locationNames }] = await Promise.all([
-      env.db.from('npcs').select('name').eq('adventure_id', env.adventure.id),
-      env.db.from('locations').select('name').eq('adventure_id', env.adventure.id),
-    ])
-    const existingNames = new Set(
-      [...(npcNames ?? []), ...(locationNames ?? [])].map((r) => String(r.name).trim().toLowerCase()),
-    )
-
-    rounds++
-    let edits
-    try {
-      edits = await env.generate(
-        'consistency_checker',
-        buildStage7EditPlanPrompt({
-          warnings: planWarnings.map((w) => ({ handle: w.targetHandle, message: w.message })),
-          rowlessWarnings: rowless,
-          rows: [...rowByHandle.entries()].map(([handle, r]) => ({ handle, table: r.table, fields: r.fields })),
-          digest: current.digest,
-          metaLoopArc: arc,
-          chapters: current.chapters.map(({ number, title }) => ({ number, title })),
-        }),
-        (raw) => parseStage7EditPlan(raw, new Set(rowByHandle.keys()), current.chapters.length, existingNames),
-      )
-    } catch (err) {
-      // The plan call failing is not worth the stage - the findings simply ship as warnings.
-      console.error('stage-7 edit plan failed', err)
-      break
-    }
-    if (edits.length === 0) break
-    totalPlanned += edits.length
-    let applied = 0
-    // What it would take to undo this round, captured as it happens - see revertRound.
-    const undos: { table: string; id: string; patch: Record<string, unknown> }[] = []
-    const created: { table: string; id: string }[] = []
-    for (const edit of edits) {
-      if (edit.create) {
-        const table = edit.create.kind === 'npc' ? 'npcs' : 'locations'
-        const chapterId = edit.create.chapter === 'global'
-          ? null
-          : current.chapters.find((ch) => ch.number === Number(edit.create!.chapter))?.id ?? null
-        const { data: inserted, error } = await env.db.from(table).insert({
-          adventure_id: env.adventure.id,
-          chapter_id: chapterId,
-          name: edit.create.name,
-          description: edit.create.description,
-        }).select('id').maybeSingle()
-        if (!error) {
-          applied++
-          if (inserted?.id) created.push({ table, id: inserted.id as string })
-          await logPipelineEvent(env.db, env.adventure.id, 'guide_repair', {
-            handle: '(new)',
-            table,
-            warning: rowless.slice(0, 2).join(' | '),
-            note: edit.note,
-            before: {},
-            after: { name: edit.create.name, description: edit.create.description.slice(0, 300), chapter: edit.create.chapter },
-          })
-        } else {
-          console.error('stage-7 create failed', error)
-        }
-        continue
-      }
-      const row = edit.handle ? rowByHandle.get(edit.handle) : undefined
-      if (!row) continue
-      const findingsForHandle = planWarnings.filter((w) => w.targetHandle === edit.handle).map((w) => w.message)
-      const undo = await applyEdit(env, edit as { handle: string; patch: Record<string, string>; note: string }, { table: row.table, id: row.id }, row, current.chapters, entryGiverIds, findingsForHandle)
-      if (undo) {
-        undos.push({ table: row.table, id: row.id, patch: undo })
-        applied++
-      }
-    }
-    totalApplied += applied
-    if (applied === 0) break
-
-    // Re-check describes the guide as it now IS - and feeds the next round. A re-check
-    // failure is not worth the stage: ship the last round's findings as the residue
-    // (over-warning about content that may now be fixed beats dying after rows were written).
-    const majorsBefore = findings.filter((w) => w.severity === 'major').length
-    // The state this round is judged against, kept so a bad round can be undone whole: the DB
-    // rows (undos/created), the findings that described them, and the digest those findings'
-    // handles were parsed against.
-    const priorFindings = findings
-    const priorDigest = current
-    try {
-      current = await buildDigest(env.db, env.adventure.id)
-      findings = await env.generate(
-        'consistency_checker',
-        buildStage7Prompt(current.digest, arc),
-        (raw) => parseStage7(raw, current.digest),
-      )
-    } catch (err) {
-      console.error('stage-7 re-check failed, shipping last findings', err)
-      break
-    }
-    // A round that did not REDUCE the contradictions has stopped helping, and the next one edits
-    // prose against a checker that is no longer converging. Roll it back and stop, rather than
-    // spend the remaining rounds making the guide different instead of better.
-    const majorsAfter = findings.filter((w) => w.severity === 'major').length
-    if (majorsAfter >= majorsBefore) {
-      const reverted = await revertRound(env, undos, created)
-      await logPipelineEvent(env.db, env.adventure.id, 'guide_repair_stalled', {
-        round: rounds, majors_before: majorsBefore, majors_after: majorsAfter,
-        reverted, edits_undone: undos.length, creates_removed: created.length,
-      })
-      // The guide is the pre-round guide again, so the residue must describe THAT one - shipping
-      // the post-round findings would point the creator at rows that no longer say those things.
-      totalApplied -= applied
-      findings = priorFindings
-      current = priorDigest
-      break
-    }
-  }
-  const residue = findings
-
-  await logPipelineEvent(env.db, env.adventure.id, 'guide_repair_summary', {
-    found: firstFound,
-    rounds,
-    attempted: totalPlanned,
-    applied: totalApplied,
-    residual: residue.length,
-    residual_major: residue.filter((w) => w.severity === 'major').length,
-    residual_minor: residue.filter((w) => w.severity === 'minor').length,
+  await logPipelineEvent(env.db, env.adventure.id, 'guide_check_summary', {
+    found: residue.length,
+    major: residue.filter((w) => w.severity === 'major').length,
+    minor: residue.filter((w) => w.severity === 'minor').length,
   })
 
   const { error: deleteError } = await env.db
