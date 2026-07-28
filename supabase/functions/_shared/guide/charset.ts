@@ -31,6 +31,21 @@ export function foreignCharacters(text: string): string[] {
 }
 
 /**
+ * `text` with every out-of-range character removed, and the gap it leaves closed up.
+ *
+ * The last resort, for the paths that cannot ask again: the live climax publishes without an LLM
+ * re-narration on purpose (so the ending always lands), and a narrator that reached for a Han
+ * character twice will reach for one a third time. Deleting them is always readable - "*Drift彤*"
+ * becomes "*Drift*", "The堵塞 channels" becomes "The channels" - and never worse than shipping them.
+ */
+export function stripForeign(text: string): string {
+  const source = String(text ?? '')
+  const bad = new Set(foreignCharacters(source))
+  if (bad.size === 0) return source
+  return [...source].filter((ch) => !bad.has(ch)).join('').replace(/[ \t]{2,}/g, ' ').trim()
+}
+
+/**
  * A validator error line for a stage reply, or null when the text is clean.
  *
  * Phrased as an instruction the model can act on: naming the characters is what lets the retry

@@ -5,6 +5,7 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
+import { foreignCharacters, stripForeign } from '../_shared/guide/charset.ts'
 import type { GameState, Json, StateDiff } from '../_shared/state/index.ts'
 import {
   commitmentReady, evaluatePredicate, ladderReady, listMilestoneAtoms,
@@ -537,13 +538,22 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
   const roster = ((npcRows ?? []) as { id: string; name: string }[])
     .map((n) => ({ id: n.id, name: n.name, state: state.dm?.facts.npcStates?.[n.id] ?? 'alive' }))
   const { violations } = await runClaimCheck(env, climax, roster)
-  if (violations.length > 0) {
+  // Characters outside the adventure's language (2026-07-28). This text does NOT go through
+  // publishNarration, so the guard there never sees it - and it is the one line every run is
+  // guaranteed to end on. Same remedy as a claim-check violation: fall back to climax_summary,
+  // which the guide pipeline charset-gated at authoring time.
+  const foreign = foreignCharacters(climax)
+  if (violations.length > 0 || foreign.length > 0) {
     await logEvent(service, env.adventureId, sessionId, 'ending_climax_reauthored', {
-      ending_id: leadingId, violations: violations.map((v) => `${v.name} (${v.state})`),
+      ending_id: leadingId,
+      violations: violations.map((v) => `${v.name} (${v.state})`),
+      characters: foreign.slice(0, 8).join(' '),
     }).catch(() => {})
     climax = leading.climax_summary || leading.description
   }
-  const endingText = `${leading.title}\n\n${climax}`
+  // A guide authored before that gate existed can carry the same defect in its stored summary,
+  // and there is no third fallback - remove whatever survives rather than publish it.
+  const endingText = stripForeign(`${leading.title}\n\n${climax}`)
   await commitDiffs(service, env.adventureId, (s) => [
     appendLinesDiff(s, [newLine(null, null, endingText)]), typingDiff(false),
   ])

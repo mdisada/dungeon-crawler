@@ -6,6 +6,7 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
+import { foreignCharacters, stripForeign } from '../_shared/guide/charset.ts'
 import { dialogueGateActive, dmSettings } from '../_shared/play/index.ts'
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
 import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions, runOutcomeClaimCheck } from './agents.ts'
@@ -125,6 +126,46 @@ async function outcomeGuard(
  * - poisons every subsequent line rather than merely reading oddly.
  */
 export const OUTCOME_CLAIM_CHECK: 'off' | 'shadow' | 'enforce' = 'enforce'
+
+/**
+ * Characters from outside the adventure's language, published to the player (2026-07-28).
+ *
+ * The guide pipeline gained a charset gate when an ending summary shipped reading "not the官方
+ * story". The LIVE NARRATOR never had one - and it reaches the player far more often than the
+ * guide does. Across twelve recorded runs, 3 of 337 published lines carried spliced CJK:
+ * "*Drift彤* glide past the harbor stones", "The堵塞 channels can't be cleared with knives".
+ *
+ * Enforced harder than the prose checks above, because it is not a judgement call. A dead NPC
+ * "speaking" is a model's reading of ambiguous prose - wrong 14 times out of 14 when it last had
+ * authority. A Han character in an English sentence is a fact with no false positive available,
+ * so a second failure does NOT keep the prose: the offending characters are removed. Deleting
+ * them is always readable ("*Drift*", "The channels") and never worse than what it replaces,
+ * which is not true of the mechanical fallback.
+ */
+async function charsetGuard(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  draft: string,
+  regenerate: (constraint: string) => Promise<string>,
+): Promise<string> {
+  const bad = foreignCharacters(draft)
+  if (bad.length === 0) return draft
+  const shown = bad.slice(0, 8).join(' ')
+  await logEvent(service, env.adventureId, sessionId, 'charset_blocked', {
+    characters: shown, draft: draft.slice(0, 400),
+  }).catch(() => {})
+  const second = await regenerate(
+    `NEVER use characters outside English - your previous draft contained ${shown}. ` +
+    'Write every word in English; do not transliterate and do not leave placeholders.',
+  ).catch(() => draft)
+  const stillBad = foreignCharacters(second)
+  if (stillBad.length === 0) return second
+  await logEvent(service, env.adventureId, sessionId, 'incident', {
+    kind: 'charset_stripped', characters: stillBad.slice(0, 8).join(' '),
+  }).catch(() => {})
+  return stripForeign(second)
+}
 
 function factSheet(state: GameState): string {
   const recent = agentContextLines(state, 6)
@@ -370,6 +411,10 @@ export async function publishNarration(
         })
       }
     }
+    // LAST, deliberately: every regeneration above can introduce characters of its own, so this
+    // has to be the final thing that touches the text before it is published.
+    text = await charsetGuard(service, env, sessionId, text, (constraint) =>
+      runNarrator(env, grounded, constraint, style))
   } catch (err) {
     // A narrator outage must not leave typing:true locking every future intent.
     await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { charsetError, foreignCharacters } from './charset'
+import { charsetError, foreignCharacters, stripForeign } from './charset'
 
 describe('authored prose must be readable (2026-07-28)', () => {
   it('catches the live failure verbatim', () => {
@@ -37,5 +37,30 @@ describe('authored prose must be readable (2026-07-28)', () => {
   it('handles empty and nullish input without throwing', () => {
     expect(foreignCharacters('')).toEqual([])
     expect(charsetError('')).toBeNull()
+  })
+})
+
+describe('stripping, for the paths that cannot ask again (2026-07-28)', () => {
+  it('removes the characters live narration actually shipped', () => {
+    // All three verbatim from published narration_published rows.
+    expect(stripForeign('watching the *Drift彤* glide past the harbor stones'))
+      .toBe('watching the *Drift* glide past the harbor stones')
+    expect(stripForeign("The堵塞 channels can't be cleared with knives"))
+      .toBe("The channels can't be cleared with knives")
+    expect(stripForeign("seek out the哄'")).toBe("seek out the'")
+  })
+
+  it('closes the gap the removal leaves rather than doubling the spaces', () => {
+    expect(stripForeign('the 堵塞 channels')).toBe('the channels')
+  })
+
+  it('is a no-op on prose that was already clean', () => {
+    const clean = 'A café owner named Ysolde Ó Braonáin runs the quay — she pays 50€ a week.'
+    expect(stripForeign(clean)).toBe(clean)
+  })
+
+  it('handles empty and nullish input without throwing', () => {
+    expect(stripForeign('')).toBe('')
+    expect(stripForeign(undefined as unknown as string)).toBe('')
   })
 })
