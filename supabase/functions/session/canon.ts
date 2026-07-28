@@ -234,7 +234,23 @@ export async function buildCanon(
   // rules that used to travel with this text now live in the narrator's system prompt, where they
   // are sent once instead of re-explained on every call.
   const story = [
-    loreNames ? `FORCES ${loreNames}` : '',
+    // WHAT A FORCE IS, not just its name (2026-07-28). The fact-checker above is told that these
+    // "are not people and never speak"; the narrator was handed the bare list and left to work it
+    // out. It did not, and could not reasonably be expected to.
+    //
+    // Run 15fc82be: stage 6 correctly identified "Warden Selk" as a group rather than a person,
+    // deleted the NPC row, and reclassified him to lore in both registries - the machinery worked.
+    // He then reached the narrator as one more name under FORCES, and 7 of 26 narrations staged
+    // him as a character, including speaking: "Selk's voice carries over the flood: a name read
+    // aloud from the Ledger." A person with no row, no voice and no life state, who cannot be
+    // addressed or killed or tracked.
+    //
+    // The qualifier is what makes the datum usable, exactly as naming the location was for the
+    // beat-opening prompt. It costs one clause per narration.
+    loreNames
+      ? `FORCES ${loreNames} - named parts of the world, not people: they are never present as ` +
+        'characters, never speak, and never act.'
+      : '',
     trueFlags.length > 0 ? `DONE   ${trueFlags.slice(0, 12).map((f) => f.replaceAll('_', ' ')).join('; ')}` : '',
     pressure.length > 0 ? `CLOCK  ${pressure.join(' ')}` : '',
     props.length > 0 ? `PROPS  ${props.map((p) => p.text).join('; ')}` : '',
