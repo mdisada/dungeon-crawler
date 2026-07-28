@@ -448,15 +448,47 @@ export async function publishNarration(
   //
   // commitDiffs re-loads state for the builder and retries on stale versions, so the builder is
   // the only place in this function that sees the state the write actually lands on.
-  let suppressed = false
+  // THE PARTY MOVED WHILE THIS WAS BEING WRITTEN (2026-07-28). Same shape as the guard above and
+  // the same root cause: this function grounds a draft in state loaded 9-33s before it publishes.
+  //
+  // The tail runs in its own worker with `typing` released - deliberately, because holding it
+  // rejected 6 of 26 turns as 409s - so a request can kick its tail and go on publishing, and two
+  // narrations land out of order. Run 1d405957 published these one second apart:
+  //
+  //   #3  "Rasmund Cawl hunches over his desk... sees you standing in his doorway."
+  //   #4  "the office, twenty paces away, sits slightly ajar... no sound comes from within."
+  //
+  // `scene_travel` fired between them. #4 is the beat-opening pull and its CONTENT IS CORRECT -
+  // the party genuinely had not arrived when it was drafted. It describes a place they had left
+  // by the time it reached the page.
+  //
+  // A NOTE ON THE TRADEOFF, because it reverses an earlier judgement in this file: the concurrent-
+  // narration comment above chose to report rather than block, on the grounds that suppressing a
+  // line "trades a contradiction for a hole in the story". That was right while the offender was
+  // unknown and any guard would have been a guess. It is now known and narrow - only a draft whose
+  // scene MOVED under it is dropped, which cannot happen unless the party is somewhere else. A
+  // missing line reads as pace; a line placing the party twenty paces from a room they are
+  // standing in reads as broken. Both locations are logged, so if this proves to cut real
+  // narration the evidence to reverse it will be in the record rather than in an argument.
+  const draftedAtLocation = state.scene.locationId ?? null
+  let suppressed: string | null = null
   await commitDiffs(service, env.adventureId, (s) => {
-    suppressed = Boolean(s.dm?.story?.endedSessionId) && s.dm?.story?.endedSessionId === sessionId
+    // Reset per attempt: commitDiffs re-runs this builder on a stale-version retry, and a verdict
+    // carried over from a previous attempt would report a line as suppressed that this attempt
+    // just appended.
+    suppressed = null
+    if (s.dm?.story?.endedSessionId && s.dm.story.endedSessionId === sessionId) {
+      suppressed = 'story_ended_during_generation'
+    } else if ((s.scene.locationId ?? null) !== draftedAtLocation) {
+      suppressed = 'scene_moved_during_generation'
+    }
     if (suppressed) return [typingDiff(false)]
     return [appendLinesDiff(s, [newLine(null, null, text)]), typingDiff(false)]
   })
   if (suppressed) {
     await logEvent(service, env.adventureId, sessionId, 'narration_suppressed', {
-      reason: 'story_ended_during_generation', style, prompt: prompt.slice(0, 140),
+      reason: suppressed, style, prompt: prompt.slice(0, 140),
+      drafted_at_location: draftedAtLocation, text: text.slice(0, 200),
     }).catch(() => {})
     return ''
   }
