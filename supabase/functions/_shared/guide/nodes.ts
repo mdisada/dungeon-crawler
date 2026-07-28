@@ -56,6 +56,28 @@ export interface StoryNodeSpec {
   role: NodeRole
   label: string
   narrationSeed: string
+  /**
+   * WHERE this node happens - a key from the chapter's location list, or null when the guide has
+   * no locations to choose from (legacy adventures, and the rescue nodes code materializes).
+   *
+   * Authored from a CLOSED vocabulary and validated on parse, the same contract `npcKeys` uses.
+   * Which place a scene occupies is a fiction decision, so the model makes it; the closed list is
+   * what stops the answer being wrong. The runtime reads this to tell "the party is standing here"
+   * from "the party has not gone there yet" instead of inferring it from prose.
+   */
+  locationKey: string | null
+  /**
+   * What is TRUE once this node resolves - one present-tense sentence per outcome.
+   *
+   * `narrationSeed` says what the scene opens on and `stakes` says what is at risk; neither says
+   * what the world looks like afterwards. Without that, nothing downstream can know the state a
+   * played scene left behind, and an objective's routes - authored as parallel alternatives but
+   * PLAYED as a ladder, each reached by failing the one before - get written against an untouched
+   * world. That is the shape behind both contradictions in guide 350c0363.
+   *
+   * Empty strings mean "not authored": the guide still ships and behaves as it did before.
+   */
+  outcomeSummary: { win: string; loss: string }
   /** Same shape beats.encounter_spec has always used; outcome maps are the progression writers. */
   encounter: BeatEncounterSpec
   affordances: NodeAffordance[]
@@ -80,6 +102,35 @@ const KIND_VERB: Record<NodeKind, string> = {
 export function affordanceLabel(kind: NodeKind, hint: string): string {
   const flavor = hint.trim()
   return flavor ? `${KIND_VERB[kind]}: ${flavor}` : KIND_VERB[kind]
+}
+
+/** Reads the authored `{win, loss}` pair, tolerating absence - an omitted outcome is thin, not
+ *  invalid, and must never be the reason a chapter fails to generate. */
+export function parseOutcomeSummary(raw: unknown): { win: string; loss: string } {
+  const o = (typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>
+  const one = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
+  return { win: one(o.win), loss: one(o.loss) }
+}
+
+/**
+ * Named characters a line says are gone for good.
+ *
+ * A setback may cost the party anything except a cast member. The ladder reaches the next route
+ * THROUGH this loss, and every later scene was authored against a roster that still has them in
+ * it - so a setback that kills someone contradicts the scene it hands the party to, every time it
+ * fires. Live 350c0363: "Selka Vane is consumed by the chaos" routed straight into a seed with her
+ * alive and mid-ritual.
+ *
+ * Deliberately a closed verb list against exact names: code judging a narrow question it can
+ * actually decide, rather than a model judging a broad one it cannot.
+ */
+const REMOVAL_VERBS =
+  /\b(dies|died|dead|killed|kills|slain|slays|perishes|perished|consumed|devoured|drowns|drowned|is gone for good|vanishes forever|never seen again)\b/i
+
+export function namesRemovedBy(text: string, npcNames: readonly string[]): string[] {
+  const s = String(text ?? '')
+  if (!REMOVAL_VERBS.test(s)) return []
+  return npcNames.filter((name) => name && s.includes(name))
 }
 
 export interface NodeParseContext {
@@ -152,7 +203,14 @@ export function parseNodeSpec(raw: unknown, ctx: NodeParseContext): { ok: true; 
   if (c.errors.length > 0) return { ok: false, errors: c.errors }
   return {
     ok: true,
-    node: { key, objectiveKey: ctx.objectiveKey, index, kind, role, label, narrationSeed, encounter, affordances, transitions, localAtoms },
+    // `NodeParseContext` carries no location vocabulary, so this parser cannot validate one and
+    // does not guess. Stage 5b is where nodes get placed; anything parsed here reads as "wherever
+    // the party is", which is the same safe default a rescue node uses.
+    node: {
+      key, objectiveKey: ctx.objectiveKey, index, kind, role, label, narrationSeed,
+      locationKey: null, outcomeSummary: parseOutcomeSummary(obj.outcome),
+      encounter, affordances, transitions, localAtoms,
+    },
   }
 }
 

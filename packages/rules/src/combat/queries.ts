@@ -1,11 +1,23 @@
 // Read-only queries the UI asks before committing an action. These mirror the engine's own
 // trigger logic (engine.ts opportunityAttacks) so previews can never disagree with resolution.
 
-import { conscious } from './attack.ts'
+import { inPlay } from './attack.ts'
 import { chebyshev } from './grid.ts'
 import type { Cell } from './grid.ts'
 import { CombatError } from './types.ts'
-import type { CombatEngineState } from './types.ts'
+import type { CombatEngineState, CombatSide } from './types.ts'
+
+/**
+ * How much fight a side has left: the current HP of everyone still on the field over that side's
+ * starting max HP. Dropped and fled members count as zero, so it falls as the side loses people.
+ * This is the number a morale threshold is compared against (F09 SS8.3).
+ */
+export function sideStrength(state: CombatEngineState, side: CombatSide): number {
+  const members = state.combatants.filter((c) => c.side === side)
+  const max = members.reduce((sum, c) => sum + c.hp.max, 0)
+  if (max === 0) return 0
+  return members.reduce((sum, c) => sum + (inPlay(c) ? c.hp.current : 0), 0) / max
+}
 
 /**
  * Which enemies would get an opportunity attack if `moverId` walked `path` (each spends its
@@ -26,7 +38,7 @@ export function predictOpportunityAttacks(
   for (const [sx, sy] of path) {
     const step = { x: sx, y: sy }
     for (const enemy of state.combatants) {
-      if (enemy.side === mover.side || !conscious(enemy) || !enemy.reactionAvailable || spent.has(enemy.id)) continue
+      if (enemy.side === mover.side || !inPlay(enemy) || !enemy.reactionAvailable || spent.has(enemy.id)) continue
       if (!enemy.attacks.some((a) => a.kind === 'melee')) continue
       if (chebyshev(pos, enemy) === 1 && chebyshev(step, enemy) > 1) {
         spent.add(enemy.id)

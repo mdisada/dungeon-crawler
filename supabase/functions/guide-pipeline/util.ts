@@ -59,7 +59,28 @@ export function slugKeys<T extends { id: string; name: string }>(
   return { list, byKey }
 }
 
-const clip = (text: unknown, len: number) => String(text ?? '').replaceAll('\n', ' ').slice(0, len)
+/**
+ * Shorten a field for the digest, marking the elision (2026-07-28).
+ *
+ * This was a bare `.slice(0, len)` - a hard cut mid-word with nothing to say it had happened - and
+ * the consistency checker reads the digest as if it were the guide. So it faithfully reported
+ * "the objective description mentions 'compel Voss to complete the final entries bef', but it is
+ * cut off and incomplete" about a row that was complete and correct in the database.
+ *
+ * That is not merely a false finding. The repair loop then REWRITES the healthy row to fix a
+ * truncation that was never in it, which shifts the digest, which re-clips at a different point,
+ * which manufactures a fresh phantom elsewhere - a self-sustaining source of the churn the loop
+ * was measured to have (8 findings in, 24 edits applied, 10 findings out).
+ *
+ * Breaks on a word boundary and appends an ellipsis; the checker is told what that means.
+ */
+const clip = (text: unknown, len: number) => {
+  const flat = String(text ?? '').replaceAll('\n', ' ').trim()
+  if (flat.length <= len) return flat
+  const cut = flat.slice(0, len)
+  const lastSpace = cut.lastIndexOf(' ')
+  return `${(lastSpace > len * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[,;:.\s]+$/, '')}\u2026`
+}
 
 export interface DigestRefs {
   digest: GuideDigest

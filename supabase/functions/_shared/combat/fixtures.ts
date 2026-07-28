@@ -20,6 +20,11 @@ export interface MonsterFixture {
   saves?: Partial<SaveModifiers>
   /** Spell names resolved against the library; casters carry a small kit. */
   spellNames?: string[]
+  /**
+   * Side-strength fraction at or below which this monster withdraws (F09 SS8.3). Mindless undead
+   * and berserk brutes omit it and fight to the death; thinking humanoids break well before that.
+   */
+  morale?: number
 }
 
 const melee = (name: string, toHit: number, count: number, sides: number, bonus: number): AttackSpec => ({
@@ -40,17 +45,17 @@ const ranged = (name: string, toHit: number, count: number, sides: number, bonus
 })
 
 export const MONSTER_FIXTURES: MonsterFixture[] = [
-  { key: 'goblin', name: 'Goblin', hpMax: 7, ac: 15, speed: 6, dexMod: 2, attacks: [melee('Scimitar', 4, 1, 6, 2), ranged('Shortbow', 4, 1, 6, 2, 16, 64)], saves: { str: 0, dex: 2, con: 1, int: 0, wis: -1, cha: -1 } },
+  { key: 'goblin', name: 'Goblin', hpMax: 7, ac: 15, speed: 6, dexMod: 2, attacks: [melee('Scimitar', 4, 1, 6, 2), ranged('Shortbow', 4, 1, 6, 2, 16, 64)], saves: { str: 0, dex: 2, con: 1, int: 0, wis: -1, cha: -1 }, morale: 0.3 },
   { key: 'skeleton', name: 'Skeleton', hpMax: 13, ac: 13, speed: 6, dexMod: 2, attacks: [melee('Shortsword', 4, 1, 6, 2), ranged('Shortbow', 4, 1, 6, 2, 16, 64)], saves: { str: 0, dex: 2, con: 3, int: -2, wis: 0, cha: -3 } },
   { key: 'zombie', name: 'Zombie', hpMax: 22, ac: 8, speed: 4, dexMod: -2, attacks: [melee('Slam', 3, 1, 6, 1)], saves: { str: 1, dex: -2, con: 3, int: -4, wis: -2, cha: -3 } },
-  { key: 'wolf', name: 'Wolf', hpMax: 11, ac: 13, speed: 8, dexMod: 2, attacks: [melee('Bite', 4, 2, 4, 2)], saves: { str: 1, dex: 2, con: 1, int: -4, wis: 1, cha: -2 } },
-  { key: 'bandit', name: 'Bandit', hpMax: 11, ac: 12, speed: 6, dexMod: 1, attacks: [melee('Scimitar', 3, 1, 6, 1), ranged('Light Crossbow', 3, 1, 8, 1, 16, 64)], saves: { str: 0, dex: 1, con: 1, int: 0, wis: 0, cha: 0 } },
-  { key: 'orc', name: 'Orc', hpMax: 15, ac: 13, speed: 6, dexMod: 1, attacks: [melee('Greataxe', 5, 1, 12, 3), ranged('Javelin', 5, 1, 6, 3, 6, 24)], saves: { str: 3, dex: 1, con: 3, int: -2, wis: 0, cha: 0 } },
-  { key: 'ogre', name: 'Ogre', hpMax: 59, ac: 11, speed: 8, dexMod: -1, attacks: [melee('Greatclub', 6, 2, 8, 4), ranged('Javelin', 6, 2, 6, 4, 6, 24)], saves: { str: 4, dex: -1, con: 3, int: -3, wis: -2, cha: -2 } },
+  { key: 'wolf', name: 'Wolf', hpMax: 11, ac: 13, speed: 8, dexMod: 2, attacks: [melee('Bite', 4, 2, 4, 2)], saves: { str: 1, dex: 2, con: 1, int: -4, wis: 1, cha: -2 }, morale: 0.25 },
+  { key: 'bandit', name: 'Bandit', hpMax: 11, ac: 12, speed: 6, dexMod: 1, attacks: [melee('Scimitar', 3, 1, 6, 1), ranged('Light Crossbow', 3, 1, 8, 1, 16, 64)], saves: { str: 0, dex: 1, con: 1, int: 0, wis: 0, cha: 0 }, morale: 0.3 },
+  { key: 'orc', name: 'Orc', hpMax: 15, ac: 13, speed: 6, dexMod: 1, attacks: [melee('Greataxe', 5, 1, 12, 3), ranged('Javelin', 5, 1, 6, 3, 6, 24)], saves: { str: 3, dex: 1, con: 3, int: -2, wis: 0, cha: 0 }, morale: 0.1 },
+  { key: 'ogre', name: 'Ogre', hpMax: 59, ac: 11, speed: 8, dexMod: -1, attacks: [melee('Greatclub', 6, 2, 8, 4), ranged('Javelin', 6, 2, 6, 4, 6, 24)], saves: { str: 4, dex: -1, con: 3, int: -3, wis: -2, cha: -2 }, morale: 0.15 },
   // Casters - come with a spell kit so spells are testable straight from the picker.
-  { key: 'mage', name: 'Mage', hpMax: 40, ac: 12, speed: 6, dexMod: 2, attacks: [melee('Dagger', 4, 1, 4, 2)], saves: { str: -1, dex: 2, con: 0, int: 3, wis: 1, cha: 0 }, spellNames: ['Fire Bolt', 'Fireball', 'Lightning Bolt'] },
-  { key: 'acolyte', name: 'Acolyte', hpMax: 9, ac: 10, speed: 6, dexMod: 0, attacks: [melee('Club', 2, 1, 4, 0)], saves: { str: 0, dex: 0, con: 1, int: 0, wis: 2, cha: 0 }, spellNames: ['Sacred Flame', 'Cure Wounds'] },
-  { key: 'priest', name: 'Priest', hpMax: 27, ac: 13, speed: 6, dexMod: 0, attacks: [melee('Mace', 2, 1, 6, 0)], saves: { str: 0, dex: 0, con: 1, int: 1, wis: 3, cha: 1 }, spellNames: ['Sacred Flame', 'Guiding Bolt', 'Cure Wounds', 'Shatter'] },
+  { key: 'mage', name: 'Mage', hpMax: 40, ac: 12, speed: 6, dexMod: 2, attacks: [melee('Dagger', 4, 1, 4, 2)], saves: { str: -1, dex: 2, con: 0, int: 3, wis: 1, cha: 0 }, spellNames: ['Fire Bolt', 'Fireball', 'Lightning Bolt'], morale: 0.35 },
+  { key: 'acolyte', name: 'Acolyte', hpMax: 9, ac: 10, speed: 6, dexMod: 0, attacks: [melee('Club', 2, 1, 4, 0)], saves: { str: 0, dex: 0, con: 1, int: 0, wis: 2, cha: 0 }, spellNames: ['Sacred Flame', 'Cure Wounds'], morale: 0.3 },
+  { key: 'priest', name: 'Priest', hpMax: 27, ac: 13, speed: 6, dexMod: 0, attacks: [melee('Mace', 2, 1, 6, 0)], saves: { str: 0, dex: 0, con: 1, int: 1, wis: 3, cha: 1 }, spellNames: ['Sacred Flame', 'Guiding Bolt', 'Cure Wounds', 'Shatter'], morale: 0.25 },
 ]
 
 /** Builds a placeable CombatantSetup from a fixture key; the caller owns id uniqueness. */
@@ -76,6 +81,7 @@ export function monsterSetup(
     saves: fixture.saves,
     attacks: fixture.attacks,
     spells: (fixture.spellNames ?? []).map((name) => findSpell(name)).filter((s): s is SpellSpec => !!s),
+    morale: fixture.morale ?? 0,
     auto: opts.auto ?? true,
   }
 }

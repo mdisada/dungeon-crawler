@@ -155,7 +155,12 @@ export async function endEncounter(
       // activeLineId must clear too, or the last NPC line renders as the live narration
       // subtitle after the scene ends (lines stay as scroll-up history).
       domain: 'dialogue',
-      patch: { speakers: [], openings: [], pending: null, activeLineId: null, addressedCharacterId: null, typing: false },
+      patch: {
+        speakers: [], openings: [], pending: null, activeLineId: null, addressedCharacterId: null,
+        // typingSince rides along on every clear - a null DELETES the key, and a raise that finds
+        // it absent leaves tableIsWedged with nothing to measure (2026-07-27).
+        typing: false, typingSince: null,
+      },
     },
     {
       domain: 'dm',

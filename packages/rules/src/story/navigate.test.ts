@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { hasPlayableNode, nextNode } from './navigate'
+import { hasPlayableNode, nextNode, nodeBeatId } from './navigate'
 import type { NavNode } from './navigate'
+import { spineLoopId } from './loops'
 
 function node(over: Partial<NavNode> & { key: string }): NavNode {
   return {
@@ -234,5 +235,29 @@ describe('failure loops (2026-07-26 regression)', () => {
   it('a full success still resolves the objective, not a re-route', () => {
     expect(nextNode({ nodes: cycle, fromKey: 'n0', tier: 'full', usedKeys: ['n0'] }))
       .toEqual({ action: 'resolve', outcome: 'completed', reason: 'objective_done' })
+  })
+})
+
+describe('one beat per authored node (2026-07-27)', () => {
+  it('derives a stable, well-formed id from the node', () => {
+    const node = '58d06487-e9af-4849-ae88-04bdc2ba94bd'
+    const id = nodeBeatId(node)
+    expect(id).toBe(nodeBeatId(node))
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-b[0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(id).not.toBe(node)
+  })
+
+  it('distinct nodes never share a beat id', () => {
+    expect(nodeBeatId('58d06487-e9af-4849-ae88-04bdc2ba94bd'))
+      .not.toBe(nodeBeatId('9ba17545-4c2c-4874-88f2-207e0d0a91ec'))
+  })
+
+  it('can never collide with the spine loop derived from the same uuid', () => {
+    const shared = '58d06487-e9af-4849-ae88-04bdc2ba94bd'
+    expect(nodeBeatId(shared)).not.toBe(spineLoopId(shared))
+  })
+
+  it('leaves a non-uuid untouched rather than emitting a malformed one', () => {
+    expect(nodeBeatId('legacy-beat')).toBe('legacy-beat')
   })
 })

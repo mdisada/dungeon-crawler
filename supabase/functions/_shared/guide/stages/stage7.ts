@@ -2,16 +2,16 @@
 // Canonical source: packages/rules/src/. Edit there, then re-run the script.
 
 // Stage 7 - Consistency pass, whole guide: plot-hole scan across the hidden descriptions.
-// Since 2026-07-22 the pass also REPAIRS what it can: each row-targeted warning gets one
-// constrained rewrite of that row's text fields, then the check re-runs and only the residue
-// ships as warnings. This amends F04 SS2's "never silent rewrites" on its own terms - rewrites
-// are LOUD (every repair logs a guide_repair event with before/after), human_edited rows are
-// never touched, and anything unresolved still warns. An empty warning list is a valid result.
+//
+// CHECK ONLY, as of 2026-07-28. Between 2026-07-22 and then this stage also REPAIRED what it
+// found - one constrained rewrite per flagged row, re-check, repeat - and the repair half is now
+// deleted (see stages-weave.ts runStage7 for the measurements: eight of eight guides stalled and
+// reverted, 28 planned edits, 0 survived, majors rose in seven). What survives is the scan, which
+// is good at what the structural gates cannot see: it independently caught an unregistered ship
+// that no closed-vocabulary check could. An empty warning list is a valid result.
 
-import { Check, countWords, extractJsonObject, looksCutOff } from '../json.ts'
-import { validatePredicate } from '../predicates.ts'
+import { Check, extractJsonObject } from '../json.ts'
 import { entityNameMatches } from './stage4.ts'
-import { containsFactAtom, hasClaimableAtom, OBJECTIVE_TITLE_MAX_WORDS } from './stage3.ts'
 import type { GuideDigest } from './stage6.ts'
 import type { EntityRef, ParseResult, WarningDraft } from '../types.ts'
 
@@ -58,6 +58,35 @@ Look for:
   describing the same place or person incompatibly, a scene assuming something an earlier one
   never established, or an arrival line that reads as a success when the party got there by
   failing.
+
+A line ending in an ellipsis has been SHORTENED to fit this digest - the full text exists in the
+guide and is complete. Never report such a line as cut off, truncated or incomplete; you are
+looking at an excerpt, not the row.
+
+The scene graph BRANCHES. The route nodes serving one objective are ALTERNATIVES - the party plays
+at most one of them and the rest never happen. They are supposed to describe incompatible worlds:
+one route breaks a barred door, another has the owner open it; one leaves a witness hostile,
+another leaves them dead. That is the design, not a contradiction. Compare two scenes ONLY when
+both can happen in the same playthrough - scenes serving DIFFERENT objectives, or a scene against
+the meta loop. Never flag two routes of the same objective for disagreeing with each other.
+
+Do NOT report:
+- An NPC, location, item or rumour that no scene happens to use. An adventure carries TEXTURE -
+  people to talk to, places to look at, rumours to chase - and live play improvises with it.
+  Unused is not broken. Non-use is worth reporting ONLY when something DEPENDS on it: an
+  objective's completion predicate, a hook that points at it, or a scene that assumes the party
+  already has it.
+- Something the party has not learned or reached YET. You are reading the DM's reference, not a
+  script in play order: a clue names what it reveals before anyone finds it, a location describes
+  what is there before anyone walks in, an objective states what is true before the party can see
+  it, and a secret is written down long before it is told. "The party has no access to this at
+  this point", "this is not established until later", "there is no context for them to notice
+  this yet", "this is only a clue and not a scene" - every one of those describes a mystery
+  working as intended. Discovery is the game. Report unreachability ONLY when NOTHING anywhere in
+  the guide could ever deliver it - no scene, no NPC, no clue, in any chapter - and say which
+  thing has no possible source.
+- Detail that merely could be tighter, better connected, or more integrated. That is the
+  creator's taste, not a defect.
 
 Report each problem against the most specific handle you can. If the guide is coherent, return an empty list - do not invent problems.
 
@@ -120,264 +149,3 @@ export function parseStage7(raw: string, digest: GuideDigest): ParseResult<Warni
   return c.result(warnings)
 }
 
-/**
- * The fields the repair pass may rewrite, per table - the whole repair vocabulary. Mostly
- * text; `chapter` is the one STRUCTURAL move (2026-07-22, user-directed): placement findings
- * ("the boss belongs at the end, not chapter 1") were the most common residue and their fix
- * is mechanical - a chapter_id update - not a judgment call. Anything beyond these (new rows,
- * merges, predicate surgery) stays a warning. `text` on ingredients is logical: the edge maps
- * it onto content.text, where rumor/clue prose actually lives.
- */
-export const REPAIRABLE_FIELDS: Record<string, string[]> = {
-  objectives: ['title', 'hidden_description', 'chapter', 'completion_predicates'],
-  npcs: ['description', 'chapter'],
-  locations: ['description', 'chapter'],
-  ingredients: ['text', 'reveals'],
-  // Nodes expose PROSE only. Structure (transitions, outcome maps, affordance keys) is authored
-  // against the registry and proven by the reachability gate - letting a prose-repair pass edit
-  // it would put the one thing the graph guarantees back in free-text hands.
-  story_nodes: ['narration_seed', 'label'],
-}
-
-export interface Stage7Edit {
-  /** Present on EDIT entries: the digest handle of the row being changed. */
-  handle?: string
-  patch: Record<string, string>
-  /** Present on CREATE entries: a missing spine entity authored into existence (registry
-   *  coverage findings - the most common residue - are fixed by creation, not editing). */
-  create?: { kind: 'npc' | 'location'; name: string; description: string; chapter: string }
-  note: string
-}
-
-/** Handle grammar is the digest's own (obj#1, npc#2, ...) - the table is derivable, so the
- *  edit plan needs no separate table field the model could get wrong. */
-export function handleTable(handle: string): string | null {
-  if (/^obj#\d+$/.test(handle)) return 'objectives'
-  if (/^npc#\d+$/.test(handle)) return 'npcs'
-  if (/^loc#\d+$/.test(handle)) return 'locations'
-  if (/^ing#\d+$/.test(handle)) return 'ingredients'
-  if (/^node#\d+$/.test(handle)) return 'story_nodes'
-  return null
-}
-
-/** Edits per plan - enough to align a whole contradiction cluster, bounded for the worker. */
-export const EDIT_PLAN_CAP = 12
-
-/**
- * ONE call per repair round, planning typed edits across EVERY flagged row (user-directed
- * 2026-07-22, "function calling"): per-row repairs could not fix contradiction CLUSTERS - five
- * findings that were all facets of one meta-loop conflict needed every affected row aligned to
- * one interpretation - and fanning per-row calls out in parallel tripped the edge runtime's
- * concurrent-fetch ceiling (7 parallel repairs, 0 completed, live 2026-07-22). The plan is
- * function calling semantically: typed operations, schema-validated here, executed server-side
- * through the guarded apply path.
- */
-export function buildStage7EditPlanPrompt(ctx: {
-  /** Row-targeted findings, each with the handle it is about. */
-  warnings: { handle: string; message: string }[]
-  /** Findings with no row (registry coverage, guide-level) - fixable only by creation. */
-  rowlessWarnings: string[]
-  /** Current contents of every flagged row, keyed by handle. */
-  rows: { handle: string; table: string; fields: Record<string, string> }[]
-  digest: GuideDigest
-  metaLoopArc: string
-  chapters: { number: number; title: string }[]
-}): { system: string; user: string; maxTokens: number } {
-  const system = `You are the guide editor for a tabletop RPG platform. Consistency findings are listed against an adventure guide; fix them by EDITING the flagged rows' fields. Plan ALL edits together - you may edit multiple rows, and findings often share one ROOT contradiction: choose ONE coherent interpretation (prefer the meta loop's framing) and edit EVERY affected row to match it. A partial alignment leaves the contradiction alive.
-
-Rules, in the direction of the BETTER STORY:
-- Keep twists hidden. An objective title stays open and spoiler-free (AT MOST ${OBJECTIVE_TITLE_MAX_WORDS} words) - secrets move into hidden_description, never the other way.
-- Re-point dangling references at entities and places that EXIST in the canon below. Never invent a new named person, place, or faction.
-- Keep each row's flavor, tone, and specificity - a flattening edit is a failure.
-- Keep fields roughly their original length and NEVER leave a sentence unfinished.
-- When a finding is about TIMING or PLACEMENT, use the "chapter" field: the chapter NUMBER the row belongs in (npc/loc rows may instead use "global" for an adventure-wide presence; objectives always take a number). Pair a move with whatever text edits the new placement needs.
-- Editable fields per row type: obj# -> title, hidden_description, chapter; npc# -> description, chapter; loc# -> description, chapter; ing# -> text, reveals; node# -> narration_seed, label (a scene's opening prose only - its mechanics and outcomes are fixed and must not be described away).
-- When a finding is about an objective's COMPLETION PREDICATE (it references its own result, an unestablished flag, the wrong shape), patch "completion_predicates" with the corrected predicate AS A JSON STRING. Grammar: atoms {"flag": "<snake_case_milestone>", "eq": true} or {"event": "short past-tense marker"}, combined with {"any": [...]}/{"all": [...]}; NEVER "fact" atoms; at least one flag/event must be claimable; prefer an "any" honoring multiple resolutions. This decides WHEN players complete the objective - keep it achievable by ordinary play.
-- When a finding says a spine entity NEVER APPEARS (registry coverage), fix it by CREATING that row: { "create": { "kind": "npc"|"location", "name": "<the exact name the finding cites>", "description": "1-3 sentences grounded in the canon below", "chapter": "<number>"|"global" }, "note": "..." }. Place it in the chapter where the story needs it; never rename it.
-- Edit ONLY handles listed under "Current content of the flagged rows" below. The canon section exists so your edits FIT the rest of the guide - it is not a list of things to change, and an edit aimed at any other handle is discarded.
-- A finding these operations cannot fix (merges, predicate changes) is simply left alone - it stays a warning for the creator.
-
-Respond with ONLY a JSON object, no prose, in exactly this shape:
-{ "edits": [ { "handle": "obj#2", "patch": { "<field>": "new text" }, "note": "one line: what changed and why" }, { "create": { "kind": "location", "name": "Boundary Stone", "description": "...", "chapter": "2" }, "note": "..." } ] }
-At most ${EDIT_PLAN_CAP} entries; an edit entry has "handle"+"patch", a create entry has "create", never both. An empty edits list is a valid answer when nothing here is fixable.`
-
-  const lines = (m: Map<string, string>) => [...m.entries()].map(([h, l]) => `${h}: ${l}`).join('\n')
-  const user = `Findings to resolve:
-${ctx.warnings.map((w) => `- [${w.handle}] ${w.message}`).join('\n')}
-
-Current content of the flagged rows:
-${ctx.rows.map((r) => `${r.handle} (${r.table}):\n${Object.entries(r.fields).map(([f, v]) => `  ${f}: ${v}`).join('\n')}`).join('\n')}
-
-Chapters: ${ctx.chapters.map((c) => `${c.number}: ${c.title}`).join(' | ') || 'one-shot (single chapter)'}
-
-Meta loop arc: ${ctx.metaLoopArc}
-
-Established canon (edits must fit ALL of this):
-Objectives:
-${lines(ctx.digest.objectives)}
-
-NPCs:
-${lines(ctx.digest.npcs)}
-
-Locations:
-${lines(ctx.digest.locations)}
-
-Ingredients:
-${lines(ctx.digest.ingredients)}${
-    ctx.digest.nodes && ctx.digest.nodes.size > 0 ? `\n\nScenes:\n${lines(ctx.digest.nodes)}` : ''
-  }`
-
-  // The plan REWRITES whole fields, so its output scales with the number of flagged rows: up to
-  // EDIT_PLAN_CAP patches, each potentially a full hidden_description. At 2500 the reply was cut
-  // off mid-word ("completion_predica"), which fails extractJsonObject, and generateParsed's
-  // truncation retry then hit the same wall - so the ENTIRE repair pass aborted with 0 attempted
-  // while 16 findings shipped as warnings (live 2026-07-26, first authored-graph guide). Sized to
-  // generateParsed's own truncation ceiling so a retry is a real second chance, not a repeat.
-  return { system, user, maxTokens: 6000 }
-}
-
-export function parseStage7EditPlan(
-  raw: string,
-  knownHandles: Set<string>,
-  chapterCount: number,
-  /** Existing npc/location names (lowercased) - a create must never duplicate the cast. */
-  existingNames: Set<string> = new Set(),
-): ParseResult<Stage7Edit[]> {
-  const extracted = extractJsonObject(raw)
-  if (!extracted.ok) return extracted
-
-  const c = new Check()
-  const seen = new Set<string>()
-  // Entry- and field-level problems are collected but do NOT fail the batch. A repair plan spans
-  // ~10 rows; hard-failing on one bad field discarded every good repair alongside it, which is how
-  // stage 7 came to report "16 found, 0 attempted" on live guides (2026-07-26). A dropped field
-  // simply leaves that row's text as it was. These errors are surfaced only when NOTHING survives,
-  // so the generateParsed retry still gets a real second chance at a wholly bad plan.
-  const soft = new Check()
-  const edits: Stage7Edit[] = c.arr(extracted.data.edits ?? [], '$.edits', 0, EDIT_PLAN_CAP).flatMap((rawEdit, i): Stage7Edit[] => {
-    const path = `$.edits[${i}]`
-    const e = soft.obj(rawEdit, path)
-    if (e.create != null) {
-      if (e.handle != null) {
-        soft.errors.push(`${path}: an entry is an edit (handle+patch) OR a create, never both`)
-        return []
-      }
-      const cr = soft.obj(e.create, `${path}.create`)
-      const kind = soft.oneOf(cr.kind, `${path}.create.kind`, ['npc', 'location'] as const)
-      const name = soft.str(cr.name, `${path}.create.name`)
-      if (name && existingNames.has(name.trim().toLowerCase())) {
-        soft.errors.push(`${path}.create.name: "${name}" already exists - edit that row instead of creating a duplicate`)
-        return []
-      }
-      const description = soft.str(cr.description, `${path}.create.description`)
-      if (description && looksCutOff(description)) {
-        soft.errors.push(`${path}.create.description: ends mid-thought - finish the sentence`)
-        return []
-      }
-      const chapterText = typeof cr.chapter === 'number' ? String(cr.chapter) : typeof cr.chapter === 'string' ? cr.chapter.trim().toLowerCase() : ''
-      const chapterNumber = Number(chapterText)
-      let chapter = ''
-      if (chapterText === 'global') chapter = 'global'
-      else if (Number.isInteger(chapterNumber) && chapterNumber >= 1 && chapterNumber <= chapterCount) chapter = String(chapterNumber)
-      else {
-        soft.errors.push(`${path}.create.chapter: expected a chapter number 1-${chapterCount} or "global", got "${String(cr.chapter)}"`)
-        return []
-      }
-      const note = typeof e.note === 'string' ? e.note.slice(0, 200) : ''
-      return [{ patch: {}, create: { kind, name: name.trim(), description: description.trim(), chapter }, note }]
-    }
-    const handle = soft.str(e.handle, `${path}.handle`)
-    const table = handleTable(handle)
-    // An edit aimed at a row that is NOT in this round's editable surface is DROPPED, not fatal.
-    // Hard-failing it threw away every valid edit in the same plan: once the canon digest began
-    // listing scenes (2026-07-26), the model started volunteering fixes for unflagged nodes
-    // (node#2/#9/#12 alongside the flagged node#3/#10/#13), so a plan with 8 good edits parsed as
-    // an error twice and the whole repair pass reported 0 attempted. Same instinct as parseStage7,
-    // where an unknown handle degrades instead of failing the stage.
-    if (!table || !knownHandles.has(handle)) return []
-    if (seen.has(handle)) {
-      soft.errors.push(`${path}.handle: "${handle}" appears twice - one entry per row, merge the patches`)
-      return []
-    }
-    seen.add(handle)
-    const allowed = new Set(REPAIRABLE_FIELDS[table] ?? [])
-    const patch: Record<string, string> = {}
-    const rawPatch = e.patch
-    if (typeof rawPatch !== 'object' || rawPatch === null || Array.isArray(rawPatch)) {
-      soft.errors.push(`${path}.patch: expected an object of field -> new text`)
-      return []
-    }
-    for (const [field, value] of Object.entries(rawPatch as Record<string, unknown>)) {
-      if (!allowed.has(field)) {
-        soft.errors.push(`${path}.patch.${field}: not an editable field of ${table} (allowed: ${[...allowed].join(', ')})`)
-        continue
-      }
-      if (field === 'chapter') {
-        const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim().toLowerCase() : ''
-        const number = Number(text)
-        if (text === 'global' && table !== 'objectives') {
-          patch.chapter = 'global'
-        } else if (Number.isInteger(number) && number >= 1 && number <= chapterCount) {
-          patch.chapter = String(number)
-        } else {
-          soft.errors.push(
-            `${path}.patch.chapter: expected a chapter number 1-${chapterCount}${table !== 'objectives' ? ' or "global"' : ' (objectives always belong to a chapter)'}, got "${String(value)}"`,
-          )
-        }
-        continue
-      }
-      if (typeof value !== 'string' || !value.trim()) {
-        soft.errors.push(`${path}.patch.${field}: expected non-empty replacement text`)
-        continue
-      }
-      // Predicate patches are machine data: full structural validation (same gates stage 3
-      // authors under), and the recognition judge remains the runtime net if semantics drift.
-      if (field === 'completion_predicates') {
-        let parsed: unknown
-        try {
-          parsed = JSON.parse(value)
-        } catch {
-          soft.errors.push(`${path}.patch.completion_predicates: not valid JSON`)
-          continue
-        }
-        const problems = validatePredicate(parsed, `${path}.patch.completion_predicates`)
-        if (problems.length > 0) {
-          soft.errors.push(...problems)
-          continue
-        }
-        if (containsFactAtom(parsed)) {
-          soft.errors.push(`${path}.patch.completion_predicates: "fact" atoms are not completable by live play - use flags or events`)
-          continue
-        }
-        if (!hasClaimableAtom(parsed)) {
-          soft.errors.push(`${path}.patch.completion_predicates: has no claimable milestone - needs at least one {flag,eq:true} or {event}`)
-          continue
-        }
-        patch[field] = JSON.stringify(parsed)
-        continue
-      }
-      if (table === 'objectives' && field === 'title' && countWords(value) > OBJECTIVE_TITLE_MAX_WORDS) {
-        soft.errors.push(`${path}.patch.title: "${value}" is over ${OBJECTIVE_TITLE_MAX_WORDS} words - titles stay short and open`)
-        continue
-      }
-      if (field !== 'title' && looksCutOff(value)) {
-        soft.errors.push(`${path}.patch.${field}: ends mid-thought ("...${value.trim().slice(-30)}") - finish the sentence`)
-        continue
-      }
-      patch[field] = value.trim()
-    }
-    if (c.errors.length === 0 && Object.keys(patch).length === 0) {
-      soft.errors.push(`${path}.patch: no valid field was patched - edit something or drop this entry`)
-    }
-    // Every field of this entry was dropped: there is nothing to write, so it is not an
-    // "attempted" repair. Dropping it keeps the repair-summary counts honest.
-    if (Object.keys(patch).length === 0) return []
-    const note = typeof e.note === 'string' ? e.note.slice(0, 200) : ''
-    return [{ handle, patch, note }]
-  })
-
-  // Some edits landed: apply them and let the dropped fields go. Nothing landed but the model
-  // clearly tried: surface why, so the retry can do better.
-  if (edits.length === 0 && soft.errors.length > 0) return { ok: false, errors: soft.errors }
-  return c.result(edits)
-}

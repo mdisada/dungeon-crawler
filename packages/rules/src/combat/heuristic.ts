@@ -4,11 +4,12 @@
 // array order, so the same state always yields the same action.
 
 import type { Rng } from '../play/rng.ts'
-import { conscious } from './attack.ts'
+import { inPlay } from './attack.ts'
 import { expectedDamage } from './dice.ts'
 import { activeCombatant, resolveAction } from './engine.ts'
 import { blockedCells, cellKey, chebyshev, findPath, gridBounds, inBounds, lineOfSight } from './grid.ts'
 import type { Cell, GridBounds } from './grid.ts'
+import { sideStrength } from './queries.ts'
 import type { Combatant, CombatAction, CombatEngineState, CombatEvent, EngineResult } from './types.ts'
 
 /** Shortest path to any free cell adjacent to `target`; [] when already adjacent. */
@@ -59,8 +60,15 @@ export function chooseAutoAction(state: CombatEngineState): CombatAction {
   if (state.status !== 'active') return { type: 'end_turn' }
   const active = activeCombatant(state)
   const order = new Map(state.combatants.map((c, i) => [c.id, i]))
-  const enemies = state.combatants.filter((c) => c.side !== active.side && conscious(c))
+  const enemies = state.combatants.filter((c) => c.side !== active.side && inPlay(c))
   if (enemies.length === 0) return { type: 'end_turn' }
+
+  // Morale (F09 SS8.3): once the side is beaten down past this combatant's threshold it withdraws
+  // rather than fighting to the last body. Checked before anything else - a broken combatant does
+  // not stop to trade one more blow.
+  if (active.morale > 0 && sideStrength(state, active.side) <= active.morale) {
+    return { type: 'flee' }
+  }
 
   if (active.conditions.includes('prone')) {
     if (state.economy.move >= Math.ceil(active.speed / 2)) return { type: 'stand_up' }
@@ -120,7 +128,7 @@ export function runAutoTurn(prev: CombatEngineState, rng: Rng): EngineResult {
     const result = resolveAction(state, action, rng)
     state = result.state
     events.push(...result.events)
-    if (action.type === 'end_turn') break
+    if (action.type === 'end_turn' || action.type === 'flee') break
   }
   return { state, events }
 }

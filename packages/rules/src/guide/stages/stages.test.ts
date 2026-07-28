@@ -31,7 +31,7 @@ import {
 } from './stage4.ts'
 import { parseStage5 } from './stage5.ts'
 import { parseStage6 } from './stage6.ts'
-import { buildStage7EditPlanPrompt, handleTable, parseStage7, parseStage7EditPlan, validateRegistryCoverage } from './stage7.ts'
+import { parseStage7, validateRegistryCoverage } from './stage7.ts'
 import { parseStage8, validateEndingDistinctness, validateEndingReachability } from './stage8.ts'
 
 const parseStage8Fixture = (raw: string) => parseStage8(raw, STAGE8_OBJECTIVE_COUNT, STAGE8_NPC_COUNT)
@@ -568,232 +568,6 @@ describe('stage 7 (consistency warnings)', () => {
   })
 })
 
-describe('stage 7 edit plans (auto-resolve consistency findings)', () => {
-  const HANDLES = new Set(['obj#1', 'obj#2', 'npc#1', 'loc#1', 'ing#1'])
-
-  it('accepts a multi-row plan and carries notes', () => {
-    const result = parseStage7EditPlan(
-      JSON.stringify({
-        edits: [
-          { handle: 'obj#2', patch: { title: 'Face the killer' }, note: 'de-spoiled' },
-          { handle: 'npc#1', patch: { description: 'A patient horror, waiting beneath the loom.' }, note: 'aligned to meta loop' },
-        ],
-      }),
-      HANDLES,
-      3,
-    )
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.data).toHaveLength(2)
-    expect(result.data[0].patch).toEqual({ title: 'Face the killer' })
-    expect(result.data[1].note).toBe('aligned to meta loop')
-  })
-
-  it('accepts an empty plan (nothing fixable is a valid answer)', () => {
-    const result = parseStage7EditPlan('{ "edits": [] }', HANDLES, 3)
-    expect(result.ok).toBe(true)
-    if (result.ok) expect(result.data).toEqual([])
-  })
-
-  it('DROPS an unflagged handle instead of failing the whole plan', () => {
-    // Changed 2026-07-26: hard-failing threw away every valid edit in the same plan. Once the
-    // canon digest listed scenes, the model volunteered fixes for unflagged nodes, so an
-    // 8-edit plan parsed as an error twice and the repair pass reported 0 attempted.
-    const unknown = parseStage7EditPlan(
-      '{ "edits": [ { "handle": "obj#9", "patch": { "title": "X" }, "note": "" } ] }', HANDLES, 3)
-    expect(unknown.ok).toBe(true)
-    if (unknown.ok) expect(unknown.data).toHaveLength(0)
-
-    const mixed = parseStage7EditPlan(
-      JSON.stringify({ edits: [
-        { handle: 'obj#9', patch: { title: 'Ignored' }, note: '' },
-        { handle: 'obj#2', patch: { title: 'A Quiet Word' }, note: 'kept' },
-      ] }), HANDLES, 3)
-    expect(mixed.ok).toBe(true)
-    if (mixed.ok) {
-      expect(mixed.data).toHaveLength(1)
-      expect(mixed.data[0].handle).toBe('obj#2')
-    }
-  })
-
-  it('keeps the good edits when one field is bad', () => {
-    // The live failure (2026-07-26): a plan spanning ~10 rows died on one cut-off sentence, so
-    // stage 7 repaired NOTHING three guides running. A bad field now drops; its row keeps the
-    // old text; every other repair still lands.
-    const mixed = parseStage7EditPlan(
-      JSON.stringify({ edits: [
-        { handle: 'obj#2', patch: { hidden_description: 'The nectar is a poten' }, note: 'cut off' },
-        { handle: 'obj#1', patch: { title: 'A Quiet Word' }, note: 'good' },
-      ] }), HANDLES, 3)
-    expect(mixed.ok).toBe(true)
-    if (!mixed.ok) return
-    expect(mixed.data).toHaveLength(1)
-    expect(mixed.data[0].handle).toBe('obj#1')
-  })
-
-  it('reports why when NOTHING in the plan survives, so the retry can improve', () => {
-    const allBad = parseStage7EditPlan(
-      '{ "edits": [ { "handle": "obj#2", "patch": { "hidden_description": "cut off mid" }, "note": "" } ] }',
-      HANDLES, 3)
-    expect(allBad.ok).toBe(false)
-    if (!allBad.ok) expect(allBad.errors.some((e) => e.includes('ends mid-thought'))).toBe(true)
-  })
-
-  it('rejects duplicate handles and off-whitelist fields', () => {
-    // A repeated handle drops the SECOND entry (the first already patches that row) instead of
-    // failing the batch - same drop-and-continue rule as every other repair-plan problem.
-    const dupe = parseStage7EditPlan(
-      JSON.stringify({ edits: [
-        { handle: 'obj#2', patch: { title: 'One' }, note: '' },
-        { handle: 'obj#2', patch: { title: 'Two' }, note: '' },
-      ] }), HANDLES, 3)
-    expect(dupe.ok).toBe(true)
-    if (dupe.ok) {
-      expect(dupe.data).toHaveLength(1)
-      expect(dupe.data[0].patch.title).toBe('One')
-    }
-
-    const offWhitelist = parseStage7EditPlan(
-      '{ "edits": [ { "handle": "obj#2", "patch": { "completion_predicates": "{}" }, "note": "" } ] }', HANDLES, 3)
-    expect(offWhitelist.ok).toBe(false)
-  })
-
-  it('holds titles to the word cap and prose to the completeness check', () => {
-    const longTitle = parseStage7EditPlan(
-      '{ "edits": [ { "handle": "obj#2", "patch": { "title": "Deliver Final Judgment on the Manor Killer" }, "note": "" } ] }',
-      HANDLES, 3)
-    expect(longTitle.ok).toBe(false)
-
-    const cutOff = parseStage7EditPlan(
-      '{ "edits": [ { "handle": "obj#2", "patch": { "hidden_description": "The nectar is a poten" }, "note": "" } ] }',
-      HANDLES, 3)
-    expect(cutOff.ok).toBe(false)
-    if (!cutOff.ok) expect(cutOff.errors.some((e) => e.includes('ends mid-thought'))).toBe(true)
-  })
-
-  it('accepts chapter moves: numbers in range, "global" for cast but never for objectives', () => {
-    const npcMove = parseStage7EditPlan(
-      '{ "edits": [ { "handle": "npc#1", "patch": { "chapter": "3" }, "note": "boss belongs at the climax" } ] }',
-      HANDLES, 3)
-    expect(npcMove.ok).toBe(true)
-    if (npcMove.ok) expect(npcMove.data[0].patch).toEqual({ chapter: '3' })
-
-    const globalLocation = parseStage7EditPlan(
-      '{ "edits": [ { "handle": "loc#1", "patch": { "chapter": "global" }, "note": "" } ] }', HANDLES, 3)
-    expect(globalLocation.ok).toBe(true)
-
-    const globalObjective = parseStage7EditPlan(
-      '{ "edits": [ { "handle": "obj#2", "patch": { "chapter": "global" }, "note": "" } ] }', HANDLES, 3)
-    expect(globalObjective.ok).toBe(false)
-
-    const outOfRange = parseStage7EditPlan(
-      '{ "edits": [ { "handle": "npc#1", "patch": { "chapter": "7" }, "note": "" } ] }', HANDLES, 3)
-    expect(outOfRange.ok).toBe(false)
-  })
-
-  it('accepts create entries for missing spine entities, rejecting duplicates and cut-off prose', () => {
-    const create = parseStage7EditPlan(
-      JSON.stringify({ edits: [{
-        create: { kind: 'location', name: 'Boundary Stone', description: 'A weathered marker at the valley edge, half-swallowed by moss.', chapter: '2' },
-        note: 'spine entity never landed',
-      }] }),
-      new Set(['obj#1']), 3, new Set(['flooded mill']),
-    )
-    expect(create.ok).toBe(true)
-    if (!create.ok) return
-    expect(create.data[0].create).toMatchObject({ kind: 'location', name: 'Boundary Stone', chapter: '2' })
-
-    const dupe = parseStage7EditPlan(
-      JSON.stringify({ edits: [{ create: { kind: 'npc', name: 'Flooded Mill', description: 'A mill.', chapter: '1' }, note: '' }] }),
-      new Set(), 3, new Set(['flooded mill']),
-    )
-    expect(dupe.ok).toBe(false)
-    if (!dupe.ok) expect(dupe.errors.some((e) => e.includes('already exists'))).toBe(true)
-
-    const cutOff = parseStage7EditPlan(
-      JSON.stringify({ edits: [{ create: { kind: 'npc', name: 'The Loremaster', description: 'Keeper of the poten', chapter: 'global' }, note: '' }] }),
-      new Set(), 3, new Set(),
-    )
-    expect(cutOff.ok).toBe(false)
-
-    const both = parseStage7EditPlan(
-      JSON.stringify({ edits: [{ handle: 'obj#1', patch: { title: 'X' }, create: { kind: 'npc', name: 'Y', description: 'Z.', chapter: '1' }, note: '' }] }),
-      new Set(['obj#1']), 3, new Set(),
-    )
-    expect(both.ok).toBe(false)
-  })
-
-  it('carries checker severity, defaulting unrated findings to major', () => {
-    const result = parseStage7(
-    JSON.stringify({ warnings: [
-      { target: 'obj#2', severity: 'minor', message: 'could be tighter' },
-      { target: 'obj#2', message: 'contradicts the meta loop' },
-    ] }),
-      buildTestDigest(),
-    )
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.data[0].severity).toBe('minor')
-    expect(result.data[1].severity).toBe('major')
-  })
-
-  it('validates predicate patches structurally: grammar, no facts, claimable', () => {
-    const good = parseStage7EditPlan(
-      JSON.stringify({ edits: [{ handle: 'obj#1', patch: { completion_predicates: JSON.stringify({ any: [{ flag: 'writ_secured', eq: true }, { event: 'the gate was opened' }] }) }, note: 'result-event removed' }] }),
-      new Set(['obj#1']), 3,
-    )
-    expect(good.ok).toBe(true)
-    if (good.ok) expect(JSON.parse(good.data[0].patch.completion_predicates)).toMatchObject({ any: expect.anything() })
-
-    const factAtom = parseStage7EditPlan(
-      JSON.stringify({ edits: [{ handle: 'obj#1', patch: { completion_predicates: JSON.stringify({ fact: 'npc.thorne.status', eq: 'dead' }) }, note: '' }] }),
-      new Set(['obj#1']), 3,
-    )
-    expect(factAtom.ok).toBe(false)
-
-    const unclaimable = parseStage7EditPlan(
-      JSON.stringify({ edits: [{ handle: 'obj#1', patch: { completion_predicates: JSON.stringify({ flag: 'gate_opened', eq: false }) }, note: '' }] }),
-      new Set(['obj#1']), 3,
-    )
-    expect(unclaimable.ok).toBe(false)
-
-    const notJson = parseStage7EditPlan(
-      JSON.stringify({ edits: [{ handle: 'obj#1', patch: { completion_predicates: 'when the party wins' }, note: '' }] }),
-      new Set(['obj#1']), 3,
-    )
-    expect(notJson.ok).toBe(false)
-  })
-
-  it('derives the table from the handle grammar', () => {
-    expect(handleTable('obj#3')).toBe('objectives')
-    expect(handleTable('npc#1')).toBe('npcs')
-    expect(handleTable('loc#12')).toBe('locations')
-    expect(handleTable('ing#7')).toBe('ingredients')
-    expect(handleTable('chapter#1')).toBeNull()
-  })
-
-  it('edit-plan prompt carries findings, row contents, chapters, and the cluster guidance', () => {
-    const { system, user } = buildStage7EditPlanPrompt({
-      warnings: [
-        { handle: 'obj#1', message: 'Objective says the party holds the writ' },
-        { handle: 'obj#2', message: 'Objective says Thorne seizes the writ' },
-      ],
-      rowlessWarnings: ['Registry location "Boundary Stone" is named in the story spine but never appears'],
-      rows: [
-        { handle: 'obj#1', table: 'objectives', fields: { title: 'Secure the writ', hidden_description: 'They hold it.', chapter: '1' } },
-        { handle: 'obj#2', table: 'objectives', fields: { title: 'Escape Oakhaven', hidden_description: 'Thorne takes it.', chapter: '3' } },
-      ],
-      digest: buildTestDigest(),
-      metaLoopArc: 'Thorne orchestrates a final confrontation to seize the writ',
-      chapters: [{ number: 1, title: 'Arrival' }, { number: 2, title: 'The Vice' }, { number: 3, title: 'The Gate' }],
-    })
-    expect(system).toContain('ROOT contradiction')
-    expect(system).toContain('TIMING or PLACEMENT')
-    expect(user).toContain('[obj#1] Objective says the party holds the writ')
-    expect(user).toContain('Secure the writ')
-    expect(user).toContain('Chapters: 1: Arrival | 2: The Vice | 3: The Gate')
-  })
-})
 
 describe('stage 8 (ending designer)', () => {
   it('parses dials + 3-5 candidate endings with closed-vocabulary signals', () => {
@@ -884,12 +658,40 @@ describe('stage 8 (ending designer)', () => {
         signals: [{ when: { objective: STAGE8_OBJECTIVE_COUNT, outcome: 'completed' as const }, weight: 3, note: '' }],
       },
     }
-    expect(validateEndingReachability([climaxRef], STAGE8_OBJECTIVE_COUNT)).toEqual([])
+    // Claims the victory branch only, so a party that LOSES the climax has no ending that is
+    // true of their run (2026-07-28).
+    expect(validateEndingReachability([climaxRef], STAGE8_OBJECTIVE_COUNT))
+      .toEqual([`No ending positively claims the climax (#${STAGE8_OBJECTIVE_COUNT}) failed - a run that ends that way has no ending that matches it.`])
+
     expect(
       validateEndingReachability(
         [{ ...a, triggerConditions: { summary: '', signals: [{ when: { objective: 1, outcome: 'completed' as const }, weight: 3, note: '' }] } }],
         STAGE8_OBJECTIVE_COUNT,
       ).some((w) => w.includes('final objective')),
+    ).toBe(true)
+  })
+
+  it('reachability: both climax branches need an ending, and a negative claim is not one', () => {
+    const parsed = parseStage8Fixture(STAGE8_RESPONSE)
+    if (!parsed.ok) throw new Error('fixture must parse')
+    const [a, b] = parsed.data.endings
+    const claiming = (ending: typeof a, outcome: 'completed' | 'failed', weight: number) => ({
+      ...ending,
+      triggerConditions: {
+        summary: '',
+        signals: [{ when: { objective: STAGE8_OBJECTIVE_COUNT, outcome }, weight, note: '' }],
+      },
+    })
+
+    expect(
+      validateEndingReachability([claiming(a, 'completed', 4), claiming(b, 'failed', 4)], STAGE8_OBJECTIVE_COUNT),
+    ).toEqual([])
+
+    // A NEGATIVE climax signal says what would argue AGAINST this ending - it does not give the
+    // failure branch a home, and the finale would have nothing truthful to hand a losing party.
+    expect(
+      validateEndingReachability([claiming(a, 'completed', 4), claiming(b, 'failed', -4)], STAGE8_OBJECTIVE_COUNT)
+        .some((w) => w.includes('failed')),
     ).toBe(true)
   })
 })
@@ -960,5 +762,47 @@ describe('lore entities are context, not rows (2026-07-23)', () => {
     )
     expect(errors).toEqual([])
     expect(reclassifyAsLore).toEqual([])
+  })
+})
+
+describe('an absent NPC cannot carry a rapport signal (2026-07-28)', () => {
+  // Live: three of four endings in one guide rested on The Drowned Creditor turning hostile or
+  // allied - an NPC authored `absent`. The lint caught it, recorded it as `info`, and shipped, so
+  // three quarters of the endings were kneecapped before a turn was played.
+  const ending = (title: string, extraSignal: Record<string, unknown> | null) => ({
+    title, tone: 'tragic', description: `${title} resolution.`, climax_summary: `${title} sketch.`,
+    trigger_conditions: {
+      signals: [
+        { when: { objective: 1, outcome: 'completed' }, weight: 5, note: 'the climax' },
+        ...(extraSignal ? [extraSignal] : []),
+      ],
+    },
+  })
+  const body = (state: string) => JSON.stringify({
+    endings: [
+      ending('The Ledger Burns', { when: { npc: 2, state }, weight: 3, note: 'the creditor' }),
+      ending('A New Ledger', null),
+      ending('The Final Tide', null),
+    ],
+    dials: [{ key: 'mercy', name: 'Mercy vs ruthlessness' }, { key: 'debt', name: 'Debt vs freedom' }],
+  })
+
+  it('rejects allied/hostile for someone who never appears', () => {
+    for (const state of ['allied', 'hostile']) {
+      const res = parseStage8(body(state), 1, 2, new Set([2]))
+      if (res.ok) throw new Error(`expected ${state} on an absent NPC to be rejected`)
+      expect(res.errors.join(' ')).toContain('never appears')
+    }
+  })
+
+  it('still allows dead/alive for them - an absent person can die offstage', () => {
+    for (const state of ['dead', 'alive']) {
+      expect(parseStage8(body(state), 1, 2, new Set([2])).ok).toBe(true)
+    }
+  })
+
+  it('leaves present NPCs untouched', () => {
+    expect(parseStage8(body('allied'), 1, 2, new Set()).ok).toBe(true)
+    expect(parseStage8(body('hostile'), 1, 2, new Set([1])).ok).toBe(true)
   })
 })

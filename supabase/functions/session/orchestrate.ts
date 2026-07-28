@@ -8,12 +8,13 @@ import {
   abilityModifier, applyAbilityBonuses, proficiencyBonus, SKILL_ABILITY, skillModifier,
 } from '../_shared/character/index.ts'
 import type { AbilityKey, AbilityScores, SkillName } from '../_shared/character/index.ts'
+import { typingPatch } from '../_shared/play/index.ts'
 import type { PendingPromptState } from '../_shared/state/index.ts'
-import { agentContextLines, nextDigests } from '../_shared/state/index.ts'
+import { agentContextLines, agentContextSplit, nextDigests } from '../_shared/state/index.ts'
 import type { DialogueLine, GameState, Json, StateDiff } from '../_shared/state/index.ts'
 import { assertOk, loadContext } from './util.ts'
 
-export { agentContextLines }
+export { agentContextLines, agentContextSplit }
 import type { AdventureRow, MemberRow } from './util.ts'
 
 const LINE_HISTORY_LIMIT = 100
@@ -189,15 +190,27 @@ export function newLine(speaker: string | null, npcId: string | null, text: stri
   return { id: crypto.randomUUID(), speaker, npcId, text }
 }
 
-/** Bounded dialogue append; also drives activeLineId so renderers reveal the newest line. */
+/**
+ * Bounded dialogue append; also drives activeLineId so renderers reveal the newest line.
+ *
+ * A `typing` key in `extra` is re-expanded through `typingPatch` (2026-07-27). Eight call sites
+ * raise typing this way, and every one of them used to write the flag WITHOUT its timestamp - so
+ * `tableIsWedged` had nothing to measure and silently fell back to the refreshable event-log rule
+ * that the age-based check was introduced to replace. Spread LAST so a caller cannot re-clobber it.
+ */
 export function appendLinesDiff(state: GameState, lines: DialogueLine[], extra?: Record<string, Json>): StateDiff {
   const all = [...state.dialogue.lines, ...lines].slice(-LINE_HISTORY_LIMIT)
+  const rest = { ...(extra ?? {}) }
+  const hasTyping = Object.prototype.hasOwnProperty.call(rest, 'typing')
+  const typing = rest.typing === true
+  delete rest.typing
   return {
     domain: 'dialogue',
     patch: {
       lines: all as unknown as Json,
       activeLineId: lines.length > 0 ? lines[lines.length - 1].id : state.dialogue.activeLineId,
-      ...(extra ?? {}),
+      ...rest,
+      ...(hasTyping ? typingPatch(typing, new Date()) : {}),
     },
   }
 }
@@ -207,10 +220,7 @@ export function appendLinesDiff(state: GameState, lines: DialogueLine[], extra?:
  * detected by age rather than by hoping the event log goes quiet (see DialogueState.typingSince).
  */
 export function typingDiff(typing: boolean): StateDiff {
-  return {
-    domain: 'dialogue',
-    patch: { typing, typingSince: typing ? new Date().toISOString() : null },
-  }
+  return { domain: 'dialogue', patch: typingPatch(typing, new Date()) }
 }
 
 /** Sets/clears the single blocking prompt + its server-side context stash (dm-only). */

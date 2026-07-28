@@ -45,3 +45,19 @@ export function isLogSilent(lastEventAt: string | null | undefined, now: Date): 
   const last = lastEventAt ? Date.parse(lastEventAt) : 0
   return now.getTime() - (Number.isFinite(last) ? last : 0) >= EVENT_SILENCE_MS
 }
+
+/**
+ * The ONE shape a typing raise or clear may take (2026-07-27).
+ *
+ * `isTypingStale` above is only as good as the stamp it reads, and most raises never wrote one.
+ * Eight call sites raised typing by passing `{ typing: true }` through `appendLinesDiff`'s extras,
+ * and four cleared it with a raw patch carrying no `typingSince: null` - and because the state
+ * merge DELETES a key set to null, a cleared stamp left the field absent, so the very next raise
+ * had no stamp at all and `tableIsWedged` silently fell back to the refreshable event-log rule the
+ * 2026-07-26 fix exists to abandon. The clock was right; nothing was winding it.
+ *
+ * `now` is a parameter because this module is pure and unit-tested.
+ */
+export function typingPatch(typing: boolean, now: Date): { typing: boolean; typingSince: string | null } {
+  return { typing, typingSince: typing ? now.toISOString() : null }
+}

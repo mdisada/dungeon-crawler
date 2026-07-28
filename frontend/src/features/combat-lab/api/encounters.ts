@@ -96,6 +96,7 @@ interface CharacterContextRow {
   id: string
   name: string
   level: number
+  class_key: string | null
   abilities: PartyMemberInput['abilities']
   ability_bonuses: PartyMemberInput['abilityBonuses']
   hp_max: number | null
@@ -106,7 +107,7 @@ export async function loadAdventureCombatContext(adventureId: string): Promise<A
   const [npcRes, advRes, charRes] = await Promise.all([
     supabase.from('npcs').select('id, name, role, stat_block').eq('adventure_id', adventureId).not('stat_block', 'is', null),
     supabase.from('adventures').select('difficulty_setting').eq('id', adventureId).single(),
-    supabase.from('characters').select('id, name, level, abilities, ability_bonuses, hp_max').eq('is_complete', true).order('name'),
+    supabase.from('characters').select('id, name, level, class_key, abilities, ability_bonuses, hp_max').eq('is_complete', true).order('name'),
   ])
   if (npcRes.error) throw new Error(`Adventure NPCs load failed: ${npcRes.error.message}`)
   if (charRes.error) throw new Error(`Characters load failed: ${charRes.error.message}`)
@@ -118,7 +119,8 @@ export async function loadAdventureCombatContext(adventureId: string): Promise<A
 
   const preset = asRecord(advRes.data?.difficulty_setting).preset
   const party: PartyMemberInput[] = ((charRes.data ?? []) as CharacterContextRow[]).map((c) => ({
-    id: c.id, name: c.name, level: c.level, abilities: c.abilities, abilityBonuses: c.ability_bonuses, hpMax: c.hp_max,
+    id: c.id, name: c.name, level: c.level, classKey: c.class_key,
+    abilities: c.abilities, abilityBonuses: c.ability_bonuses, hpMax: c.hp_max,
   }))
 
   return {

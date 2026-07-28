@@ -13,7 +13,8 @@ export type { CombatantPatch, CombatSetup } from './engine.ts'
 export { characterToSetup, npcStatBlockToSetup } from './convert.ts'
 export type { PartyMemberInput } from './convert.ts'
 export {
-  bossNpcStateForOutcome, buildManifest, deriveResult, fightIsOver, manifestToSetup, resolveDifficulty,
+  bossNpcStateForOutcome, buildManifest, DEFAULT_PARTY_MORALE, deriveResult, fightIsOver,
+  manifestToSetup, resolveDifficulty,
 } from './manifest.ts'
 export type {
   BossOutcome, BuildManifestInput, CombatManifest, CombatResult, ManifestBeatSpec, ManifestEnemyGroup,
@@ -27,6 +28,8 @@ export {
 } from './grid.ts'
 export type { Cell, GridBounds } from './grid.ts'
 export { chooseAutoAction, runAutoTurn } from './heuristic.ts'
+export { DEFAULT_TURN_CAP, runFight, simSeeds, simulate, sweepDifficulty } from './sim.ts'
+export type { FightOutcome, RunRecord, SimOptions, SimSummary, Stats } from './sim.ts'
 export { resolveCast, spellAffects, spellArea, spellTargets } from './spells.ts'
 export { findSpell, SPELL_LIBRARY } from './spell-library.ts'
 export { CombatError } from './types.ts'

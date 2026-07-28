@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { EVENT_SILENCE_MS, isLogSilent, isTypingStale, TYPING_STALE_MS } from './liveness'
+import { EVENT_SILENCE_MS, isLogSilent, isTypingStale, TYPING_STALE_MS, typingPatch } from './liveness'
 
 const NOW = new Date('2026-07-27T12:00:00.000Z')
 const agoMs = (ms: number) => new Date(NOW.getTime() - ms).toISOString()
@@ -52,5 +52,30 @@ describe('isLogSilent', () => {
 
   it('treats a missing last event as silent', () => {
     expect(isLogSilent(null, NOW)).toBe(true)
+  })
+})
+
+describe('typingPatch is the only shape a raise or clear may take (2026-07-27)', () => {
+  const now = new Date('2026-07-27T12:00:00.000Z')
+
+  it('a raise stamps when', () => {
+    expect(typingPatch(true, now)).toEqual({ typing: true, typingSince: now.toISOString() })
+  })
+
+  it('a clear nulls the stamp rather than leaving a stale one', () => {
+    expect(typingPatch(false, now)).toEqual({ typing: false, typingSince: null })
+  })
+
+  it('a re-raise after a clear is judged from the NEW stamp, not the old one', () => {
+    // The live shape: a turn raises, clears, and five minutes later another turn raises. Before
+    // this helper the second raise carried no stamp at all, so a stale one (or none) decided
+    // whether the table was wedged - and a live turn could be force-healed two seconds in.
+    const first = typingPatch(true, now)
+    const cleared = typingPatch(false, new Date(now.getTime() + 1_000))
+    const second = typingPatch(true, new Date(now.getTime() + 300_000))
+    const twoSecondsIn = new Date(now.getTime() + 302_000)
+    expect(isTypingStale(first.typingSince, twoSecondsIn)).toBe(true)
+    expect(cleared.typingSince).toBeNull()
+    expect(isTypingStale(second.typingSince, twoSecondsIn)).toBe(false)
   })
 })

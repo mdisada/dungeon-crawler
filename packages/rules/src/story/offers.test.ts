@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   canReweave, canStageOffer, MAX_OPEN_OFFERS, MAX_REWEAVES, negotiatedGold, offerBanner,
-  openingTerms, parseOfferResponse, parseRewardBounds,
+  openingTerms, parseOfferResponse, parseRewardBounds, questResolution,
 } from './offers.ts'
 
 describe('staging caps and the re-weave budget', () => {
@@ -90,5 +90,40 @@ describe('offerBanner', () => {
 
   it('omits the reward clause at zero gold', () => {
     expect(offerBanner('Help the village', 'Elder Maren', 0)).toBe('Help the village (Elder Maren)')
+  })
+})
+
+describe('quest resolution over a contract', () => {
+  const A = 'obj-a'
+  const B = 'obj-b'
+
+  it('waits while any contracted objective is still open', () => {
+    expect(questResolution([A, B], new Set([A]), new Set([A]))).toBe('pending')
+  })
+
+  it('pays out when the party managed every one of them', () => {
+    expect(questResolution([A, B], new Set([A, B]), new Set([A, B]))).toBe('completed')
+  })
+
+  // The live bug (2026-07-28, adventure c29038df): the entry contract covered all three
+  // objectives, the first failed on turn ~10, and the quest could never resolve again - loop
+  // active, journal "active", no payout, all the way past the ending.
+  it('closes as FAILED when one contracted objective failed, however many succeeded', () => {
+    expect(questResolution([A, B], new Set([B]), new Set([A, B]))).toBe('failed')
+  })
+
+  it('closes as failed when none of them landed', () => {
+    expect(questResolution([A, B], new Set(), new Set([A, B]))).toBe('failed')
+  })
+
+  // A failed objective is TERMINAL, not open - the whole point of the two sets. Reading the
+  // succeeded set as if it were the terminal one is what stalled the quest forever.
+  it('does not mistake a failure for an objective still in play', () => {
+    expect(questResolution([A], new Set(), new Set([A]))).toBe('failed')
+    expect(questResolution([A], new Set(), new Set())).toBe('pending')
+  })
+
+  it('never resolves an empty contract', () => {
+    expect(questResolution([], new Set(), new Set())).toBe('pending')
   })
 })

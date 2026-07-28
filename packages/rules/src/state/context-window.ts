@@ -29,6 +29,25 @@ export function agentContextLines(state: GameState, rawLimit: number): string[] 
 }
 
 /**
+ * The same two pieces, kept apart, for callers that give them their own labels.
+ *
+ * `agentContextLines` joins them into one list, and every caller that then joins THAT with a
+ * separator hands the model a single run-on field in which "six phases ago" and "one second ago"
+ * are peers separated by a pipe. The `Earlier:` prefix survives, so the distinction is not lost -
+ * it is just buried under a label that says LAST. What has happened so far and what was said a
+ * moment ago are different questions, and a prompt reads better when they are different fields.
+ */
+export function agentContextSplit(
+  state: GameState,
+  rawLimit: number,
+): { digests: string[]; recent: string[] } {
+  return {
+    digests: (state.dm?.contextWindow?.digests ?? []).slice(-MAX_DIGESTS),
+    recent: liveLines(state).slice(-rawLimit).map((l) => render(l.speaker, l.text)),
+  }
+}
+
+/**
  * The raw lines since the last phase closed - what the Archivist reads to write the next
  * digest. Falls back to the whole (already bounded) history when the boundary line has aged
  * out, so a long phase is never summarised from nothing.

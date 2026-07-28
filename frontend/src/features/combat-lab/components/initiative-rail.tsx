@@ -23,7 +23,9 @@ export function InitiativeRail({ engine, selectedId, onSelect }: InitiativeRailP
         {engine.initiative.map(({ id, total }) => {
           const c = byId.get(id)
           if (!c) return null
-          const down = c.dead || c.conditions.includes('unconscious')
+          // Fled combatants are off the field, so they read the same as down: dimmed, not gone
+          // (keeping the slot makes the order stable to look at across turns).
+          const down = c.dead || c.fled || c.conditions.includes('unconscious')
           const fraction = c.side === 'party'
             ? c.hp.current / Math.max(1, c.hp.max)
             : quantizedHpFraction(c.hp.current, c.hp.max)
@@ -33,7 +35,7 @@ export function InitiativeRail({ engine, selectedId, onSelect }: InitiativeRailP
               <button
                 type="button"
                 title={`${c.name} - initiative ${total}`}
-                aria-label={`${c.name}, initiative ${total}${isActive ? ', active turn' : ''}${down ? ', down' : ''}`}
+                aria-label={`${c.name}, initiative ${total}${isActive ? ', active turn' : ''}${c.fled ? ', fled' : down ? ', down' : ''}`}
                 onClick={() => onSelect(id)}
                 className={cn('group relative flex flex-col items-center', down && 'opacity-40')}
               >

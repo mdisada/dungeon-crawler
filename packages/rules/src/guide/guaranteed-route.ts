@@ -112,9 +112,19 @@ export function buildGuaranteedRoute(input: GuaranteedRouteInput): GuaranteedRou
     template: template.key,
     twist,
     label: input.title,
-    stakes: input.hiddenDescription?.trim()
-      ? input.hiddenDescription.trim().slice(0, 200)
-      : `Whether the party achieves: ${input.title}`,
+    // NEVER `hiddenDescription` (2026-07-28). That column is DM-ONLY intent - it carries authoring
+    // metadata ("Scenes 1 and 2 ground this", "node#8", "ing#3", "This is the chapter's climax") -
+    // and it was being cut to 200 chars mid-word and shipped as the rescue scene's player-facing
+    // stakes. Every rescue node in three audited guides read "at stake: ...abolished two
+    // generations a".
+    //
+    // This is the same defect the seed was already fixed for on 2026-07-26, when `guidance` was
+    // moved into params because designer instruction was reaching the player-facing prompt. The
+    // fix moved one field and left its neighbour doing the identical thing.
+    //
+    // The objective TITLE is safe: it is already published to the player in the quest journal and
+    // in "Objective complete: <title>".
+    stakes: `Whether the party achieves: ${input.title}`,
     guidance: templateGuidance(template, twist),
     params: { ...template.params },
     onSuccess: atoms,

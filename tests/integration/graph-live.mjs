@@ -147,12 +147,16 @@ async function main() {
     completion_predicates: { all: [{ flag: 'study_searched', eq: true }] },
   })
   const objKey = `obj:${objective.id}`
+  const secondKey = `obj:${second.id}`
   await serviceRest('POST', 'story_atoms', [
     { adventure_id: advId, slug: 'gate_opened', kind: 'flag', scope: 'spine', label: 'gate opened', source_table: 'objectives' },
     { adventure_id: advId, slug: 'front_door_barred', kind: 'flag', scope: 'local', label: 'front door barred', source_table: 'story_nodes' },
     { adventure_id: advId, slug: 'cellar_flooded', kind: 'flag', scope: 'local', label: 'cellar flooded', source_table: 'story_nodes' },
   ])
   await serviceRest('POST', 'story_nodes', nodeRows(advId, chapter.id, objective.id, objKey))
+  // The SECOND objective gets authored nodes too, so the block below can prove the next objective
+  // actually receives a playable scene - not merely a loop row.
+  await serviceRest('POST', 'story_nodes', nodeRows(advId, chapter.id, second.id, secondKey))
   console.log('setup: graph-bearing demo adventure created')
 
   const [character] = await serviceRest('POST', 'characters', {
@@ -222,6 +226,34 @@ async function main() {
   ok('winning any authored route completes the objective', completed.length >= 1, completed)
   ok('the next objective was revealed', (await eventsOf(advId, 'objective_revealed')).some(
     (e) => e.payload.objective_id === second.id), second.id)
+
+  console.log('\n[the spine survives a quest boundary - an active objective always has a loop]')
+  // THE LIVE FAILURE (2026-07-27, The Lantern of Saltmarsh Reach). A quest contract names a SUBSET
+  // of the objective ladder, so its payout completes the quest loop while later objectives are
+  // still to come. completeLoop can only auto-resume a SUSPENDED loop, so a one-quest adventure
+  // lands on an empty stack at the exact moment the next objective is revealed - and
+  // beats.core_loop_id is NOT NULL, so nothing could ever open a beat for it again. The climax had
+  // three authored nodes; none were ever played, and the director retired it as stalled.
+  //
+  // Completing the loop directly reproduces that state exactly, without needing the offer
+  // machinery this suite deliberately does not build.
+  await serviceRest('PATCH', `core_loops?id=eq.${loop.id}`, { status: 'completed' })
+  const emptied = await serviceRest('GET', `core_loops?adventure_id=eq.${advId}&status=eq.active&select=id`)
+  ok('the stack really is empty, exactly as it was live', emptied.length === 0, emptied)
+  const revive = await act(gm, {
+    action: 'player_intent', adventure_id: advId, kind: 'dm_command', command: 'set_flag',
+    flag: 'gate_opened', value: true,
+  })
+  ok('a progress pass runs against the empty stack', revive.status === 200, revive.body)
+  const loopOpens = await eventsOf(advId, 'loop_opened')
+  ok('a spine loop opened for the revealed objective', loopOpens.some(
+    (e) => e.payload.reason === 'spine_continues' && e.payload.objective_id === second.id), loopOpens)
+  const activeNow = await serviceRest('GET', `core_loops?adventure_id=eq.${advId}&status=eq.active&select=id`)
+  ok('exactly one loop is active - the derived id makes a duplicate impossible', activeNow.length === 1, activeNow)
+  const beatsNow = await eventsOf(advId, 'beat_opened')
+  ok('the next objective got a beat on its OWN authored node', beatsNow.some(
+    (e) => e.payload.node_key === `${secondKey}#n0`), beatsNow.map((e) => e.payload.node_key))
+  ok('still no node opened twice', new Set(beatsNow.map((e) => e.payload.node_key)).size === beatsNow.length, beatsNow)
 
   console.log('\n[$0]')
   const usage = await serviceRest('GET', `usage_log?adventure_id=eq.${advId}&select=id`)

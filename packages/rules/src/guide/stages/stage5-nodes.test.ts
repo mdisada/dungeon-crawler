@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildRescueNode, objectiveKeyOf, parseStage5Nodes } from './stage5-nodes'
+import { buildRescueNode, buildStage5NodesPrompt, objectiveKeyOf, parseStage5Nodes } from './stage5-nodes'
 import type { Stage5NodesContext } from './stage5-nodes'
 import { atomsSatisfy, buildGuaranteedRoute } from '../guaranteed-route'
 import { validateNodeGraph } from '../nodes'
@@ -8,6 +8,8 @@ import { validateNodeGraph } from '../nodes'
 const ctx: Stage5NodesContext = {
   chapterNumber: 1,
   chapterTitle: 'The Drowned Ledger',
+  locations: [],
+  scenes: [],
   objectives: [
     {
       id: 'o1',
@@ -344,6 +346,158 @@ describe('parseStage5Nodes', () => {
     // now the ladder: this is the last route node, so its setback routes to the rescue.
     expect(second.transitions.find((t) => t.on === 'failed')?.toNodeKey)
       .toBe(`${objectiveKeyOf('o1')}#r0`)
+  })
+})
+
+describe('nodes are placed (2026-07-28)', () => {
+  const placedCtx: Stage5NodesContext = {
+    ...ctx,
+    locations: [{ key: 'loc:office', name: 'The Harbour Office' }, { key: 'loc:quay', name: 'The Quay' }],
+  }
+  const doc = (first: Record<string, unknown>) => JSON.stringify({
+    objectives: [{ objective_number: 1, nodes: [
+      { kind: 'skill_challenge', narration_seed: 'x.', affordances: [{ key: 'a', hint: 'go' }],
+        transitions: [{ on: 'full', to: 'done', arrival_context: '' }], ...first },
+      { kind: 'skill_challenge', narration_seed: 'y.', affordances: [{ key: 'b', hint: 'go' }],
+        transitions: [{ on: 'full', to: 'done', arrival_context: '' }], location_key: 'loc:quay' },
+    ] }],
+  })
+
+  it('keeps a location the chapter actually has', () => {
+    const result = parseStage5Nodes(doc({ location_key: 'loc:office' }), placedCtx)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.nodes[0].node.locationKey).toBe('loc:office')
+  })
+
+  it('rejects a node left unplaced when the chapter has places to choose from', () => {
+    const result = parseStage5Nodes(doc({}), placedCtx)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.join(' ')).toMatch(/no valid location_key/)
+  })
+
+  it('rejects an invented place rather than storing a dangling reference', () => {
+    const result = parseStage5Nodes(doc({ location_key: 'loc:the_sunken_cathedral' }), placedCtx)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.join(' ')).toMatch(/no valid location_key/)
+  })
+
+  it('asks for nothing when the chapter has no locations at all', () => {
+    const result = parseStage5Nodes(doc({}), ctx)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.nodes[0].node.locationKey).toBeNull()
+  })
+})
+
+describe('the chapter plan reaches the node author', () => {
+  // Stage 2's scenes were loaded for stages 3 and 4 and dropped before stage 5b, so the chapter
+  // got decomposed twice by models that never compared notes.
+  it('puts the planned scenes in the prompt', () => {
+    const prompt = buildStage5NodesPrompt({
+      ...ctx,
+      scenes: ['Mira Coth shows the party her brother\'s ship in the ledger; it never docked.'],
+    })
+    expect(prompt.user).toContain('brother\'s ship')
+    expect(prompt.user).toContain('planned around')
+  })
+
+  it('omits the block entirely when a chapter has no scenes on file', () => {
+    expect(buildStage5NodesPrompt(ctx).user).not.toContain('planned around')
+  })
+})
+
+describe('outcome summaries (the ladder contract)', () => {
+  it('stores the authored win/loss pair', () => {
+    const result = parseStage5Nodes(rawOutput({
+      objectives: [{
+        objective_number: 1,
+        nodes: [
+          {
+            kind: 'social', narration_seed: 'Mara guards the strongbox.', stakes: 's',
+            npc_keys: ['npc:mara'], affordances: [{ key: 'persuade', hint: 'talk' }],
+            setback: { name: 'watch_alerted', kind: 'flag' },
+            setback_line: 'Rebuffed, the party eyes the cellar hatch.',
+            outcome: { win: 'The party holds the ledger.', loss: 'Mara has the watch watching the party.' },
+          },
+          {
+            kind: 'skill_challenge', narration_seed: 'The hatch is barred.', stakes: 's',
+            affordances: [{ key: 'break_in', hint: 'force it' }],
+            setback: { name: 'hatch_jammed', kind: 'flag' }, setback_line: 'The hatch holds.',
+            outcome: { win: 'The party is inside with the ledger.', loss: 'The cellar stays shut.' },
+          },
+        ],
+      }],
+    }), ctx)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.nodes[0].node.outcomeSummary).toEqual({
+      win: 'The party holds the ledger.', loss: 'Mara has the watch watching the party.',
+    })
+  })
+
+  it('derives a summary rather than failing the chapter when none is authored', () => {
+    const result = parseStage5Nodes(rawOutput(), ctx)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const first = result.data.nodes[0].node.outcomeSummary
+    expect(first.win).toContain('Recover the ledger')
+    expect(first.loss).toBe('Rebuffed, the party eyes the cellar hatch.')
+  })
+
+  it('REJECTS two routes of one objective declaring the SAME loss', () => {
+    // Guide ac78e517: both climax routes carried "the Drowned Corpus completes its manifestation,
+    // Mirehaven silenced" - the objective lost outright, recorded twice, on routes meant to lead on.
+    const result = parseStage5Nodes(rawOutput({
+      objectives: [{
+        objective_number: 1,
+        nodes: [
+          {
+            kind: 'social', narration_seed: 'Mara guards the strongbox.', stakes: 's',
+            npc_keys: ['npc:mara'], affordances: [{ key: 'persuade', hint: 'talk' }],
+            setback: { name: 'watch_alerted', kind: 'flag' }, setback_line: 'Rebuffed.',
+            outcome: { win: 'They hold the ledger.', loss: 'The town is lost and the ledger burns.' },
+          },
+          {
+            kind: 'skill_challenge', narration_seed: 'The hatch is barred.', stakes: 's',
+            affordances: [{ key: 'break_in', hint: 'force it' }],
+            setback: { name: 'hatch_jammed', kind: 'flag' }, setback_line: 'The hatch holds.',
+            outcome: { win: 'They are inside.', loss: 'The town is lost and the ledger burns.' },
+          },
+        ],
+      }],
+    }), ctx)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.join(' ')).toContain('SAME loss')
+  })
+
+  it('REJECTS a setback that removes a named character - the next route needs them alive', () => {
+    const result = parseStage5Nodes(rawOutput({
+      objectives: [{
+        objective_number: 1,
+        nodes: [
+          {
+            kind: 'social', narration_seed: 'Mara guards the strongbox.', stakes: 's',
+            npc_keys: ['npc:mara'], affordances: [{ key: 'persuade', hint: 'talk' }],
+            setback: { name: 'watch_alerted', kind: 'flag' },
+            setback_line: 'The struggle turns and Harbormaster Mara is killed.',
+            outcome: { win: 'The party holds the ledger.', loss: 'Harbormaster Mara is dead.' },
+          },
+          {
+            kind: 'skill_challenge', narration_seed: 'The hatch is barred.', stakes: 's',
+            affordances: [{ key: 'break_in', hint: 'force it' }],
+            setback: { name: 'hatch_jammed', kind: 'flag' }, setback_line: 'The hatch holds.',
+            outcome: { win: 'They are inside.', loss: 'The cellar stays shut.' },
+          },
+        ],
+      }],
+    }), ctx)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.join(' ')).toContain('Harbormaster Mara')
   })
 })
 

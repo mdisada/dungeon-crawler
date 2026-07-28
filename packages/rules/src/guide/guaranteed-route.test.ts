@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { atomsSatisfy, buildGuaranteedRoute, minimalSatisfyingAtoms } from './guaranteed-route'
+import { buildRescueNode } from './stages/stage5-nodes'
 import { ENCOUNTER_TEMPLATES } from '../story/templates-encounter'
 
 describe('minimalSatisfyingAtoms', () => {
@@ -187,5 +188,47 @@ describe('negative clauses cost nothing (2026-07-23)', () => {
     })
     expect(route).not.toBeNull()
     expect(route!.onSuccess).toEqual([])
+  })
+})
+
+describe('the rescue scene never leaks DM-only text to the player (2026-07-28)', () => {
+  // Audited live: every rescue node in three guides opened on "The way forward narrows to one
+  // thing: <objective title>. <hidden_description>" - authoring metadata and all - with stakes cut
+  // off mid-word at 200 chars. This is the same class the seed was fixed for on 2026-07-26, when
+  // `guidance` was moved into params; its neighbour was left doing the identical thing.
+  const DM_ONLY =
+    'The party must reach the wreck at low tide. Scenes 1 and 2 ground this, and node#8 resolves ' +
+    'it via ing#3. This is the chapter climax, grounding Scene 7 and 8 toward the promised endings.'
+  const input = {
+    objectiveId: 'obj-rescue',
+    title: 'Relight the Greywater lantern',
+    hiddenDescription: DM_ONLY,
+    completionPredicates: { all: [{ flag: 'lantern_relit', eq: true }] },
+  }
+
+  it('keeps the DM intent out of the stakes', () => {
+    const route = buildGuaranteedRoute(input)!
+    expect(route.stakes).not.toContain('Scene')
+    expect(route.stakes).not.toContain('node#')
+    expect(route.stakes).not.toContain('ing#')
+    expect(DM_ONLY).not.toContain(route.stakes)
+    expect(route.stakes).toContain(input.title)
+  })
+
+  it('never truncates the stakes mid-word', () => {
+    const route = buildGuaranteedRoute({ ...input, hiddenDescription: 'x'.repeat(400) })!
+    expect(route.stakes.endsWith('x')).toBe(false)
+    expect(route.stakes).toBe(`Whether the party achieves: ${input.title}`)
+  })
+
+  it('the rescue NODE opens on fiction, carrying no authoring metadata', () => {
+    const node = buildRescueNode('obj-rescue', buildGuaranteedRoute(input)!)
+    for (const marker of ['Scene', 'node#', 'ing#', 'grounding', 'The way forward narrows']) {
+      expect(node.narrationSeed).not.toContain(marker)
+    }
+    expect(node.narrationSeed).not.toContain(DM_ONLY)
+    // The designer instruction stays in params, where the 2026-07-26 fix put it.
+    expect(node.narrationSeed).not.toContain('Shape:')
+    expect(node.encounter.params).toHaveProperty('guidance')
   })
 })

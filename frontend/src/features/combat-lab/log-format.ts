@@ -53,6 +53,8 @@ export function formatEvent(event: CombatEvent, name: (id: string) => string): s
       return `${event.name} ${event.ability.toUpperCase()} save ${rollText(event.roll)} vs DC ${event.dc} -- ${event.success ? 'SAVED' : 'FAILED'}`
     case 'down':
       return `${event.name} is ${event.result === 'dead' ? 'slain' : 'down (unconscious)'}!`
+    case 'flee':
+      return `${event.name} breaks and flees the field (${event.side} at ${Math.round(event.strength * 100)}% strength)`
     case 'action': {
       const labels = {
         dodge: 'takes the Dodge action',

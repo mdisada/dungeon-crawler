@@ -29,6 +29,16 @@ export interface AgentEnv {
   demo: boolean
   /** Adventure mode - the Slice 2 review gate only ever engages for 'assist'. */
   mode: 'full_ai' | 'assist' | null
+  /**
+   * Set once this request has handed its tail to a fresh worker (see kickTail). From that moment
+   * a SECOND narrator is drafting the next scene concurrently, and anything this request still
+   * publishes is written without knowledge of it - and it without knowledge of ours.
+   *
+   * That is the mechanism behind every location contradiction the continuity probe finds: 7 in 95
+   * pairs, all of them published 0.39-6.65s apart in two different narrator styles. Per-request,
+   * so it dies with the request.
+   */
+  tailKicked?: boolean
 }
 
 export async function agentJson(
@@ -982,8 +992,11 @@ export async function runReplyGists(env: AgentEnv, ctx: NpcContext, rejected?: s
 const NARRATOR_CONTEXT_KEY =
   ' Labelled facts follow. GOAL: never state as a task. HERE: who is in this scene and who they ' +
   'ARE - hold every detail true, their role and their gender included. CAST: exist, but elsewhere. ' +
-  'GONE: discuss freely, never stage or voice. FORCES/DONE/CLOCK/PROPS: established - build on, ' +
-  'never redefine. Spell names EXACTLY. Unnamed newcomers are always allowed.'
+  'GONE: discuss freely, never stage or voice. FORCES: proper nouns that exist in this world - ' +
+  'you may NAME one, and you do not know what any of them mean: never explain, define, or ' +
+  'attach workings to one. DONE/CLOCK/PROPS: established - build on, never redefine. Spell ' +
+  'names EXACTLY. SOFAR: the story so far, oldest first - already told, never retell. LAST: the ' +
+  'last few lines, the moment you are continuing from. Unnamed newcomers are always allowed.'
 
 /**
  * LENGTH, IN WORDS (2026-07-27). The old brief said "2-4 sentences, vivid but concise" and could
@@ -1034,17 +1047,23 @@ const NARRATOR_SYSTEMS: Record<NarrationStyle, string> = {
     'situation concrete and leave at least one visible thread to pull (a path, a person, a ' +
     'sound, a detail worth a closer look) so they always know what they could engage with next.',
   exposition:
-    'You narrate a tabletop RPG. Second person, present tense. This is a CUTSCENE between ' +
-    'encounters: FIVE sentences, 130 words at most, carrying consequences forward and setting ' +
-    'the next situation. It is the longest thing the player reads, so earn every line. Never invent facts about named NPCs/items/places beyond the given ' +
+    'You narrate a tabletop RPG. Second person, present tense. This is a CUTSCENE opening a new ' +
+    'scene: FOUR sentences, 90 words at most. Hard limit - a fifth sentence is a failure, not a ' +
+    'bonus. Carry the consequence forward, put the party somewhere concrete, and stop. ' +
+    'Never invent facts about named NPCs/items/places beyond the given ' +
     'context. Never mention dice, rolls, checks, or game mechanics. Never presume the party\'s ' +
     'motivation or feelings. Let the party members\' described traits, backgrounds, and quirks ' +
-    'color what each of them would notice or be drawn toward. END with an explicit in-fiction ' +
-    'ask that telegraphs 1-3 concrete directions the party could take - someone waiting on ' +
-    'their answer, a visible approach, a pressing danger. Never re-offer a direction the ' +
-    'party already chose, and never pad a single obvious path into a menu: if one way onward ' +
-    'exists, carry them down it and end at what it reveals. The players\' reply enters the ' +
-    'next encounter. Output only narration text.' + NARRATOR_CONTEXT_KEY,
+    'color what each of them would notice or be drawn toward. ' +
+    // NO MENU (2026-07-28). This used to ask for "an explicit in-fiction ask that telegraphs 1-3
+    // concrete directions", and the player's options are ALREADY on screen as chips - so 8% of
+    // published lines ended by breaking character to list them a second time, once verbatim in
+    // bold DM voice ("Perhaps a direct threat will break him."). Two menus for one choice, and
+    // the prose one is the worse of the two: it reads as notes, not story.
+    'END on the pressure itself - what is happening, who is waiting, what is about to give. ' +
+    'The party\'s available actions are already displayed to them separately: NEVER list, ' +
+    'enumerate, or hint at options, never write "you could... or you could...", and never end ' +
+    'with "What do you do?". Make the situation demand an answer and trust the player to give ' +
+    'one. Output only narration text.' + NARRATOR_CONTEXT_KEY,
 }
 
 /**

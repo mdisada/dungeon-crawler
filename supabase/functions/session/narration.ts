@@ -6,6 +6,7 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
+import { foreignCharacters, stripForeign } from '../_shared/guide/charset.ts'
 import { dialogueGateActive, dmSettings } from '../_shared/play/index.ts'
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
 import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions, runOutcomeClaimCheck } from './agents.ts'
@@ -13,7 +14,8 @@ import type { AgentEnv, NarrationStyle } from './agents.ts'
 import { buildCanon } from './canon.ts'
 import { retrieveMemories } from './memory.ts'
 import {
-  agentContextLines, appendLinesDiff, loadPartyCharacters, newLine, partyProfileLines, typingDiff,
+  agentContextLines, agentContextSplit, appendLinesDiff, loadPartyCharacters, newLine,
+  partyProfileLines, typingDiff,
 } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
 import { assertOk, commitDiffs, loadContext, loadState, logEvent } from './util.ts'
@@ -125,6 +127,46 @@ async function outcomeGuard(
  * - poisons every subsequent line rather than merely reading oddly.
  */
 export const OUTCOME_CLAIM_CHECK: 'off' | 'shadow' | 'enforce' = 'enforce'
+
+/**
+ * Characters from outside the adventure's language, published to the player (2026-07-28).
+ *
+ * The guide pipeline gained a charset gate when an ending summary shipped reading "not the官方
+ * story". The LIVE NARRATOR never had one - and it reaches the player far more often than the
+ * guide does. Across twelve recorded runs, 3 of 337 published lines carried spliced CJK:
+ * "*Drift彤* glide past the harbor stones", "The堵塞 channels can't be cleared with knives".
+ *
+ * Enforced harder than the prose checks above, because it is not a judgement call. A dead NPC
+ * "speaking" is a model's reading of ambiguous prose - wrong 14 times out of 14 when it last had
+ * authority. A Han character in an English sentence is a fact with no false positive available,
+ * so a second failure does NOT keep the prose: the offending characters are removed. Deleting
+ * them is always readable ("*Drift*", "The channels") and never worse than what it replaces,
+ * which is not true of the mechanical fallback.
+ */
+async function charsetGuard(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  draft: string,
+  regenerate: (constraint: string) => Promise<string>,
+): Promise<string> {
+  const bad = foreignCharacters(draft)
+  if (bad.length === 0) return draft
+  const shown = bad.slice(0, 8).join(' ')
+  await logEvent(service, env.adventureId, sessionId, 'charset_blocked', {
+    characters: shown, draft: draft.slice(0, 400),
+  }).catch(() => {})
+  const second = await regenerate(
+    `NEVER use characters outside English - your previous draft contained ${shown}. ` +
+    'Write every word in English; do not transliterate and do not leave placeholders.',
+  ).catch(() => draft)
+  const stillBad = foreignCharacters(second)
+  if (stillBad.length === 0) return second
+  await logEvent(service, env.adventureId, sessionId, 'incident', {
+    kind: 'charset_stripped', characters: stillBad.slice(0, 8).join(' '),
+  }).catch(() => {})
+  return stripForeign(second)
+}
 
 function factSheet(state: GameState): string {
   const recent = agentContextLines(state, 6)
@@ -296,6 +338,28 @@ export async function publishNarration(
   style: NarrationStyle = 'beat',
 ): Promise<string> {
   const state = (await loadState(service, env.adventureId)).state
+  // This session's story has ended - the epilogue was the last thing the player should read.
+  // The ending itself publishes directly (see updateEndings), so it is never suppressed here.
+  if (state.dm?.story?.endedSessionId && state.dm.story.endedSessionId === sessionId) {
+    await logEvent(service, env.adventureId, sessionId, 'narration_suppressed', {
+      reason: 'session_story_ended', prompt: prompt.slice(0, 140),
+    }).catch(() => {})
+    await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
+    return ''
+  }
+  // CONCURRENT NARRATION (2026-07-28). Once kickTail has fired, a second narrator is drafting the
+  // next scene in another worker. Neither can see the other, so whichever lands second contradicts
+  // the first about where the party is standing - measured at 7 of 95 pairs by the continuity
+  // probe, every one 0.39-6.65s apart and in two different narrator styles.
+  //
+  // Reported, not blocked. WHICH call sites publish after the kick is exactly what is not known
+  // (evaluateStoryProgress has 11 callers), and suppressing a line on a guess trades a
+  // contradiction for a hole in the story. This names the offenders so the fix can be precise.
+  if (env.tailKicked) {
+    await logEvent(service, env.adventureId, sessionId, 'incident', {
+      kind: 'narration_after_tail_kick', style, prompt: prompt.slice(0, 120),
+    }).catch(() => {})
+  }
   const npcStates = state.dm?.facts.npcStates ?? {}
   // CANON ONLY for the checker (Phase 6). It used to receive the live transcript plus the
   // generating prompt verbatim - so a draft that correctly followed its instruction was flagged as
@@ -318,6 +382,7 @@ export async function publishNarration(
   // moved into the system prompt and only the facts travel per turn - which paid for the three
   // things that were missing (the goal, who the cast ARE, the story so far) without the prompt
   // getting bigger.
+  const transcript = agentContextSplit(state, 6)
   const grounded = [
     prompt,
     '',
@@ -326,7 +391,11 @@ export async function publishNarration(
     ...roster,
     canon.story,
     profiles.length > 0 ? `PARTY  ${profiles.join(' // ')}` : '',
-    `LAST   ${agentContextLines(state, 6).join(' | ')}`,
+    // SOFAR and LAST are separate fields because they answer separate questions: what has happened
+    // across the story, and what was said a moment ago. Joined into one LAST they became peers in a
+    // pipe-separated run-on, six phases ago sitting beside one second ago.
+    transcript.digests.length > 0 ? `SOFAR  ${transcript.digests.join(' // ')}` : '',
+    `LAST   ${transcript.recent.join(' | ')}`,
     memories.length > 0 ? `EARLIER ${memories.join(' // ')}` : '',
   ].filter(Boolean).join('\n')
 
@@ -361,12 +430,36 @@ export async function publishNarration(
         })
       }
     }
+    // LAST, deliberately: every regeneration above can introduce characters of its own, so this
+    // has to be the final thing that touches the text before it is published.
+    text = await charsetGuard(service, env, sessionId, text, (constraint) =>
+      runNarrator(env, grounded, constraint, style))
   } catch (err) {
     // A narrator outage must not leave typing:true locking every future intent.
     await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
     throw err
   }
 
+  // RE-CHECK AT WRITE TIME, NOT LOAD TIME (2026-07-28). The `endedSessionId` guard at the top of
+  // this function reads state from BEFORE the narrator ran, and the narrator runs for 9-33s. A
+  // scene that began drafting while the story was still live published 5.4s AFTER
+  // `adventure_ended` in run 0bcf6d87 - the player read the epilogue, then a new scene opened
+  // under it. `narration_suppressed` was 0 for that run: the guard is not weak, it is early.
+  //
+  // commitDiffs re-loads state for the builder and retries on stale versions, so the builder is
+  // the only place in this function that sees the state the write actually lands on.
+  let suppressed = false
+  await commitDiffs(service, env.adventureId, (s) => {
+    suppressed = Boolean(s.dm?.story?.endedSessionId) && s.dm?.story?.endedSessionId === sessionId
+    if (suppressed) return [typingDiff(false)]
+    return [appendLinesDiff(s, [newLine(null, null, text)]), typingDiff(false)]
+  })
+  if (suppressed) {
+    await logEvent(service, env.adventureId, sessionId, 'narration_suppressed', {
+      reason: 'story_ended_during_generation', style, prompt: prompt.slice(0, 140),
+    }).catch(() => {})
+    return ''
+  }
   await recordProposal(service, {
     adventureId: env.adventureId,
     sessionId,
@@ -376,10 +469,6 @@ export async function publishNarration(
     blocking: true,
     summary: text.slice(0, 80),
   })
-  await commitDiffs(service, env.adventureId, (s) => [
-    appendLinesDiff(s, [newLine(null, null, text)]),
-    typingDiff(false),
-  ])
   // `style` rides along so length can be judged per style (2026-07-27). Without it the measured
   // 868-char median mixes 2-4-sentence beats with 4-8-sentence cutscenes, and "are beats too long?"
   // has no answer - which is precisely why a length ceiling could not be set responsibly.

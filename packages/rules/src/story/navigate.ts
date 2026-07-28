@@ -160,3 +160,27 @@ export function hasPlayableNode(nodes: readonly NavNode[], usedKeys: readonly st
   const used = new Set(usedKeys)
   return nodes.some((n) => !used.has(n.key))
 }
+
+/**
+ * ONE BEAT PER AUTHORED NODE, enforced by the database (2026-07-27).
+ *
+ * `nextNode` never returns a node already in `usedKeys`, and `closeOutgoingNode`'s contract is that
+ * a node which opens always resolves - so "a node is instantiated at most once" is an invariant of
+ * the whole design. Nothing enforced it. The beats insert was unconditional and `beats.node_id`
+ * carries no unique index, so two overlapping passes - the tail and the director both run per turn
+ * - could each read `used` before either had written, pick the same node, and open it twice: two
+ * `beat_opened` events, two exposition narrations, and two active beats on one loop.
+ *
+ * Deriving the beat id from the node makes the second insert lose to the primary key, which is the
+ * same claim `spineLoopId` uses and needs no migration. The variant nibble differs from that helper
+ * so the two derivations can never produce the same id.
+ */
+export function nodeBeatId(nodeId: string): string {
+  const hex = nodeId.replace(/-/g, '').toLowerCase()
+  if (!/^[0-9a-f]{32}$/.test(hex)) return nodeId
+  const chars = [...hex]
+  chars[12] = '8'
+  chars[16] = 'b'
+  const s = chars.join('')
+  return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`
+}

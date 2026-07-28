@@ -16,7 +16,7 @@ import { minimalSatisfyingAtoms } from '../guaranteed-route.ts'
 import type { GuaranteedRoute } from '../guaranteed-route.ts'
 import { ENCOUNTER_KINDS } from '../../story/beats.ts'
 import type { BeatEncounterKind } from '../../story/beats.ts'
-import { affordanceLabel, nodeKeyFor, validateNodeGraph } from '../nodes.ts'
+import { affordanceLabel, namesRemovedBy, nodeKeyFor, parseOutcomeSummary, validateNodeGraph } from '../nodes.ts'
 import type { NodeAffordance, NodeTransition, StoryNodeSpec } from '../nodes.ts'
 import { canonicalizeAtomSlug, MAX_LOCAL_ATOMS_PER_BEAT } from '../../story/atoms.ts'
 import type { AtomKind, AtomProposal } from '../../story/atoms.ts'
@@ -35,8 +35,36 @@ export interface Stage5NodesContext {
   chapterNumber: number
   chapterTitle: string
   objectives: Stage5NodesObjective[]
-  /** Living, present NPCs the chapter can stage (social nodes pick from these). */
-  npcs: { key: string; name: string }[]
+  /**
+   * Living, present NPCs the chapter can stage - WHO THEY ARE, not just what they are called.
+   *
+   * This was `{key, name}`, and the thinness was the bug. Stage 4 authors `role` and
+   * `description` on every NPC row and both were dropped before the node author saw them, so a
+   * chapter whose scenes read "harbourmaster Teresa Vane" reached stage 5b as the bare string
+   * "Teresa Vane". Needing a harbourmaster and seeing none, it invented one - "a stout man named
+   * Silas" - who appears in two nodes with a described build and manner, stages nobody (his
+   * npc_ids are correctly empty), can never speak, and holds no disposition.
+   *
+   * Six such phantom people across four of eight measured guides, and every one entered here.
+   * Not one entered at stage 1, 2, 3 or 4, where the hand-offs are governed. The fix needed no
+   * new authored field and no new schema: stop discarding what stage 4 already wrote.
+   */
+  npcs: { key: string; name: string; role?: string; description?: string }[]
+  /** Places this chapter can stage a node at. Closed vocabulary - a node may pick no other. */
+  locations: { key: string; name: string }[]
+  /**
+   * Stage 2's scene sketches - the concrete beats this chapter was PLANNED around.
+   *
+   * They were being loaded and handed to stages 3 and 4 and then dropped here, so the chapter got
+   * decomposed twice by two models that never compared notes: stage 2 planned the scenes, stage 5b
+   * independently invented the playable ones. Guide 350c0363's chapter plan turned on "Mira Coth
+   * provides the first hard clue - her brother's ship appears in the ledger but never docked", and
+   * no authored node mentioned a brother. The hook was planned and then not built.
+   *
+   * Grounding, not a contract: the objectives are what the nodes must serve, and a chapter with no
+   * scenes on file authors exactly as it did before.
+   */
+  scenes: string[]
   partySkills: string[]
 }
 
@@ -85,9 +113,19 @@ export function buildRescueNode(objectiveId: string, route: GuaranteedRoute): St
     // shipping it here put mechanical template text straight into the player-facing prompt
     // (caught in the first authored-graph guide, 2026-07-26). It rides in params instead, which
     // is where the director's rung-4 delivery already reads it from.
-    narrationSeed: route.stakes
-      ? `The way forward narrows to one thing: ${route.label}. ${route.stakes}`
-      : `The way forward narrows to one thing: ${route.label}.`,
+    // Reads as FICTION and carries no authoring metadata (2026-07-28). It used to append
+    // `route.stakes`, which was the objective's DM-only hidden_description - so the scene a
+    // FAILING party is handed as its floor opened on "Scene 5 forces a choice..." and a
+    // sentence cut off mid-word. The narrator grounds the rest in the live scene, which is
+    // what it does for every authored node whose seed is one line.
+    // Makes NO claim about the other routes (2026-07-28). The first wording said "every other way
+    // has closed behind the party", which is true at RUNTIME - the navigator only reaches a rescue
+    // once the routes are spent - but false on the page the consistency checker reads, where this
+    // is simply one of three authored ways in. It flagged it on all four objectives of the next
+    // guide, and it was right to. The seed describes the scene; the ladder position is the
+    // navigator's business, not the narrator's.
+    narrationSeed:
+      `The party comes at ${route.label} the hard way, with whatever they still have on them.`,
     encounter: {
       kind: 'skill_challenge',
       label: route.label,
@@ -100,6 +138,13 @@ export function buildRescueNode(objectiveId: string, route: GuaranteedRoute): St
     },
     affordances: [{ key: 'attempt', label: affordanceLabel('skill_challenge', route.label), hint: route.label }],
     transitions: [{ on: 'full', toNodeKey: null, arrivalContext: '' }],
+    // Deliberately unplaced. A rescue node is the floor the director drops a spent party onto, and
+    // it has to be reachable from wherever they already stand - pinning it to one location would
+    // make the last resort require a journey. The runtime treats a null location as "here".
+    locationKey: null,
+    // A rescue is the floor: it is reached having lost every authored route, and it has no failure
+    // edge of its own, so only the win is a state anything downstream will ever read.
+    outcomeSummary: { win: `The party achieves this the hard way: ${route.label}.`, loss: '' },
     localAtoms: [],
   }
 }
@@ -109,20 +154,32 @@ export function buildStage5NodesPrompt(ctx: Stage5NodesContext): { system: strin
 
 Rules:
 - For EACH objective, author at least ${MIN_ROUTE_NODES} DISTINCT route nodes - genuinely different ways to achieve it (a stealth route AND a social route; a clever route AND a forceful route). This is the Three-Clue Rule: a party that flubs one way still has another.
+- Those routes are INTERCHANGEABLE. Whichever one the party wins, they come away knowing and holding the SAME things - this objective's conclusion. Everything authored after this point is written against that shared conclusion and CANNOT TELL which route was taken, so a route that teaches something the others do not leaves every later scene guessing. If only one of your routes reveals who was really responsible, that is a bug: either they all reveal it, or none of them does and it belongs to a later objective.
+- SAME CONCLUSION, DIFFERENT COST. What legitimately differs between routes is the method, who helps and who is crossed, what is spent, and what it costs the party to get there. The "setback" is where a route's identity lives - keep it specific to THAT route and never make two routes cost the same thing.
+- THE ROUTES ARE A LADDER, NOT A MENU. At the table the party plays route 1 first. They only ever reach route 2 by FAILING route 1, arriving on its setback_line; route 3 only after failing both. So write route 2's narration_seed so it is still true AFTER route 1 has been lost, and route 3's after route 1 and 2 have been. Never open a later route as though the objective were untouched, and never have it announce as still-to-come something an earlier setback already said had happened.
+- Give every node an "outcome": one present-tense sentence for "win" and one for "loss", each stating what is TRUE afterwards. This is the record every later scene reads instead of guessing, so write the STATE, not the drama ("The party holds proof the ledger entries are forged", not "A stunning revelation!").
+- A LOSS NEVER REMOVES A PERSON. It may cost the party time, trust, standing, evidence, safety or surprise - but in a setback no named character dies, leaves for good, or finishes what they were trying to do. The next route needs that cast alive and that goal still open, or the scene it hands the party is a lie.
+- A LOSS NEVER ENDS THE STORY. Losing one scene is not losing the objective: the party still has another way in, and after that a last resort. So a "loss" must never say the villain won, the ritual completed, the town fell, or the thing the objective exists to prevent happened. Write what this ATTEMPT cost them, nothing wider.
+- EVERY LOSS IS DIFFERENT. Two routes may not cost the same thing - the loss is where a route's identity lives. Never reuse a loss sentence between routes of the same objective.
 - Each node has ONE kind: "skill_challenge", "social", "puzzle", or "combat". Vary them - do not make every route a skill_challenge. At least one combat somewhere in the adventure.
 - A "social" node MUST name at least one living NPC by key from the list.
+- CAST ONLY FROM THE ROSTER. The people below are everyone this chapter has. If a scene needs a harbourmaster, a warden, a fence, look for who already holds that role and use them - do NOT write a new named person into narration_seed, label, setback_line or outcome. A name you invent has no row behind it: nobody can talk to them, they hold no disposition, they cannot be staged, and they vanish when the scene ends. Unnamed background figures (a clerk, two dockhands, the crowd) are fine.
 - You do NOT author outcomes, edges, or what a success awards. The engine derives every one of those. You write the FICTION and pick from the menus.
 - narration_seed: 1-2 sentences the narrator opens the scene on, ending on a hook. stakes: one line - what is at risk.
 - affordances: 2-3 short player options {key, hint}. The hint is the flavor; the app prefixes the mechanic.
 - setback: the ONE thing that changes when the party falls short here - a short flag name and a kind. Name the consequence, not the failure ("warden_suspicious", not "check_failed"). It must be specific to THIS scene, never the objective's own goal.
 - setback_line: one line describing how the party arrives at their next attempt having just fallen short here. Never phrase it as a success.
 
+- Give every node a "location_key" naming WHERE it happens, chosen from the places listed below and nothing else. Two nodes may share a place. Pick the place the scene physically occupies, not one it merely concerns: a node about reading a stolen ledger happens wherever the party reads it. This is what lets the game tell a party standing somewhere else that they still have to travel, so an invented place is worse than none.
+
 Respond with ONLY a JSON object:
 {
   "objectives": [
     { "objective_number": 1, "nodes": [
       { "kind": "social", "narration_seed": "...", "stakes": "...",
-        "npc_keys": ["npc:..."],
+        "npc_keys": ["npc:..."], "location_key": "loc:...",
+        "outcome": { "win": "The party holds the warden's own account of the forged entries.",
+                     "loss": "The warden has shut the party out and word of their interest is spreading." },
         "affordances": [ { "key": "press", "hint": "press her on the ledger" } ],
         "setback": { "name": "warden_suspicious", "kind": "flag" },
         "setback_line": "Shut out, the party must try the cellar instead." }
@@ -133,13 +190,34 @@ Respond with ONLY a JSON object:
   const objectiveList = ctx.objectives
     .map((o, i) => `${i + 1}. ${o.title} - ${o.hiddenDescription}`)
     .join('\n')
-  const npcList = ctx.npcs.map((n) => `${n.key} (${n.name})`).join(', ') || 'none'
+  // One line per person rather than a comma list: a roster the author can actually cast from.
+  const oneLine = (s: string | undefined) => {
+    const t = String(s ?? '').trim().split(/(?<=[.!?])\s/)[0] ?? ''
+    return t.length > 160 ? `${t.slice(0, 157)}...` : t
+  }
+  const npcList = ctx.npcs.length === 0
+    ? 'none'
+    : `\n${ctx.npcs.map((n) => {
+      const who = [n.role && n.role !== 'npc' ? n.role : '', oneLine(n.description)].filter(Boolean).join(' - ')
+      return `  ${n.key} (${n.name})${who ? ` - ${who}` : ''}`
+    }).join('\n')}`
+  const locationList = ctx.locations.map((l) => `${l.key} (${l.name})`).join(', ') || 'none'
+  // The plan comes BEFORE the objectives deliberately: it is the texture the chapter was built
+  // from, and a node that reuses its specifics ("her brother's ship") reads as part of the story
+  // rather than beside it.
+  const sceneBlock = ctx.scenes.length > 0
+    ? `Scenes this chapter was planned around - hidden scaffolding, never shown to players. Build your nodes OUT of these: reuse their people, objects and specifics rather than inventing parallel material for the same objectives.
+${ctx.scenes.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+
+`
+    : ''
   const user = `Chapter ${ctx.chapterNumber}: ${ctx.chapterTitle}
 
-Objectives:
+${sceneBlock}Objectives:
 ${objectiveList}
 
 Living NPCs available to stage: ${npcList}
+Places available to stage a node at: ${locationList}
 Party skills: ${ctx.partySkills.join(', ') || 'unknown'}`
 
   return { system, user, maxTokens: 4000 }
@@ -158,8 +236,10 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
 
   const c = new Check()
   const npcKeySet = new Set(ctx.npcs.map((n) => n.key))
+  const locationKeySet = new Set(ctx.locations.map((l) => l.key))
   const nodes: AuthoredNode[] = []
   const localAtoms: AtomProposal[] = []
+  const authoredLosses: { key: string; objKey: string; loss: string }[] = []
 
   const objectiveBlocks = c.arr(root.objectives, '$.objectives', 1, ctx.objectives.length)
   const seenObjectives = new Set<number>()
@@ -245,6 +325,12 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
 
       const npcKeys = (Array.isArray(n.npc_keys) ? n.npc_keys : [])
         .filter((k): k is string => typeof k === 'string' && npcKeySet.has(k))
+
+      // Closed vocabulary, same contract as npc_keys: an off-list place is DROPPED, not invented.
+      // A node with no location reads as "wherever the party is", which is the safe failure - the
+      // unsafe one is a place that exists only in this field and that nothing can travel to.
+      const authoredLocation = typeof n.location_key === 'string' ? n.location_key.trim() : ''
+      const locationKey = locationKeySet.has(authoredLocation) ? authoredLocation : null
       // A social node nobody can staff is downgraded to a skill challenge carrying the SAME
       // outcome maps - the tier bridge makes that lossless for the spine, and it is exactly what
       // the runtime already does at open time (story/staging.ts). Authoring it away here means the
@@ -299,6 +385,33 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
       const narrationSeed = authoredSeed ||
         `The party faces this directly: ${objective.title}.${stakes ? ` ${stakes}` : ''}`
 
+      // WHAT IS TRUE AFTERWARDS. Absent is thin, not fatal - the same treatment narration_seed
+      // gets - so a model that skips the field costs the guide a little context rather than the
+      // whole chapter. The derived fallbacks are honest but bland, which is the point: they are
+      // what a later scene reads when nobody wrote something better.
+      const outcome = parseOutcomeSummary(n.outcome)
+      const outcomeSummary = {
+        win: outcome.win || `The party achieves this: ${objective.title}.`,
+        loss: outcome.loss || arrivalContext,
+      }
+      // Only what the MODEL wrote is held to the distinctness rule below. A derived fallback is
+      // code's own filler, and two nodes sharing one is code repeating itself, not the author
+      // giving two routes the same cost.
+      if (outcome.loss) authoredLosses.push({ key: nodeKeyFor(objKey, 'route', ni), objKey, loss: outcome.loss })
+      // The one rule code can decide, so code decides it. A setback that removes a cast member
+      // contradicts the very scene the ladder hands the party next - and it is checked on BOTH
+      // lines a failure travels on, because either one reaches the next node's narrator.
+      for (const [field, text] of [['outcome.loss', outcomeSummary.loss], ['setback_line', arrivalContext]] as const) {
+        const removed = namesRemovedBy(text, ctx.npcs.map((p) => p.name))
+        if (removed.length > 0) {
+          c.errors.push(
+            `${path}.${field}: a setback may not remove ${removed.join(', ')} from the story - the ` +
+              'party reaches the next route through this loss and that scene needs them alive and ' +
+              'their goal unfinished. Make the loss cost the party something instead.',
+          )
+        }
+      }
+
       const node: StoryNodeSpec = {
         key: nodeKeyFor(objKey, 'route', ni),
         objectiveKey: objKey,
@@ -310,6 +423,7 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
         // labels cut mid-word ("...sealing his solitary sacri", 2026-07-26).
         label: nodeLabel(affordances[0]?.hint ?? '', objective.title),
         narrationSeed,
+        locationKey,
         encounter: {
           kind: resolvedKind, label: objective.title, stakes, rationale: '',
           params: {} as Json,
@@ -319,12 +433,34 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
           onPartial: [],
           onFailure: repairedFailure,
         },
+        outcomeSummary,
         affordances,
         transitions,
         localAtoms: declared,
       }
       nodes.push({ node, npcKeys })
     })
+  }
+
+  // TWO ROUTES MAY NOT COST THE SAME THING. Decidable where "does this loss end the story?" is
+  // not, and it catches the shape that matters: live on guide ac78e517 both routes of the climax
+  // carried the identical loss - "the Drowned Corpus completes its manifestation, Mirehaven
+  // silenced and its people preserved in brine" - which is the objective lost outright, recorded
+  // twice, on routes whose whole purpose is to lead onward. A reused sentence is the reliable
+  // signal that the model wrote the objective's defeat instead of this scene's cost.
+  const lossSeen = new Map<string, string>()
+  for (const { key, objKey, loss } of authoredLosses) {
+    const fingerprint = `${objKey} ${loss.trim().toLowerCase()}`
+    const first = lossSeen.get(fingerprint)
+    if (first) {
+      c.errors.push(
+        `$.objectives: nodes "${first}" and "${key}" declare the SAME loss. A setback is where a ` +
+          "route's identity lives - give each one its own cost, and make it what that attempt cost " +
+          'the party, never the objective being lost outright.',
+      )
+    } else {
+      lossSeen.set(fingerprint, key)
+    }
   }
 
   // Every objective needs its route nodes authored.
@@ -337,6 +473,20 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
   // Chapter-local structural pass (dangling / failure-loop / missing full transition) - feeds the
   // generateParsed retry so the author fixes it before anything is stored.
   for (const problem of validateNodeGraph(nodes.map((a) => a.node))) c.errors.push(problem)
+
+  // An unplaced node is a node the runtime cannot tell the party they still have to reach, so it
+  // gets narrated as though they were already standing in it. Only worth asking for when the
+  // chapter actually has places to choose from - a location-less chapter has no right answer, and
+  // failing it would take the whole guide down over something the model could not supply.
+  if (ctx.locations.length > 0) {
+    for (const { node } of nodes) {
+      if (node.locationKey) continue
+      c.errors.push(
+        `$.objectives: node "${node.key}" has no valid location_key - pick one of: ` +
+          ctx.locations.map((l) => l.key).join(', '),
+      )
+    }
+  }
 
   return c.result({ nodes, localAtoms })
 }

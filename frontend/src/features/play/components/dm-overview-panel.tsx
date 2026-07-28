@@ -83,13 +83,19 @@ export function DmOverviewPanel() {
               ))}
               {quests.map((quest) => (
                 <li key={quest.id} className="text-xs">
-                  <span className={cn(quest.status === 'completed' && 'text-muted-foreground line-through')}>
+                  <span
+                    className={cn(
+                      (quest.status === 'completed' || quest.status === 'failed') &&
+                        'text-muted-foreground line-through',
+                    )}
+                  >
                     {quest.label}
                   </span>
                   <span className="text-muted-foreground">
                     {' '}- {quest.giverName}
                     {quest.gold > 0 ? `, ${quest.gold} gp` : ''}
                     {quest.status === 'suspended' ? ' (paused)' : ''}
+                    {quest.status === 'failed' ? ' (failed)' : ''}
                   </span>
                 </li>
               ))}

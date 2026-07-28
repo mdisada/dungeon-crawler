@@ -44,11 +44,35 @@ export async function openBeatSpec(
     .maybeSingle()
   assertOk(error, 'beat load failed')
   if (!data || data.status !== 'active') return { beatId: null, spec: null, nodeId: null }
-  return {
-    beatId: data.id as string,
-    spec: parseStoredBeatSpec((data.encounter_spec ?? null) as Json),
-    nodeId: (data.node_id as string | null) ?? null,
+  const spec = parseStoredBeatSpec((data.encounter_spec ?? null) as Json)
+  const nodeId = (data.node_id as string | null) ?? null
+
+  // A SCENE THAT HAS BEEN PLAYED IS NOT ON OFFER (2026-07-28).
+  //
+  // `openBeatSpec` served the beat's spec for as long as the beat was `active`, with no regard for
+  // whether that scene had already been resolved - so every `offered` entry re-opened it. Combat is
+  // where it showed: the placeholder opens AND resolves inside one turn, so `state.encounter` is
+  // null again immediately, the next input routes back here, and the fight runs again.
+  //
+  // Live 2026-07-27: the climax combat opened NINE times and the engine returned defeat every time,
+  // 11 of 18 encounter opens in the run were re-opens, and a COMBAT_BUDGET of 3 delivered 11. Worse
+  // than the repetition, it starved the navigator - each re-open re-resolved the same node, so
+  // `lastResolvedNode` kept answering "#n0 failed" and the authored failure edge to the other two
+  // ways in was never followed. The party lost one fight ten times instead of finding another route.
+  //
+  // Returning null hands the turn to the existing `offered -> fold_in` downgrade below, and route
+  // health then reads the beat as `spent` and re-plans it - which is exactly the designed recovery.
+  if (spec?.nodeKey) {
+    const { data: played } = await service
+      .from('event_log')
+      .select('id')
+      .eq('adventure_id', adventureId)
+      .eq('type', 'encounter_resolved')
+      .eq('payload->>node_key', spec.nodeKey)
+      .limit(1)
+    if ((played ?? []).length > 0) return { beatId: data.id as string, spec: null, nodeId }
   }
+  return { beatId: data.id as string, spec, nodeId }
 }
 
 /** The authored affordances of the open node - the closed menu the mapper matches against and

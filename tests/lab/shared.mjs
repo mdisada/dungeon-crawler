@@ -80,7 +80,24 @@ export async function act(token, payload) {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
-    return { status: res.status, body: await res.json().catch(() => ({})) }
+    // Read the stream ONCE as text, then parse - res.json() consumes it, so a later res.text()
+    // returns nothing and a 5xx arrives as an empty body. On failure keep the raw text and the
+    // gateway's request id: that is what tells BOOT_ERROR from WORKER_RESOURCE_LIMIT from a bare
+    // gateway 503, which took a forensic pass to guess at last time (2026-07-27).
+    const raw = await res.text().catch(() => '')
+    let body = {}
+    try {
+      body = raw ? JSON.parse(raw) : {}
+    } catch {
+      body = {}
+    }
+    if (res.ok) return { status: res.status, body }
+    return {
+      status: res.status,
+      body,
+      raw: raw.slice(0, 400),
+      requestId: res.headers.get('sb-request-id') ?? res.headers.get('x-served-by') ?? null,
+    }
   })
 }
 

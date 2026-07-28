@@ -13,6 +13,55 @@ export function activeLoop(loops: CoreLoop[]): CoreLoop | null {
   return loops.find((l) => l.status === 'active') ?? null
 }
 
+/**
+ * THE SPINE ALWAYS HAS A LOOP (2026-07-27).
+ *
+ * Loops are pushed in exactly two places - a quest offer being accepted, and a classifier pivot -
+ * but the OBJECTIVE LADDER belongs to the spine and routinely outlives every contract. A quest
+ * contract names a subset of `objective_ids`, so when its last objective completes, `completeQuest`
+ * completes the loop; `completeLoop` below can only auto-resume a SUSPENDED loop, so a stack whose
+ * only entry was that quest goes empty on the very pass that reveals the next objective.
+ *
+ * Nothing repaired it. `beats.core_loop_id` is NOT NULL, `planAndOpenBeat` 409s without an active
+ * loop, and all five loop-resolution sites then degrade: the progress tail skips its beat block,
+ * the director's rung 3 falls to `promoteOpening` (which writes no progression BY DESIGN), and its
+ * rung 4 skips graph navigation for the legacy stored spec, whose resolution carries no `node_key`.
+ *
+ * Live 2026-07-27 (The Lantern of Saltmarsh Reach): the entry contract covered objectives 0-1. When
+ * it paid out, objective 2 - the climax, with three authored nodes including the combat finale -
+ * was revealed onto an empty stack. No beat ever opened for it, none of its nodes were ever played,
+ * the scene ledger's 25 observations of the deed were all correctly refused by the spine credit
+ * gate, and 15 turns later the director retired the climax as `stalled`.
+ */
+export const SPINE_LOOP_TYPE: LoopType = 'custom'
+
+/** An active objective with nothing on the stack to hang a beat on. */
+export function needsSpineLoop(loops: CoreLoop[], hasActiveObjective: boolean): boolean {
+  return hasActiveObjective && activeLoop(loops) === null
+}
+
+/**
+ * The spine loop's id, derived from the objective it continues.
+ *
+ * Deterministic ON PURPOSE: it IS the single-writer claim. Several progress passes legitimately
+ * overlap (the inline head, the tail in its own worker, the director), and all of them can observe
+ * the empty stack at once. Because they derive the same id, the second insert loses to the primary
+ * key instead of opening a duplicate loop - the same lesson `completeObjective` and `updateEndings`
+ * learned as explicit claims, bought here for free and with no migration.
+ *
+ * Rewrites the version nibble to 8 (RFC 9562 custom) and the variant nibble to `a`, so the result
+ * is a well-formed uuid that can never collide with a `gen_random_uuid()` v4.
+ */
+export function spineLoopId(objectiveId: string): string {
+  const hex = objectiveId.replace(/-/g, '').toLowerCase()
+  if (!/^[0-9a-f]{32}$/.test(hex)) return objectiveId
+  const chars = [...hex]
+  chars[12] = '8'
+  chars[16] = 'a'
+  const s = chars.join('')
+  return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`
+}
+
 function replace(loops: CoreLoop[], next: CoreLoop): CoreLoop[] {
   return loops.map((l) => (l.id === next.id ? next : l))
 }

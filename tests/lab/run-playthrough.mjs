@@ -293,8 +293,11 @@ export async function executeRun(run) {
       // Stop when the STORY ends, not only when the turn budget does. Until now a run was a
       // fixed-length sample of an adventure's opening; with a long budget we can finally watch
       // one all the way to its ending and see whether it commits one at all.
+      // `adventure_ended` is logged AFTER the ending prose is published; `ending_committed` fires
+      // several writes earlier, so breaking on it raced the finale and the run's own transcript
+      // never contained the ending the player would read (2026-07-27).
       const [committed] = await serviceRest(
-        'GET', `event_log?adventure_id=eq.${advId}&type=eq.ending_committed&select=payload&limit=1`)
+        'GET', `event_log?adventure_id=eq.${advId}&type=eq.adventure_ended&select=payload&limit=1`)
       if (committed) {
         log('play', 'run.ending_committed',
           `story finished after ${turn - 1} turns: ${committed.payload?.title ?? 'an ending'}`,
@@ -319,7 +322,14 @@ export async function executeRun(run) {
 
       const res = await timed('play', 'session.player_intent', `turn ${turn}: "${player.text}"`, async () => {
         const r = await act(actor.token, { action: 'player_intent', adventure_id: advId, kind: 'say', text: player.text })
-        return { ...r, logDetail: { resolved: r.body?.resolved ?? r.body?.error ?? r.status, status: r.status } }
+        return {
+          ...r,
+          logDetail: {
+            resolved: r.body?.resolved ?? r.body?.error ?? r.status, status: r.status,
+            // Only present on a failure - what the gateway actually said, and which request it was.
+            ...(r.raw ? { raw: r.raw } : {}), ...(r.requestId ? { request_id: r.requestId } : {}),
+          },
+        }
       })
 
       // Pending prompts must be answered or the next turn 409s. Assists claimed by a second
@@ -404,9 +414,11 @@ export async function executeRun(run) {
       quality: config.quality,
       turns_played: turnStats.length,
       turns_errored: turnStats.filter((t) => t.status !== 200).length,
-      // Silent = the player saw NOTHING. A dialogue turn is not silent.
+      // Silent = the player saw NOTHING for a turn the API ACCEPTED. A turn the gateway rejected
+      // produced no story because it never ran; filing it as a story defect sent a forensic pass
+      // after the narrator when the fault was delivery (2026-07-27). `turns_errored` reports those.
       turns_silent: turnStats
-        .filter((t) => t.narrations === 0 && (t.replies ?? 0) === 0)
+        .filter((t) => t.status === 200 && t.narrations === 0 && (t.replies ?? 0) === 0)
         .map((t) => ({ turn: t.turn, text: t.text })),
       turns_dialogue_only: turnStats.filter((t) => t.narrations === 0 && (t.replies ?? 0) > 0).length,
       fallback_lines: lines.filter((l) => l.text === FALLBACK).length,

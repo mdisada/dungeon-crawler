@@ -86,14 +86,14 @@ export function spellTargets(
   const affects = spellAffects(spell)
   if (spell.area.shape === 'single') {
     const target = state.combatants.find((c) => c.id === aim.targetId)
-    if (!target || target.dead || !sideMatches(affects, caster, target)) return []
+    if (!target || target.dead || target.fled || !sideMatches(affects, caster, target)) return []
     return [target]
   }
   const cell = aim.cell
   if (!cell) return []
   const covered = new Set(spellArea(spell.area, [caster.x, caster.y], cell, gridBounds(state)).map(([x, y]) => cellKey(x, y)))
   return state.combatants.filter(
-    (c) => !c.dead && sideMatches(affects, caster, c) && covered.has(cellKey(c.x, c.y)),
+    (c) => !c.dead && !c.fled && sideMatches(affects, caster, c) && covered.has(cellKey(c.x, c.y)),
   )
 }
 

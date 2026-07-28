@@ -9,9 +9,11 @@ import type { GameState, Json } from '../_shared/state/index.ts'
 import {
   activeLoop, advanceBeat, completeLoop, computeVarietyFlags, encounterKindGuidance,
   intentPillar, isOffLoop,
-  listMilestoneAtoms, listPredicateAtomNames, LOOP_TEMPLATES, nextStreak, PIVOT_REEVALUATE_EVENTS,
+  listMilestoneAtoms, listPredicateAtomNames, LOOP_TEMPLATES, needsSpineLoop, nextStreak,
+  PIVOT_REEVALUATE_EVENTS,
   pivotHandling, pushLoop, registerLocalAtoms, resolveAtomText, resolveNpcNames,
-  rewritePredicateAtoms, stageableNpcs, streakTriggersClassifier, suspendLoop, varietyGuidance,
+  rewritePredicateAtoms, SPINE_LOOP_TYPE, spineLoopId, stageableNpcs, streakTriggersClassifier,
+  suspendLoop, varietyGuidance,
 } from '../_shared/story/index.ts'
 import type {
   BeatPlan, CoreLoop, LoopStatus, LoopType, NpcStageRow, Pillar, RegistryAtom, VarietyInput,
@@ -96,6 +98,51 @@ export async function persistLoops(service: SupabaseClient, adventureId: string,
       assertOk(error, 'core loop update failed')
     }
   }
+}
+
+/**
+ * The stack must never be empty while an objective is live (2026-07-27).
+ *
+ * A quest contract covers a SUBSET of the objective ladder, so its payout completes the quest loop
+ * while later objectives are still to come. `completeLoop` only auto-resumes a SUSPENDED loop, so
+ * a one-quest adventure lands on an empty stack at the exact moment the next objective is revealed,
+ * and `beats.core_loop_id` being NOT NULL means nothing can ever open a beat for it again. See
+ * `needsSpineLoop` in the rules package for the live run this cost its entire third act.
+ *
+ * Idempotent under concurrency WITHOUT a new claim: `spineLoopId` is derived from the objective, so
+ * two overlapping passes race for the same primary key and the loser simply re-reads. Only the pass
+ * that actually created the loop is told so (`created`), and only that pass opens the first beat.
+ */
+export async function ensureSpineLoop(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  loops: CoreLoop[],
+  objectiveId: string | null,
+): Promise<{ loop: CoreLoop | null; created: boolean }> {
+  const existing = activeLoop(loops)
+  if (existing) return { loop: existing, created: false }
+  if (!needsSpineLoop(loops, Boolean(objectiveId))) return { loop: null, created: false }
+
+  const seed = { id: spineLoopId(objectiveId!), type: SPINE_LOOP_TYPE, customLabel: null }
+  const pushed = pushLoop(loops, seed)
+  if (!pushed.ok) return { loop: null, created: false }
+  try {
+    await persistLoops(service, env.adventureId, loops, pushed.loops)
+  } catch {
+    // Another pass derived the same id first. Its loop is the real one.
+    const reread = activeLoop(await loadLoops(service, env.adventureId))
+    if (!reread) {
+      await logEvent(service, env.adventureId, sessionId, 'incident', {
+        kind: 'spine_loop_race', objective_id: objectiveId,
+      }).catch(() => {})
+    }
+    return { loop: reread, created: false }
+  }
+  await logEvent(service, env.adventureId, sessionId, 'loop_opened', {
+    core_loop_id: seed.id, reason: 'spine_continues', objective_id: objectiveId,
+  }).catch(() => {})
+  return { loop: activeLoop(pushed.loops), created: true }
 }
 
 interface EventRow {
@@ -266,6 +313,9 @@ export async function planAndOpenBeat(
         loop, loops, beatCount: (beatRows.data ?? []).length,
         isClimax: pace.isClimax, combatCount: pace.combatCount, combatBudget: COMBAT_BUDGET,
         narrationContext, trigger,
+        // Lets the navigator tell "open this scene" from "pull them toward it".
+        partyLocationId: state.scene.locationId ?? null,
+        partyLocationName: state.scene.locationName || '',
       },
       (before, after) => persistLoops(service, env.adventureId, before, after),
       trigger === 'director_replan' ? 'replan_beat' : trigger === 'guaranteed_route' ? 'guaranteed_route' : null,

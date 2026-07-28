@@ -37,7 +37,7 @@ export { pickReveal } from './reveals.ts'
 export { isSpineProgress, progressedSince as spineProgressed } from './progress-signal.ts'
 export type { ProgressEvent } from './progress-signal.ts'
 export type { RevealCandidate } from './reveals.ts'
-export { hasPlayableNode, nextNode } from './navigate.ts'
+export { hasPlayableNode, nextNode, nodeBeatId } from './navigate.ts'
 export type { NavigateInput, NavigateResult, NavNode, NavReason, NavTier, NavTransition } from './navigate.ts'
 export {
   applyDialNudge, COMMIT_MIN_EVENTS, COMMIT_MIN_MARGIN, commitmentReady, DIAL_MAX, DIAL_MIN,
@@ -49,13 +49,15 @@ export type {
 export { evaluatePredicate, listMilestoneAtoms } from './evaluate.ts'
 export type { MilestoneAtoms, WorldFacts } from './evaluate.ts'
 export {
-  activeLoop, advanceBeat, completeLoop, pushLoop, resumeLoop, suspendLoop,
+  activeLoop, advanceBeat, completeLoop, needsSpineLoop, pushLoop, resumeLoop, SPINE_LOOP_TYPE,
+  spineLoopId, suspendLoop,
 } from './loops.ts'
 export type { LoopOpResult, LoopSeed } from './loops.ts'
 export {
   canReweave, canStageOffer, MAX_OPEN_OFFERS, MAX_REWEAVES, negotiatedGold, offerBanner,
-  openingTerms, parseOfferResponse, parseRewardBounds,
+  openingTerms, parseOfferResponse, parseRewardBounds, questResolution,
 } from './offers.ts'
+export type { QuestResolution } from './offers.ts'
 export { corpsePropText, scenePropsAt } from './props.ts'
 export type { PropRow, ScenePropView } from './props.ts'
 export { deflectDirective, deflectLevel } from './deflect.ts'

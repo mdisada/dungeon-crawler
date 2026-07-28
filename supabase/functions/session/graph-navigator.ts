@@ -11,7 +11,7 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
-import { advanceBeat } from '../_shared/story/index.ts'
+import { advanceBeat, nodeBeatId } from '../_shared/story/index.ts'
 import type { CoreLoop } from '../_shared/story/index.ts'
 import type { Json } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
@@ -31,6 +31,10 @@ export interface OpenNodeContext {
   combatBudget: number
   /** Extra narration framing from the caller (rung delivery, climax pitch). */
   narrationContext?: string
+  /** Where the party is standing RIGHT NOW, so an unreached node is opened as a pull, not an
+   *  arrival. Caller-supplied because this module stays acyclic and does not load state. */
+  partyLocationId?: string | null
+  partyLocationName?: string
   trigger: string
 }
 
@@ -118,17 +122,22 @@ export async function openAuthoredNode(
   persist: (before: CoreLoop[], after: CoreLoop[]) => Promise<void>,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   await closeOutgoingNode(service, env, sessionId, ctx.loop.id, node.id, ctx.trigger)
-  const { error: closeError } = await service
-    .from('beats').update({ status: 'completed' }).eq('core_loop_id', ctx.loop.id).eq('status', 'active')
-  assertOk(closeError, 'beat close failed')
 
   // The stored spec travels verbatim - its outcome maps were authored against the registry and
   // lint-proved, so nothing here may rewrite them. `node_key` rides along so the resolution
   // event can tell the navigator which edge to follow next.
   const spec = node.spec ? { ...node.spec, node_key: node.key } : null
+  // CLAIM THE NODE FIRST (2026-07-27). The insert is the lock: `nodeBeatId` is derived from the
+  // node, so a concurrent pass that picked the same node loses to the primary key here.
+  //
+  // Ordered BEFORE the close deliberately. Closing first would let a losing pass complete the
+  // winner's freshly-inserted beat, leaving the loop pointing at a completed beat - route health
+  // 'missing', and a re-plan of a scene that had just opened correctly.
+  const beatId = nodeBeatId(node.id)
   const { data: beatRow, error: beatError } = await service
     .from('beats')
     .insert({
+      id: beatId,
       core_loop_id: ctx.loop.id,
       index: ctx.beatCount,
       name: node.label || node.key,
@@ -145,7 +154,25 @@ export async function openAuthoredNode(
     })
     .select('id')
     .single()
-  assertOk(beatError, 'beat insert failed')
+  if (beatError) {
+    // Someone else instantiated this node between our navigation read and this write. It is the
+    // SAME authored scene, so the right answer is to defer to it - never to open it twice.
+    const { data: winner } = await service.from('beats').select('id').eq('id', beatId).maybeSingle()
+    if (winner) {
+      await logEvent(service, env.adventureId, sessionId, 'incident', {
+        kind: 'beat_open_race', node_key: node.key, beat_id: beatId, trigger: ctx.trigger,
+      }).catch(() => {})
+      return { status: 200, body: { ok: true, beat_id: beatId, name: node.label, node_key: node.key, deduped: true } }
+    }
+    assertOk(beatError, 'beat insert failed')
+  }
+
+  // Every OTHER active beat on this loop now closes. Excluding our own row is what makes the
+  // claim above hold - without it this statement would immediately undo it.
+  const { error: closeError } = await service
+    .from('beats').update({ status: 'completed' })
+    .eq('core_loop_id', ctx.loop.id).eq('status', 'active').neq('id', beatId)
+  assertOk(closeError, 'beat close failed')
 
   const advanced = advanceBeat(ctx.loops, ctx.loop.id, beatRow.id as string)
   if (advanced.ok) await persist(ctx.loops, advanced.loops)
@@ -176,15 +203,59 @@ export async function openAuthoredNode(
       'form: a confrontation, a desperate escape, a reckoning, an irreversible choice. '
     : ''
   const stakes = typeof node.spec?.stakes === 'string' ? node.spec.stakes : ''
+  // ONE MENU, NOT TWO (2026-07-28). The affordances published as chips just above were never shown
+  // to the narrator, so it invented its own ways in - and they disagreed with the chips on every
+  // node of a live run: chips offered "persuade Tomalen / offer him coin" while the prose asked
+  // "Are you going out there, then?". A player who follows the prose is typing something the scene
+  // was not built to take, which is exactly the misfiling the entry mapper's audit trail measures.
+  //
+  // The single-way case matters most: node r0 had ONE authored affordance and the prose offered
+  // three invented directions - the precise padding the exposition brief already forbids.
+  //
+  // ...but the cure became the disease (2026-07-28). Handing the narrator the affordance list and
+  // saying "close on THESE" got them PASTED: 8% of published lines ended in an enumerated menu,
+  // one of them the hints verbatim and in bold ("Perhaps a direct threat will break him."). The
+  // player was reading the same three options twice - once as chips, once as DM notes wearing
+  // prose. The affordances still travel, because inventing a fourth way was the original bug;
+  // they are now framing for the scene's ending rather than the ending itself.
+  const ways = node.affordances.map((a) => a.hint || a.label).filter(Boolean)
+  const waysLine = ways.length === 0
+    ? ''
+    : ` For your own framing only, the party can act on these and nothing else: ${ways.join('; ')}. ` +
+      'Land the scene somewhere at least one of them is an obvious thing to reach for - but do ' +
+      'NOT name, list or allude to them as options. They are already on the player\'s screen.'
+  // NOT THERE YET (2026-07-28). A node now carries WHERE it happens, and until it did, a beat
+  // whose scene sits somewhere else was opened as though the party had already walked in. Live
+  // run 77451545: the beat "Attack Cael Wytherr to stop his writing" opened at 05:58:20 and
+  // published "Bram kicks the sealed door inward" eight seconds later - the party travelled to
+  // that office at 05:58:52, and the encounter then narrated the same door a second time.
+  //
+  // One clause telling the narrator not to presume travel could never win: every other line of
+  // the prompt - the seed, the label, the stakes, the beat's own imperative name - describes the
+  // scene as though it were underway. So when the place does not match, the instruction changes
+  // shape entirely: this is a pull toward somewhere, not a scene being entered.
+  const elsewhere = Boolean(node.locationId) && Boolean(ctx.partyLocationId) &&
+    node.locationId !== ctx.partyLocationId
+  const standing = elsewhere
+    ? `The party is NOT there - they are still at ${ctx.partyLocationName || 'where they were'}, ` +
+      'and have taken no step toward it. Write only the pull: what reaches them from it where ' +
+      'they stand - a sound, a rumour, a messenger, a change in the air. Do NOT place them in ' +
+      'the scene, move them, or narrate any part of what happens once they arrive. '
+    : 'Pick up from where the party actually stands - never presume travel or actions they did not take. '
   await narrationBeat(
     service, env, sessionId,
     `${ctx.narrationContext ? `${ctx.narrationContext} ` : ''}${arrivalContext ? `${arrivalContext} ` : ''}` +
       `${climaxFraming}Open this scene: ${node.narrationSeed} ` +
-      'Pick up from where the party actually stands - never presume travel or actions they did not take.' +
+      standing +
+      // The scene-opening cutscene lands with the previous narration still in the context window,
+      // and once reproduced it verbatim - closing menu included - so the node's authored seed never
+      // reached the page at all (live 2026-07-27).
+      'This OPENS A NEW SCENE: never restate or paraphrase the previous narration.' +
       (node.spec
         ? ` Telegraph what lies ahead - "${String(node.spec.label ?? node.label)}"` +
           `${stakes ? ` (at stake: ${stakes})` : ''} - and make the closing ask invite the party into it.`
-        : ''),
+        : '') +
+      waysLine,
     'Beat opened',
     'exposition',
   )

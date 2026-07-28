@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { activeLoop, advanceBeat, completeLoop, pushLoop, resumeLoop, suspendLoop } from './loops.ts'
+import {
+  activeLoop, advanceBeat, completeLoop, needsSpineLoop, pushLoop, resumeLoop, SPINE_LOOP_TYPE,
+  spineLoopId, suspendLoop,
+} from './loops.ts'
+import { isOffLoop, LOOP_TEMPLATES } from './templates.ts'
 import type { CoreLoop } from './types.ts'
 
 const loop = (over: Partial<CoreLoop>): CoreLoop => ({
@@ -89,6 +93,51 @@ describe('completeLoop', () => {
 
   it('rejects double-completion', () => {
     expect(completeLoop([loop({ status: 'completed' })], 'l1').ok).toBe(false)
+  })
+})
+
+describe('a live objective always has a loop (2026-07-27)', () => {
+  it('an active objective with an empty stack needs one', () => {
+    expect(needsSpineLoop([], true)).toBe(true)
+  })
+
+  it('completing the last quest loop leaves an active objective stranded - the live failure', () => {
+    // The Lantern of Saltmarsh Reach: the entry contract covered objectives 0-1, so its payout
+    // completed the only loop while objective 2 (the climax) was being revealed.
+    const { loops, resumedId } = expectOk(completeLoop([loop({ type: 'custom' })], 'l1'))
+    expect(resumedId).toBeNull()
+    expect(needsSpineLoop(loops, true)).toBe(true)
+  })
+
+  it('does not open one before an objective is active (the pre-acceptance window)', () => {
+    expect(needsSpineLoop([], false)).toBe(false)
+  })
+
+  it('does not add a third loop when completing auto-resumes a suspended one', () => {
+    const pushed = expectOk(pushLoop([loop({})], { id: 'l2', type: 'heist', customLabel: null }))
+    const done = expectOk(completeLoop(pushed.loops, 'l2'))
+    expect(done.resumedId).toBe('l1')
+    expect(needsSpineLoop(done.loops, true)).toBe(false)
+  })
+
+  it('derives a stable, well-formed, non-colliding id per objective', () => {
+    const objective = '58d06487-e9af-4849-ae88-04bdc2ba94bd'
+    const id = spineLoopId(objective)
+    expect(id).toBe(spineLoopId(objective))
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(id).not.toBe(objective)
+    expect(spineLoopId('9ba17545-4c2c-4874-88f2-207e0d0a91ec')).not.toBe(id)
+  })
+
+  it('leaves a non-uuid untouched rather than emitting a malformed one', () => {
+    expect(spineLoopId('not-a-uuid')).toBe('not-a-uuid')
+  })
+
+  it('the spine loop type exists and can never read as off-loop', () => {
+    expect(LOOP_TEMPLATES[SPINE_LOOP_TYPE]).toBeDefined()
+    for (const pillar of ['combat', 'social', 'exploration'] as const) {
+      expect(isOffLoop(pillar, SPINE_LOOP_TYPE)).toBe(false)
+    }
   })
 })
 

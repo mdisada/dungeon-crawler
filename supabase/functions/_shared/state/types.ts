@@ -212,7 +212,9 @@ export interface QuestJournalView {
   giverName: string
   gold: number
   stakes: string
-  status: 'active' | 'suspended' | 'completed'
+  // 'failed' is a RESOLVED quest the party did not manage - a contracted objective failed, so it
+  // closed without payout. Terminal like 'completed', and never the same thing (2026-07-28).
+  status: 'active' | 'suspended' | 'completed' | 'failed'
 }
 
 export interface ObjectivesState {
@@ -380,6 +382,12 @@ export interface DmState {
       rung: number
       lastRungTurn: number
     }
+    /**
+     * The session whose story has finished (2026-07-28). Set when an ending commits; narration is
+     * suppressed for that session afterwards so the world stops talking once it has ended.
+     * SESSION-scoped, not adventure-scoped: a later session on the same adventure narrates again.
+     */
+    endedSessionId?: string | null
   }
   /** Hidden spec of the open encounter; null/absent when no encounter is open. */
   encounterSpec?: EncounterSpecState | null
