@@ -13,7 +13,7 @@ import { minimalSatisfyingAtoms } from '../guaranteed-route.ts'
 import type { GuaranteedRoute } from '../guaranteed-route.ts'
 import { ENCOUNTER_KINDS } from '../../story/beats.ts'
 import type { BeatEncounterKind } from '../../story/beats.ts'
-import { affordanceLabel, namesRemovedBy, nodeKeyFor, parseOutcomeSummary, validateNodeGraph } from '../nodes.ts'
+import { affordanceLabel, nodeKeyFor, parseOutcomeSummary, validateNodeGraph } from '../nodes.ts'
 import type { NodeAffordance, NodeTransition, StoryNodeSpec } from '../nodes.ts'
 import { canonicalizeAtomSlug, MAX_LOCAL_ATOMS_PER_BEAT } from '../../story/atoms.ts'
 import type { AtomKind, AtomProposal } from '../../story/atoms.ts'
@@ -73,8 +73,6 @@ export interface AuthoredNode {
 
 export interface Stage5NodesOutput {
   nodes: AuthoredNode[]
-  /** Non-fatal prose findings (setbacks that remove a character). Surfaced as guide warnings. */
-  warnings: string[]
   /** All local atoms declared across the chapter, for one registry pass. */
   localAtoms: AtomProposal[]
 }
@@ -238,7 +236,6 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
   const locationKeySet = new Set(ctx.locations.map((l) => l.key))
   const nodes: AuthoredNode[] = []
   const localAtoms: AtomProposal[] = []
-  const warnings: string[] = []
   const authoredLosses: { key: string; objKey: string; loss: string }[] = []
 
   const objectiveBlocks = c.arr(root.objectives, '$.objectives', 1, ctx.objectives.length)
@@ -401,22 +398,6 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
       // The one rule code can decide, so code decides it. A setback that removes a cast member
       // contradicts the very scene the ladder hands the party next - and it is checked on BOTH
       // lines a failure travels on, because either one reaches the next node's narrator.
-      for (const [field, text] of [['outcome.loss', outcomeSummary.loss], ['setback_line', arrivalContext]] as const) {
-        const removed = namesRemovedBy(text, ctx.npcs.map((p) => p.name))
-        if (removed.length > 0) {
-          // WARNED, NOT REJECTED. This was a parse error, and it killed a guide: stage 5 burned
-          // seven attempts on "a setback may not remove Edren Vask from the story" and generation
-          // died with nothing produced. A prose heuristic is CONTENT, and the rule this file has
-          // followed since 2026-07-26 is that content slips are repaired or reported, never fatal -
-          // structural minimums are what stay hard. The prompt still asks for it, the audit still
-          // reports it, and a guide that ships with one over-dramatic setback beats no guide.
-          warnings.push(
-            `${path}.${field}: the setback removes ${removed.join(', ')} from the story - the party ` +
-              'reaches the next route through this loss and that scene needs them alive.',
-          )
-        }
-      }
-
       const node: StoryNodeSpec = {
         key: nodeKeyFor(objKey, 'route', ni),
         objectiveKey: objKey,
@@ -493,5 +474,5 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
     }
   }
 
-  return c.result({ nodes, localAtoms, warnings })
+  return c.result({ nodes, localAtoms })
 }

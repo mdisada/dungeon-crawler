@@ -525,20 +525,7 @@ async function authorChapterNodes(
     const { error } = await env.db.from('story_nodes').insert(rows)
     assertOk(error, 'story_nodes insert failed')
   }
-  // Prose findings from stage 5b - non-fatal by design (see the removal check in stage5-nodes.ts,
-  // which killed a guide when it was an error). Recorded where the creator already reads warnings.
-  if (output.warnings.length > 0) {
-    const { error } = await env.db.from('guide_warnings').insert(
-      output.warnings.map((message) => ({
-        adventure_id: env.adventure.id, stage: 5, target_table: 'story_nodes', target_id: null,
-        message, kind: 'info',
-      })),
-    )
-    assertOk(error, 'stage-5b warnings insert failed')
-  }
-
   await logPipelineEvent(env.db, env.adventure.id, 'story_nodes_authored', {
     chapter_id: chapterId, route_nodes: output.nodes.length, rescue_nodes: rows.length - output.nodes.length,
-    prose_warnings: output.warnings.length,
   })
 }

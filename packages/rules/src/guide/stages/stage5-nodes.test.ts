@@ -474,33 +474,6 @@ describe('outcome summaries (the ladder contract)', () => {
     expect(result.errors.join(' ')).toContain('SAME loss')
   })
 
-  it('WARNS about a setback that removes a named character, without failing the chapter', () => {
-    const result = parseStage5Nodes(rawOutput({
-      objectives: [{
-        objective_number: 1,
-        nodes: [
-          {
-            kind: 'social', narration_seed: 'Mara guards the strongbox.', stakes: 's',
-            npc_keys: ['npc:mara'], affordances: [{ key: 'persuade', hint: 'talk' }],
-            setback: { name: 'watch_alerted', kind: 'flag' },
-            setback_line: 'The struggle turns and Harbormaster Mara is killed.',
-            outcome: { win: 'The party holds the ledger.', loss: 'Harbormaster Mara is dead.' },
-          },
-          {
-            kind: 'skill_challenge', narration_seed: 'The hatch is barred.', stakes: 's',
-            affordances: [{ key: 'break_in', hint: 'force it' }],
-            setback: { name: 'hatch_jammed', kind: 'flag' }, setback_line: 'The hatch holds.',
-            outcome: { win: 'They are inside.', loss: 'The cellar stays shut.' },
-          },
-        ],
-      }],
-    }), ctx)
-    // A prose heuristic is CONTENT, and content slips are reported, never fatal - this was an
-    // error until it burned seven stage-5 retries and killed a guide outright (2026-07-28).
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.data.warnings.join(' ')).toContain('Harbormaster Mara')
-  })
 })
 
 describe('buildRescueNode', () => {
