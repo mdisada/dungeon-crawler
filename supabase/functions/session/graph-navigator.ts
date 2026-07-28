@@ -207,14 +207,19 @@ export async function openAuthoredNode(
   //
   // The single-way case matters most: node r0 had ONE authored affordance and the prose offered
   // three invented directions - the precise padding the exposition brief already forbids.
+  //
+  // ...but the cure became the disease (2026-07-28). Handing the narrator the affordance list and
+  // saying "close on THESE" got them PASTED: 8% of published lines ended in an enumerated menu,
+  // one of them the hints verbatim and in bold ("Perhaps a direct threat will break him."). The
+  // player was reading the same three options twice - once as chips, once as DM notes wearing
+  // prose. The affordances still travel, because inventing a fourth way was the original bug;
+  // they are now framing for the scene's ending rather than the ending itself.
   const ways = node.affordances.map((a) => a.hint || a.label).filter(Boolean)
   const waysLine = ways.length === 0
     ? ''
-    : ways.length === 1
-      ? ` There is ONE way onward here - ${ways[0]} - so carry the party to it and end at what it ` +
-        'demands of them. Do NOT offer a menu of alternatives.'
-      : ` The ways in are exactly these: ${ways.join('; ')}. Close on THESE and no others - never ` +
-        'invent a different set, and never list more than the party actually has.'
+    : ` For your own framing only, the party can act on these and nothing else: ${ways.join('; ')}. ` +
+      'Land the scene somewhere at least one of them is an obvious thing to reach for - but do ' +
+      'NOT name, list or allude to them as options. They are already on the player\'s screen.'
   await narrationBeat(
     service, env, sessionId,
     `${ctx.narrationContext ? `${ctx.narrationContext} ` : ''}${arrivalContext ? `${arrivalContext} ` : ''}` +
