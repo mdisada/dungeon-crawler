@@ -512,8 +512,12 @@ export async function publishNarration(
   //
   // Truncated because the instruction is the actionable part; the surrounding context window is
   // rebuildable from state, and storing it per narration would dwarf every other payload here.
+  // `location` too: only the INSTRUCTION is stored, not the whole grounded context, so "where did
+  // the runtime think the party was?" was unanswerable from the record - and that was the exact
+  // question behind narration #19 of run 15fc82be inventing a location. One field, and the class
+  // of bug where prose and state disagree about place becomes checkable without a code read.
   await logEvent(service, env.adventureId, sessionId, 'narration_published', {
-    text, style, prompt: prompt.slice(0, 2000),
+    text, style, prompt: prompt.slice(0, 2000), location: state.scene.locationName || null,
   })
   return text
 }
