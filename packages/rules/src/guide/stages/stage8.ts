@@ -56,6 +56,7 @@ Rules:
   {"dial": "<dial key>", "gte" or "lte": <${DIAL_RANGE.min}..${DIAL_RANGE.max}>}
   Nothing else - no free-form flags or facts. "weight" is a signed nonzero number in [-5, 5] (negative = this condition argues AGAINST the ending). Use negative weights as counter-signals.
 - EVERY ending needs at least one positively-weighted OBJECTIVE signal, and it should reference the FINAL objective in the list - the climax. Dials alone must never be able to land an ending: dials describe how the party played, objectives are what they actually did.
+- The set must cover the climax BOTH WAYS: at least one ending whose positive climax signal is "completed", and at least one whose positive climax signal is "failed". The party can lose, and a losing party still has to be given an ending that is TRUE of their run - not the nearest victory. Objective outcomes decide which endings are even eligible, so a failure branch nobody wrote is a failure branch nobody can be given.
 - Everything here is DM-only. Never reveal endings to players.
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
@@ -306,6 +307,28 @@ export function validateEndingReachability(endings: EndingDraft[], objectiveCoun
   })
   if (objectiveCount > 0 && endings.length > 0 && !climaxReferenced) {
     warnings.push(`No ending references the final objective (#${objectiveCount}) - the climax decides nothing.`)
+  }
+  // BOTH climax branches need a home (2026-07-28). The finale ranks endings by whether their
+  // objective claims match what actually happened, so a field where every ending claims the party
+  // WON leaves a party that lost with nothing truthful to be handed: every candidate is refuted,
+  // the veto stands down rather than strand the story, and the run ends on whichever falsehood
+  // scored best. A losing run is not an edge case - fail-forward retires an objective the party
+  // never managed, and the climax is no exception.
+  if (climaxReferenced) {
+    const claimed = new Set(
+      endings.flatMap((e) =>
+        e.triggerConditions.signals
+          .filter((s) => s.weight > 0 && 'objective' in s.when && s.when.objective === objectiveCount)
+          .map((s) => ('objective' in s.when ? s.when.outcome : '')),
+      ),
+    )
+    for (const outcome of ['completed', 'failed'] as const) {
+      if (!claimed.has(outcome)) {
+        warnings.push(
+          `No ending positively claims the climax (#${objectiveCount}) ${outcome} - a run that ends that way has no ending that matches it.`,
+        )
+      }
+    }
   }
   return warnings
 }

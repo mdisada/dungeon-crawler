@@ -254,13 +254,83 @@ describe('a contradicted climax cannot land the ending (2026-07-27)', () => {
     expect(s.contradictedIds).toEqual(['a', 'b'])
   })
 
-  it('no climaxObjectiveId means the old behaviour, exactly', () => {
+  it('no climaxObjectiveId disables the VETO, but not the accuracy tier', () => {
     const s = scoreEndings(saltmarsh, {
       objectiveOutcomes: { ...played.objectiveOutcomes, [CLIMAX]: 'failed' },
       npcStates: {},
       dialValues: { force_at_the_tower: 2 },
     })
-    expect(s.leadingId).toBe('light-restored')
+    // Nothing is vetoed - the caller named no climax, so no claim is categorically fatal.
     expect(s.contradictedIds).toEqual([])
+    // But "light-restored" still claims an objective the story refuted, and an ending that says
+    // what did not happen does not get to win on dial arithmetic just because the caller omitted
+    // the climax id. That omission was the same bug through a different door.
+    expect(s.refutedCounts).toEqual({ 'light-restored': 1, 'next-wreck': 0 })
+    expect(s.leadingId).toBe('next-wreck')
+  })
+})
+
+describe('objective accuracy outranks the weighted score (2026-07-28)', () => {
+  const CLIMAX = 'climax'
+  // The climax went the party's way in every case here, so the veto never fires and the tier
+  // is the only thing separating these two.
+  const world: EndingWorld = {
+    objectiveOutcomes: { 'rescue-the-envoy': 'failed', [CLIMAX]: 'completed' },
+    npcStates: { warden: 'allied' },
+    dialValues: { mercy: 4 },
+    climaxObjectiveId: CLIMAX,
+  }
+  const candidates: EndingCandidate[] = [
+    {
+      // Claims a clean sweep. The envoy died, so this one says something that did not happen -
+      // but its side signals are worth more than the honest ending's.
+      id: 'flawless-victory', index: 0,
+      signals: [
+        { when: { objective_id: CLIMAX, outcome: 'completed' }, weight: 5 },
+        { when: { objective_id: 'rescue-the-envoy', outcome: 'completed' }, weight: 4 },
+        { when: { npc_id: 'warden', state: 'allied' }, weight: 4 },
+        { when: { dial: 'mercy', gte: 3 }, weight: 3 },
+      ],
+    },
+    {
+      id: 'costly-victory', index: 1,
+      signals: [
+        { when: { objective_id: CLIMAX, outcome: 'completed' }, weight: 5 },
+        { when: { objective_id: 'rescue-the-envoy', outcome: 'failed' }, weight: 2 },
+      ],
+    },
+  ]
+
+  it('the truthful ending wins even when the refuted one outscores it', () => {
+    const s = scoreEndings(candidates, world)
+    expect(s.scores).toEqual({ 'flawless-victory': 12, 'costly-victory': 7 })
+    expect(s.refutedCounts).toEqual({ 'flawless-victory': 1, 'costly-victory': 0 })
+    expect(s.contradictedIds).toEqual([])
+    expect(s.leadingId).toBe('costly-victory')
+  })
+
+  it('the commitment margin is judged inside the winning tier', () => {
+    const s = scoreEndings(candidates, world)
+    const ladder = { total: 2, remaining: 0 }
+    // Across the whole field the truthful leader trails 7 to 12 and could never commit.
+    expect(commitmentReady(s.scores, s.leadingId, COMMIT_MIN_EVENTS, ladder)).toBe(false)
+    expect(s.eligibleScores).toEqual({ 'costly-victory': 7 })
+    expect(commitmentReady(s.eligibleScores, s.leadingId, COMMIT_MIN_EVENTS, ladder)).toBe(true)
+  })
+
+  it('within one accuracy tier the score still decides', () => {
+    const bothHonest = candidates.map((c) => ({
+      ...c,
+      signals: c.signals.filter((sig) => !('objective_id' in sig.when && sig.when.objective_id === 'rescue-the-envoy')),
+    }))
+    const s = scoreEndings(bothHonest, world)
+    expect(s.refutedCounts).toEqual({ 'flawless-victory': 0, 'costly-victory': 0 })
+    expect(s.leadingId).toBe('flawless-victory')
+  })
+
+  it('an objective still in play is not a refutation', () => {
+    const s = scoreEndings(candidates, { ...world, objectiveOutcomes: { [CLIMAX]: 'completed' } })
+    expect(s.refutedCounts).toEqual({ 'flawless-victory': 0, 'costly-victory': 0 })
+    expect(s.leadingId).toBe('flawless-victory')
   })
 })

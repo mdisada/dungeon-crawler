@@ -884,12 +884,40 @@ describe('stage 8 (ending designer)', () => {
         signals: [{ when: { objective: STAGE8_OBJECTIVE_COUNT, outcome: 'completed' as const }, weight: 3, note: '' }],
       },
     }
-    expect(validateEndingReachability([climaxRef], STAGE8_OBJECTIVE_COUNT)).toEqual([])
+    // Claims the victory branch only, so a party that LOSES the climax has no ending that is
+    // true of their run (2026-07-28).
+    expect(validateEndingReachability([climaxRef], STAGE8_OBJECTIVE_COUNT))
+      .toEqual([`No ending positively claims the climax (#${STAGE8_OBJECTIVE_COUNT}) failed - a run that ends that way has no ending that matches it.`])
+
     expect(
       validateEndingReachability(
         [{ ...a, triggerConditions: { summary: '', signals: [{ when: { objective: 1, outcome: 'completed' as const }, weight: 3, note: '' }] } }],
         STAGE8_OBJECTIVE_COUNT,
       ).some((w) => w.includes('final objective')),
+    ).toBe(true)
+  })
+
+  it('reachability: both climax branches need an ending, and a negative claim is not one', () => {
+    const parsed = parseStage8Fixture(STAGE8_RESPONSE)
+    if (!parsed.ok) throw new Error('fixture must parse')
+    const [a, b] = parsed.data.endings
+    const claiming = (ending: typeof a, outcome: 'completed' | 'failed', weight: number) => ({
+      ...ending,
+      triggerConditions: {
+        summary: '',
+        signals: [{ when: { objective: STAGE8_OBJECTIVE_COUNT, outcome }, weight, note: '' }],
+      },
+    })
+
+    expect(
+      validateEndingReachability([claiming(a, 'completed', 4), claiming(b, 'failed', 4)], STAGE8_OBJECTIVE_COUNT),
+    ).toEqual([])
+
+    // A NEGATIVE climax signal says what would argue AGAINST this ending - it does not give the
+    // failure branch a home, and the finale would have nothing truthful to hand a losing party.
+    expect(
+      validateEndingReachability([claiming(a, 'completed', 4), claiming(b, 'failed', -4)], STAGE8_OBJECTIVE_COUNT)
+        .some((w) => w.includes('failed')),
     ).toBe(true)
   })
 })

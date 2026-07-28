@@ -397,10 +397,11 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
     // The last rung of the ladder is the climax, and an ending that CLAIMS a climax outcome the
     // party did not produce is not a candidate - however well its side signals score. Live
     // 2026-07-27 the climax was failed and "The Light Restored" still landed, 7 to 5, over the
-    // tragedy whose {climax, failed} signal actually fired. See contradictsClimax in endings.ts.
+    // tragedy whose {climax, failed} signal actually fired. See scoreEndings in endings.ts.
     ...(ordered.length > 0 ? { climaxObjectiveId: ordered[ordered.length - 1].id } : {}),
   }
-  const { scores, leadingId, contradictedIds, vetoFallback, eligibleScores } = scoreEndings(candidates, world)
+  const { scores, leadingId, contradictedIds, vetoFallback, refutedCounts, eligibleScores } =
+    scoreEndings(candidates, world)
 
   const previousLeading = endings.find((e) => e.status === 'leading')?.id ?? null
   // `scores` stays the RAW sum so stored ending_scores remain comparable run to run; only
@@ -412,6 +413,9 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
     await logEvent(service, env.adventureId, sessionId, 'ending_leading_changed', {
       from: previousLeading, to: leadingId, scores: scores as unknown as Json,
       contradicted: contradictedIds as unknown as Json, veto_fallback: vetoFallback,
+      // Why this one leads: the accuracy tier decides before the score does, so the score alone
+      // no longer explains the pick.
+      refuted: refutedCounts as unknown as Json, eligible: eligibleScores as unknown as Json,
     })
   }
 
@@ -435,6 +439,7 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
     await logEvent(service, env.adventureId, sessionId, 'ending_forced', {
       reason: 'all objectives terminal', scores: scores as unknown as Json,
       contradicted: contradictedIds as unknown as Json, veto_fallback: vetoFallback,
+      refuted: refutedCounts as unknown as Json, eligible: eligibleScores as unknown as Json,
     }).catch(() => {})
   }
 
