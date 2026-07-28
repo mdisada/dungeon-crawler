@@ -1,4 +1,6 @@
-export { agentContextLines, liveLines, MAX_DIGESTS, nextDigests } from './context-window.ts'
+export {
+  agentContextLines, agentContextSplit, liveLines, MAX_DIGESTS, nextDigests,
+} from './context-window.ts'
 export { applyDiff, applyDiffs, mergePatch } from './diff.ts'
 export { hashState, stableStringify } from './hash.ts'
 export { moveCost, moveDiff, validateMove } from './move.ts'

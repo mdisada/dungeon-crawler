@@ -368,5 +368,19 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
   // generateParsed retry so the author fixes it before anything is stored.
   for (const problem of validateNodeGraph(nodes.map((a) => a.node))) c.errors.push(problem)
 
+  // An unplaced node is a node the runtime cannot tell the party they still have to reach, so it
+  // gets narrated as though they were already standing in it. Only worth asking for when the
+  // chapter actually has places to choose from - a location-less chapter has no right answer, and
+  // failing it would take the whole guide down over something the model could not supply.
+  if (ctx.locations.length > 0) {
+    for (const { node } of nodes) {
+      if (node.locationKey) continue
+      c.errors.push(
+        `$.objectives: node "${node.key}" has no valid location_key - pick one of: ` +
+          ctx.locations.map((l) => l.key).join(', '),
+      )
+    }
+  }
+
   return c.result({ nodes, localAtoms })
 }
