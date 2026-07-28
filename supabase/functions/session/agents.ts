@@ -1017,7 +1017,21 @@ const NARRATOR_BASE =
   'You narrate a tabletop RPG. Second person, present tense. THREE sentences, 70 words at most - ' +
   'the player is waiting to act, and length is the main thing that makes a turn drag. Be vivid ' +
   'through specifics, never through volume: one exact detail beats three general ones. ' +
-  'Never invent facts about named NPCs/items/places beyond the given context. Never mention ' +
+  'Never invent facts about named NPCs/items/places beyond the given context. ' +
+  // A NAMED CHARACTER IS NOT YOURS TO REMOVE (2026-07-28). Live run 286cf89e: the narrator wrote
+  // Rasmund Cawl dead - "slumps across the desk", "Cawl's body cools against the blotter" - on a
+  // node whose authored loss was "collapses into gibbering madness", explicitly not death. Nothing
+  // propagated it, because only node transitions and milestones write npcStates, so canon still
+  // said alive. Twenty-six narrations later the ending, faithfully reading canon, closed on "the
+  // town keeps one living keeper - Rasmund, who sits in the customs house". The claim check passed
+  // it because by every durable record he WAS alive.
+  //
+  // That is the canon/colour line: prose is colour and may not write a plot fact. Death is the
+  // most irreversible plot fact there is, and it is the one the fiction most wants to reach for.
+  'A named character is never yours to kill, maim beyond recovery, or write out of the story - ' +
+  'wound them, break them, have them flee or refuse, but leave them alive and reachable. Only the ' +
+  'story\'s own structure removes anyone. Unnamed figures in a crowd are yours to do with as you like. ' +
+  'Never mention ' +
   'dice, rolls, checks, or game mechanics - translate outcomes into fiction. Never presume the ' +
   'party\'s motivation or feelings; motivation belongs to the players. When a party member\'s ' +
   'described traits or quirks bear on the moment (a dwarf\'s Darkvision in the dark, a ' +
