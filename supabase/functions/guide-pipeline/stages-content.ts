@@ -247,7 +247,7 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
 
   const { data: chapterNpcs, error: npcError } = await env.db
     .from('npcs')
-    .select('id, name, role, initial_state, human_edited, pending_regen')
+    .select('id, name, role, description, initial_state, human_edited, pending_regen')
     .eq('chapter_id', chapterId)
     .order('created_at')
   assertOk(npcError, 'npcs load failed')
@@ -378,6 +378,8 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
   // plus the materialized rescue node, all pre-linted before guide_ready.
   const keyedNpcs: KeyedNpc[] = npcKeys.list.map(({ key, name, row }) => ({
     key, name, id: row.id, initialState: row.initial_state,
+    // WHO they are travels with WHAT they are called - see Stage5NodesContext.npcs.
+    role: row.role as string | undefined, description: row.description as string | undefined,
   }))
   const keyedLocations: KeyedLocation[] = locationKeys.list.map(({ key, name, row }) => ({
     key, name, id: row.id as string,
@@ -414,6 +416,13 @@ function storedSpec(node: StoryNodeSpec, npcIds: string[]): Json {
   } as unknown as Json
 }
 
+/** `{win, loss}` as stored, or null when neither was authored - a node with nothing to say about
+ *  its own aftermath should read as absent, not as two empty strings later code has to test. */
+function storedOutcome(node: StoryNodeSpec): Json {
+  const { win, loss } = node.outcomeSummary
+  return win || loss ? ({ win, loss } as unknown as Json) : null
+}
+
 function storedTransitions(node: StoryNodeSpec): Json {
   return node.transitions.map((t) => ({
     on: t.on, to_node_key: t.toNodeKey, arrival_context: t.arrivalContext,
@@ -425,7 +434,10 @@ type Stage5Objective = {
   completionPredicates: unknown; guaranteedRoute: unknown
 }
 
-interface KeyedNpc { key: string; name: string; id: string; initialState: string }
+interface KeyedNpc {
+  key: string; name: string; id: string; initialState: string
+  role?: string; description?: string
+}
 interface KeyedLocation { key: string; name: string; id: string }
 
 async function authorChapterNodes(
@@ -445,8 +457,11 @@ async function authorChapterNodes(
     objectives: objectives.map((o) => ({
       id: o.id, title: o.title, hiddenDescription: o.hiddenDescription, completionPredicates: o.completionPredicates,
     })),
-    npcs: living.map(({ key, name }) => ({ key, name })),
+    npcs: living.map(({ key, name, role, description }) => ({ key, name, role, description })),
     locations: locations.map(({ key, name }) => ({ key, name })),
+    // Stage 2 planned this chapter's scenes and stages 3 and 4 were both given them; only the
+    // stage that authors the PLAYABLE scenes was not. See Stage5NodesContext.scenes.
+    scenes: (await loadChapterScenes(env, chapterId)).map((s) => s.sketch).filter(Boolean),
     partySkills: [],
   }
   const output = await env.generate('beat_planner', buildStage5NodesPrompt(ctx), (raw) => parseStage5Nodes(raw, ctx))
@@ -482,6 +497,7 @@ async function authorChapterNodes(
       adventure_id: env.adventure.id, chapter_id: chapterId, objective_id: objectiveId(node.objectiveKey),
       key: node.key, index: node.index, kind: node.kind, role: node.role, label: node.label,
       narration_seed: node.narrationSeed, encounter_spec: storedSpec(node, npcIds),
+      outcome_summary: storedOutcome(node),
       // Resolved here, exactly as npc keys are: the model authors a key from a closed list and the
       // orchestrator turns it into an id. An unresolvable key stores null - "wherever the party
       // is" - rather than a dangling reference.
@@ -498,6 +514,7 @@ async function authorChapterNodes(
       adventure_id: env.adventure.id, chapter_id: chapterId, objective_id: o.id,
       key: node.key, index: node.index, kind: node.kind, role: node.role, label: node.label,
       narration_seed: node.narrationSeed, encounter_spec: storedSpec(node, []),
+      outcome_summary: storedOutcome(node),
       // Rescue nodes stay unplaced on purpose - see buildRescueNode.
       location_id: null,
       affordances: node.affordances as unknown as Json, transitions: storedTransitions(node),
