@@ -474,7 +474,7 @@ describe('outcome summaries (the ladder contract)', () => {
     expect(result.errors.join(' ')).toContain('SAME loss')
   })
 
-  it('REJECTS a setback that removes a named character - the next route needs them alive', () => {
+  it('WARNS about a setback that removes a named character, without failing the chapter', () => {
     const result = parseStage5Nodes(rawOutput({
       objectives: [{
         objective_number: 1,
@@ -495,9 +495,11 @@ describe('outcome summaries (the ladder contract)', () => {
         ],
       }],
     }), ctx)
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.errors.join(' ')).toContain('Harbormaster Mara')
+    // A prose heuristic is CONTENT, and content slips are reported, never fatal - this was an
+    // error until it burned seven stage-5 retries and killed a guide outright (2026-07-28).
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.warnings.join(' ')).toContain('Harbormaster Mara')
   })
 })
 

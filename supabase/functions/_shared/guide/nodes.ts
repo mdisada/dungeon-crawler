@@ -123,9 +123,19 @@ export function parseOutcomeSummary(raw: unknown): { win: string; loss: string }
  *
  * Deliberately a closed verb list against exact names: code judging a narrow question it can
  * actually decide, rather than a model judging a broad one it cannot.
+ *
+ * NARROWED, AND THE CALLER MADE ADVISORY (2026-07-28). The first list held bare `dead`, `consumed`,
+ * `killed` and `kills` - which match "dead set against", "the dead of night", "consumed by grief",
+ * and every sentence where the NPC kills SOMEBODY ELSE. Combined with a caller that treated a hit
+ * as a parse error, stage 5 retried seven times against "a setback may not remove Edren Vask from
+ * the story" and the guide died at stage 5 with nothing to show for it.
+ *
+ * That is the exact failure this file's own comments warn about - "CONTENT slips are repaired,
+ * never fatal" - and a prose heuristic is content by definition. Only unambiguous removal phrasing
+ * counts now, and a hit warns instead of rejecting.
  */
 const REMOVAL_VERBS =
-  /\b(dies|died|dead|killed|kills|slain|slays|perishes|perished|consumed|devoured|drowns|drowned|is gone for good|vanishes forever|never seen again)\b/i
+  /\b(dies|died|slain|perishes|perished|drowns|drowned|is dead(?!\s+set)|are dead(?!\s+set)|lies dead|is gone for good|vanishes forever|never seen again)\b/i
 
 export function namesRemovedBy(text: string, npcNames: readonly string[]): string[] {
   const s = String(text ?? '')
