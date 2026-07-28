@@ -115,6 +115,29 @@ export interface ResolveOptions {
  * resolution, then run the story-progress pass. A failed challenge/puzzle is itself a
  * transition point - the world may pile on.
  */
+/**
+ * The authored one-sentence statement of what is true after this node resolves, for the tier it
+ * resolved on. Null whenever the guide predates `outcome_summary` or left it empty - the prompt
+ * simply omits the clause and behaves exactly as it did before.
+ */
+async function nodeOutcomeSummary(
+  service: SupabaseClient,
+  adventureId: string,
+  nodeKey: string | undefined,
+  tier: ResolutionTier,
+): Promise<string | null> {
+  if (!nodeKey) return null
+  const { data } = await service
+    .from('story_nodes')
+    .select('outcome_summary')
+    .eq('adventure_id', adventureId)
+    .eq('key', nodeKey)
+    .maybeSingle()
+  const summary = (data?.outcome_summary ?? null) as { win?: string; loss?: string } | null
+  const text = tier === 'failed' ? summary?.loss : summary?.win
+  return typeof text === 'string' && text.trim() ? text.trim() : null
+}
+
 export async function resolveOpenEncounter(
   service: SupabaseClient,
   env: AgentEnv,
@@ -183,11 +206,26 @@ export async function resolveOpenEncounter(
     : (opts.alsoAward ?? []).length > 0
       ? 'The party succeeded, but it cost them - narrate the win and the price together.'
       : 'The party succeeded - narrate a clean, earned success.'
+  // WHAT THIS OUTCOME MEANS, as the guide authored it (2026-07-28).
+  //
+  // Until now this prompt said only "it failed" plus a twelve-word hint the adjudicator invented,
+  // so the narrator had to decide for itself what failing this scene LOOKED like - and it reached
+  // for the most dramatic reading available. Live on run 286cf89e it killed Rasmund Cawl outright
+  // ("Cawl's body cools against the blotter"), a plot fact the guide never authorised; the scene
+  // ledger logged `ledger_contradiction: Rasmund Cawl is absent` and nothing acted on it, and 25
+  // narrations later the authored ending fired with him alive and keeping the customs house.
+  //
+  // The guide had already written the answer - "Rasmund collapses into gibbering madness, the
+  // ledger still clutched in his hand" - in story_nodes.outcome_summary, and nothing read it. This
+  // is delivery of existing content, not a new constraint on the narrator: it says what happened,
+  // and leaves how it reads entirely open.
+  const authoredOutcome = await nodeOutcomeSummary(service, env.adventureId, spec.nodeKey, tier)
   // The resolution cutscene (exposition voice): consequences forward, next hook at the end.
   await narrationBeat(
     service, env, sessionId,
     `The "${encounter.label}" ${encounter.kind.replaceAll('_', ' ')} encounter has concluded. ` +
       `${narrationContext} ${tierText}` +
+      (authoredOutcome ? ` What this outcome MEANS for the world: ${authoredOutcome}` : '') +
       (encounter.stakes ? ` The stakes were: ${encounter.stakes}.` : '') +
       (restored
         ? ` Then bring the party straight back to their interrupted business: "${restored.label}" still stands unfinished - end there.`

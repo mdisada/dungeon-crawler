@@ -472,7 +472,17 @@ export async function publishNarration(
   // `style` rides along so length can be judged per style (2026-07-27). Without it the measured
   // 868-char median mixes 2-4-sentence beats with 4-8-sentence cutscenes, and "are beats too long?"
   // has no answer - which is precisely why a length ceiling could not be set responsibly.
-  await logEvent(service, env.adventureId, sessionId, 'narration_published', { text, style })
+  // THE PROMPT RIDES ALONG (2026-07-28). Diagnosing why a narration said what it said meant
+  // reading the code path and inferring the prompt, because only the OUTPUT was recorded - and
+  // that inference is exactly where a day's worth of wrong theories came from. When run 286cf89e
+  // killed an NPC the guide never killed, the question "what was the narrator actually asked?"
+  // could not be answered from the record at all.
+  //
+  // Truncated because the instruction is the actionable part; the surrounding context window is
+  // rebuildable from state, and storing it per narration would dwarf every other payload here.
+  await logEvent(service, env.adventureId, sessionId, 'narration_published', {
+    text, style, prompt: prompt.slice(0, 2000),
+  })
   return text
 }
 
