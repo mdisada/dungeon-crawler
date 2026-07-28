@@ -401,9 +401,13 @@ async function loadRepairFields(
   table: string,
   id: string,
   chapters: { id: string; number: number; title: string }[],
-): Promise<{ fields: Record<string, string>; humanEdited: boolean; content: Record<string, unknown> | null } | null> {
+): Promise<
+  { fields: Record<string, string>; humanEdited: boolean; content: Record<string, unknown> | null; raw: Record<string, unknown> } | null
+> {
+  // Every column applyEdit can patch must be selected here, or a revert cannot restore it.
+  // `index` is not repairable itself but rides along with an objective's chapter move.
   const columns: Record<string, string> = {
-    objectives: 'title, hidden_description, chapter_id, completion_predicates, human_edited',
+    objectives: 'title, hidden_description, chapter_id, completion_predicates, index, human_edited',
     npcs: 'description, chapter_id, human_edited',
     locations: 'description, chapter_id, human_edited',
     ingredients: 'content, reveals, human_edited',
@@ -428,7 +432,7 @@ async function loadRepairFields(
     const value = field === 'text' ? content?.text : row[field]
     fields[field] = typeof value === 'string' ? value : ''
   }
-  return { fields, humanEdited: row.human_edited === true, content }
+  return { fields, humanEdited: row.human_edited === true, content, raw: row }
 }
 
 /**
@@ -436,17 +440,21 @@ async function loadRepairFields(
  * 'text' -> content jsonb; 'chapter' -> chapter_id, the structural MOVE), guarded by the
  * stage-6 invariant (the entry contract's giver never leaves chapter 1) and objective-index
  * appending. Logs the guide_repair event with before/after - loud by design (F04 SS2
- * amendment). Returns whether anything was written.
+ * amendment).
+ *
+ * Returns the column values needed to UNDO this edit, or null when nothing was written. The undo
+ * is captured here rather than derived later because `patch` is where logical fields have already
+ * become columns - by the time the round is judged, that mapping is gone.
  */
 async function applyEdit(
   env: StageEnv,
   edit: { handle: string; patch: Record<string, string>; note: string },
   ref: { table: string; id: string },
-  loaded: { fields: Record<string, string>; content: Record<string, unknown> | null },
+  loaded: { fields: Record<string, string>; content: Record<string, unknown> | null; raw: Record<string, unknown> },
   chapters: { id: string; number: number; title: string }[],
   entryGiverIds: Set<string>,
   findingsForHandle: string[],
-): Promise<boolean> {
+): Promise<Record<string, unknown> | null> {
   try {
     const patch: Record<string, unknown> = {}
     for (const [field, value] of Object.entries(edit.patch)) {
@@ -478,9 +486,9 @@ async function applyEdit(
         patch[field] = value
       }
     }
-    if (Object.keys(patch).length === 0) return false
+    if (Object.keys(patch).length === 0) return null
     const { error } = await env.db.from(ref.table).update(patch).eq('id', ref.id)
-    if (error) return false
+    if (error) return null
 
     await logPipelineEvent(env.db, env.adventure.id, 'guide_repair', {
       handle: edit.handle,
@@ -492,11 +500,49 @@ async function applyEdit(
       ),
       after: Object.fromEntries(Object.entries(edit.patch).map(([f, v]) => [f, v.slice(0, 300)])),
     })
-    return true
+    // A column absent from the select is SKIPPED, not nulled: a partial revert beats wiping a
+    // field whose prior value was never read.
+    const undo: Record<string, unknown> = {}
+    for (const column of Object.keys(patch)) {
+      if (column in loaded.raw) undo[column] = loaded.raw[column]
+    }
+    return undo
   } catch (err) {
     console.error(`stage-7 edit failed for ${edit.handle}`, err)
-    return false
+    return null
   }
+}
+
+/**
+ * Put the guide back as it was before a round that made it worse.
+ *
+ * The divergence guard used to stop the LOOP while leaving the round's writes in place, so a
+ * guide that went into round 2 with 6 major findings shipped with 14 - the guard noticed the
+ * damage and kept it (live 2026-07-28, guide c29038df). Detecting a bad round is only useful if
+ * the round can be taken back.
+ */
+async function revertRound(
+  env: StageEnv,
+  undos: { table: string; id: string; patch: Record<string, unknown> }[],
+  created: { table: string; id: string }[],
+): Promise<number> {
+  let reverted = 0
+  // Newest first: two edits to one row in the same round unwind to the earliest capture, which
+  // is the only one holding the pre-round value.
+  for (const undo of [...undos].reverse()) {
+    const { error } = await env.db.from(undo.table).update(undo.patch).eq('id', undo.id)
+    if (error) {
+      console.error(`stage-7 revert failed for ${undo.table}/${undo.id}`, error)
+      continue
+    }
+    reverted++
+  }
+  for (const row of created) {
+    const { error } = await env.db.from(row.table).delete().eq('id', row.id)
+    if (error) console.error(`stage-7 revert delete failed for ${row.table}/${row.id}`, error)
+    else reverted++
+  }
+  return reverted
 }
 
 export async function runStage7(env: StageEnv): Promise<void> {
@@ -553,12 +599,12 @@ export async function runStage7(env: StageEnv): Promise<void> {
       return Boolean(ref && (REPAIRABLE_FIELDS[ref.table] ?? []).length > 0)
     })
     if (targeted.length === 0) break
-    const rowByHandle = new Map<string, { table: string; id: string; fields: Record<string, string>; content: Record<string, unknown> | null }>()
+    const rowByHandle = new Map<string, { table: string; id: string; fields: Record<string, string>; content: Record<string, unknown> | null; raw: Record<string, unknown> }>()
     for (const handle of new Set(targeted.map((w) => w.targetHandle))) {
       const ref = current.refs.get(handle)!
       const loaded = await loadRepairFields(env, ref.table, ref.id, current.chapters)
       if (loaded && !loaded.humanEdited) {
-        rowByHandle.set(handle, { table: ref.table, id: ref.id, fields: loaded.fields, content: loaded.content })
+        rowByHandle.set(handle, { table: ref.table, id: ref.id, fields: loaded.fields, content: loaded.content, raw: loaded.raw })
       }
     }
     const planWarnings = targeted.filter((w) => rowByHandle.has(w.targetHandle))
@@ -600,20 +646,24 @@ export async function runStage7(env: StageEnv): Promise<void> {
     if (edits.length === 0) break
     totalPlanned += edits.length
     let applied = 0
+    // What it would take to undo this round, captured as it happens - see revertRound.
+    const undos: { table: string; id: string; patch: Record<string, unknown> }[] = []
+    const created: { table: string; id: string }[] = []
     for (const edit of edits) {
       if (edit.create) {
         const table = edit.create.kind === 'npc' ? 'npcs' : 'locations'
         const chapterId = edit.create.chapter === 'global'
           ? null
           : current.chapters.find((ch) => ch.number === Number(edit.create!.chapter))?.id ?? null
-        const { error } = await env.db.from(table).insert({
+        const { data: inserted, error } = await env.db.from(table).insert({
           adventure_id: env.adventure.id,
           chapter_id: chapterId,
           name: edit.create.name,
           description: edit.create.description,
-        })
+        }).select('id').maybeSingle()
         if (!error) {
           applied++
+          if (inserted?.id) created.push({ table, id: inserted.id as string })
           await logPipelineEvent(env.db, env.adventure.id, 'guide_repair', {
             handle: '(new)',
             table,
@@ -630,7 +680,9 @@ export async function runStage7(env: StageEnv): Promise<void> {
       const row = edit.handle ? rowByHandle.get(edit.handle) : undefined
       if (!row) continue
       const findingsForHandle = planWarnings.filter((w) => w.targetHandle === edit.handle).map((w) => w.message)
-      if (await applyEdit(env, edit as { handle: string; patch: Record<string, string>; note: string }, { table: row.table, id: row.id }, row, current.chapters, entryGiverIds, findingsForHandle)) {
+      const undo = await applyEdit(env, edit as { handle: string; patch: Record<string, string>; note: string }, { table: row.table, id: row.id }, row, current.chapters, entryGiverIds, findingsForHandle)
+      if (undo) {
+        undos.push({ table: row.table, id: row.id, patch: undo })
         applied++
       }
     }
@@ -641,6 +693,11 @@ export async function runStage7(env: StageEnv): Promise<void> {
     // failure is not worth the stage: ship the last round's findings as the residue
     // (over-warning about content that may now be fixed beats dying after rows were written).
     const majorsBefore = findings.filter((w) => w.severity === 'major').length
+    // The state this round is judged against, kept so a bad round can be undone whole: the DB
+    // rows (undos/created), the findings that described them, and the digest those findings'
+    // handles were parsed against.
+    const priorFindings = findings
+    const priorDigest = current
     try {
       current = await buildDigest(env.db, env.adventure.id)
       findings = await env.generate(
@@ -653,13 +710,20 @@ export async function runStage7(env: StageEnv): Promise<void> {
       break
     }
     // A round that did not REDUCE the contradictions has stopped helping, and the next one edits
-    // prose against a checker that is no longer converging. Stop rather than spend the remaining
-    // rounds making the guide different instead of better.
+    // prose against a checker that is no longer converging. Roll it back and stop, rather than
+    // spend the remaining rounds making the guide different instead of better.
     const majorsAfter = findings.filter((w) => w.severity === 'major').length
     if (majorsAfter >= majorsBefore) {
+      const reverted = await revertRound(env, undos, created)
       await logPipelineEvent(env.db, env.adventure.id, 'guide_repair_stalled', {
         round: rounds, majors_before: majorsBefore, majors_after: majorsAfter,
+        reverted, edits_undone: undos.length, creates_removed: created.length,
       })
+      // The guide is the pre-round guide again, so the residue must describe THAT one - shipping
+      // the post-round findings would point the creator at rows that no longer say those things.
+      totalApplied -= applied
+      findings = priorFindings
+      current = priorDigest
       break
     }
   }
