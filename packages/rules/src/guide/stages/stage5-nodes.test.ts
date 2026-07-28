@@ -447,6 +447,33 @@ describe('outcome summaries (the ladder contract)', () => {
     expect(first.loss).toBe('Rebuffed, the party eyes the cellar hatch.')
   })
 
+  it('REJECTS two routes of one objective declaring the SAME loss', () => {
+    // Guide ac78e517: both climax routes carried "the Drowned Corpus completes its manifestation,
+    // Mirehaven silenced" - the objective lost outright, recorded twice, on routes meant to lead on.
+    const result = parseStage5Nodes(rawOutput({
+      objectives: [{
+        objective_number: 1,
+        nodes: [
+          {
+            kind: 'social', narration_seed: 'Mara guards the strongbox.', stakes: 's',
+            npc_keys: ['npc:mara'], affordances: [{ key: 'persuade', hint: 'talk' }],
+            setback: { name: 'watch_alerted', kind: 'flag' }, setback_line: 'Rebuffed.',
+            outcome: { win: 'They hold the ledger.', loss: 'The town is lost and the ledger burns.' },
+          },
+          {
+            kind: 'skill_challenge', narration_seed: 'The hatch is barred.', stakes: 's',
+            affordances: [{ key: 'break_in', hint: 'force it' }],
+            setback: { name: 'hatch_jammed', kind: 'flag' }, setback_line: 'The hatch holds.',
+            outcome: { win: 'They are inside.', loss: 'The town is lost and the ledger burns.' },
+          },
+        ],
+      }],
+    }), ctx)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.join(' ')).toContain('SAME loss')
+  })
+
   it('REJECTS a setback that removes a named character - the next route needs them alive', () => {
     const result = parseStage5Nodes(rawOutput({
       objectives: [{

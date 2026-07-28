@@ -15,10 +15,24 @@ describe('normalizeLoreName', () => {
 })
 
 describe('deriveLoreReveals', () => {
-  it('attributes each force to the FIRST objective that puts the party in front of it', () => {
+  it('attributes each force to the objective that puts the party in front of it', () => {
     const map = deriveLoreReveals(['the tide-ledger', 'the Drowned Accord'], objectives)
     expect(map.get('o0')).toEqual(['the tide-ledger'])
     expect(map.get('o1')).toEqual(['the Drowned Accord'])
+  })
+
+  it('releases a force at its LAST mention, not its first - the spoiler rule', () => {
+    // Guide ac78e517 named "The Drowned Corpus" in objective 0 ("Investigate the missing people")
+    // and again at the climax. First-mention handed the narrator "the true creditor" - the answer
+    // to the whole mystery - the moment the party finished investigating.
+    const spanning = [
+      { id: 'o0', index: 0, title: 'Investigate', hiddenDescription: 'The party starts hunting the Drowned Corpus.' },
+      { id: 'o1', index: 1, title: 'Middle', hiddenDescription: 'Unrelated legwork.' },
+      { id: 'o2', index: 2, title: 'Finale', hiddenDescription: 'They face the Drowned Corpus and learn what it is.' },
+    ]
+    const map = deriveLoreReveals(['the Drowned Corpus'], spanning)
+    expect(map.get('o0')).toBeUndefined()
+    expect(map.get('o2')).toEqual(['the Drowned Corpus'])
   })
 
   it('matches across casing and hyphenation - the difference between 58% and 85% resolution', () => {

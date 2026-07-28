@@ -56,7 +56,20 @@ export function deriveLoreReveals(
     const needle = normalizeLoreName(name)
     // A one-word or empty needle would match half the guide ("reach", "tide") on substring alone.
     if (needle.length < 4) continue
-    const i = haystacks.findIndex((h) => h.includes(needle))
+    // LAST mention, not first. The first objective to name a force is usually the one that sets
+    // the party AFTER it, not the one where they understand it - so first-mention released the
+    // answer at the worst possible moment. Live on guide ac78e517 it handed the narrator "The
+    // Drowned Corpus: a composite sea-entity building itself from the ledger's promised souls, the
+    // true creditor" the moment objective 0, "Investigate the missing people", completed. That is
+    // the whole mystery, delivered as the party starts investigating it.
+    //
+    // The last objective that involves a force is the one after which the party has unambiguously
+    // finished with it. Measured over five guides this moves 13 of 21 forces later and leaves 8
+    // still explainable mid-play; the rest resolve to the final objective and so stay name-only,
+    // which is today's behaviour. Erring late costs a note nobody hears. Erring early costs the
+    // mystery.
+    let i = -1
+    haystacks.forEach((h, at) => { if (h.includes(needle)) i = at })
     if (i === -1) continue // unresolved -> stays withheld, which is today's behaviour
     const objectiveId = ordered[i].id
     byObjective.set(objectiveId, [...(byObjective.get(objectiveId) ?? []), name])

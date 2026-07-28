@@ -159,6 +159,8 @@ Rules:
 - THE ROUTES ARE A LADDER, NOT A MENU. At the table the party plays route 1 first. They only ever reach route 2 by FAILING route 1, arriving on its setback_line; route 3 only after failing both. So write route 2's narration_seed so it is still true AFTER route 1 has been lost, and route 3's after route 1 and 2 have been. Never open a later route as though the objective were untouched, and never have it announce as still-to-come something an earlier setback already said had happened.
 - Give every node an "outcome": one present-tense sentence for "win" and one for "loss", each stating what is TRUE afterwards. This is the record every later scene reads instead of guessing, so write the STATE, not the drama ("The party holds proof the ledger entries are forged", not "A stunning revelation!").
 - A LOSS NEVER REMOVES A PERSON. It may cost the party time, trust, standing, evidence, safety or surprise - but in a setback no named character dies, leaves for good, or finishes what they were trying to do. The next route needs that cast alive and that goal still open, or the scene it hands the party is a lie.
+- A LOSS NEVER ENDS THE STORY. Losing one scene is not losing the objective: the party still has another way in, and after that a last resort. So a "loss" must never say the villain won, the ritual completed, the town fell, or the thing the objective exists to prevent happened. Write what this ATTEMPT cost them, nothing wider.
+- EVERY LOSS IS DIFFERENT. Two routes may not cost the same thing - the loss is where a route's identity lives. Never reuse a loss sentence between routes of the same objective.
 - Each node has ONE kind: "skill_challenge", "social", "puzzle", or "combat". Vary them - do not make every route a skill_challenge. At least one combat somewhere in the adventure.
 - A "social" node MUST name at least one living NPC by key from the list.
 - CAST ONLY FROM THE ROSTER. The people below are everyone this chapter has. If a scene needs a harbourmaster, a warden, a fence, look for who already holds that role and use them - do NOT write a new named person into narration_seed, label, setback_line or outcome. A name you invent has no row behind it: nobody can talk to them, they hold no disposition, they cannot be staged, and they vanish when the scene ends. Unnamed background figures (a clerk, two dockhands, the crowd) are fine.
@@ -237,6 +239,7 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
   const locationKeySet = new Set(ctx.locations.map((l) => l.key))
   const nodes: AuthoredNode[] = []
   const localAtoms: AtomProposal[] = []
+  const authoredLosses: { key: string; objKey: string; loss: string }[] = []
 
   const objectiveBlocks = c.arr(root.objectives, '$.objectives', 1, ctx.objectives.length)
   const seenObjectives = new Set<number>()
@@ -391,6 +394,10 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
         win: outcome.win || `The party achieves this: ${objective.title}.`,
         loss: outcome.loss || arrivalContext,
       }
+      // Only what the MODEL wrote is held to the distinctness rule below. A derived fallback is
+      // code's own filler, and two nodes sharing one is code repeating itself, not the author
+      // giving two routes the same cost.
+      if (outcome.loss) authoredLosses.push({ key: nodeKeyFor(objKey, 'route', ni), objKey, loss: outcome.loss })
       // The one rule code can decide, so code decides it. A setback that removes a cast member
       // contradicts the very scene the ladder hands the party next - and it is checked on BOTH
       // lines a failure travels on, because either one reaches the next node's narrator.
@@ -433,6 +440,27 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
       }
       nodes.push({ node, npcKeys })
     })
+  }
+
+  // TWO ROUTES MAY NOT COST THE SAME THING. Decidable where "does this loss end the story?" is
+  // not, and it catches the shape that matters: live on guide ac78e517 both routes of the climax
+  // carried the identical loss - "the Drowned Corpus completes its manifestation, Mirehaven
+  // silenced and its people preserved in brine" - which is the objective lost outright, recorded
+  // twice, on routes whose whole purpose is to lead onward. A reused sentence is the reliable
+  // signal that the model wrote the objective's defeat instead of this scene's cost.
+  const lossSeen = new Map<string, string>()
+  for (const { key, objKey, loss } of authoredLosses) {
+    const fingerprint = `${objKey} ${loss.trim().toLowerCase()}`
+    const first = lossSeen.get(fingerprint)
+    if (first) {
+      c.errors.push(
+        `$.objectives: nodes "${first}" and "${key}" declare the SAME loss. A setback is where a ` +
+          "route's identity lives - give each one its own cost, and make it what that attempt cost " +
+          'the party, never the objective being lost outright.',
+      )
+    } else {
+      lossSeen.set(fingerprint, key)
+    }
   }
 
   // Every objective needs its route nodes authored.
