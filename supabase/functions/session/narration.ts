@@ -478,7 +478,21 @@ export async function publishNarration(
   // moved into the system prompt and only the facts travel per turn - which paid for the three
   // things that were missing (the goal, who the cast ARE, the story so far) without the prompt
   // getting bigger.
-  const transcript = agentContextSplit(state, 6)
+  // TWELVE LINES, NOT SIX (2026-07-28). `recent` counts LINES - narrations and player utterances
+  // interleaved - so six was roughly the last two or three exchanges. The narrator forgot things
+  // that were still on the same page.
+  //
+  // Run 6d9b2aeb introduced "a woman in a customs officer's grey tunic" at narration #2; by #6,
+  // four narrations and their player turns later, she had aged out of the window and the narrator
+  // wrote "the man you watched hauling a sagging canvas sack". Nothing tracks walk-ons - they have
+  // no row and never will - so the transcript is the only thing that remembers them, and it did
+  // not reach far enough back.
+  //
+  // Twelve is not a guess: it is what an NPC already gets (npc-dialogue.ts passes 12 to
+  // agentContextLines). The narrator, which writes the story, had half the working memory of a
+  // single character in it. The extra cost is a few hundred tokens on a call that already carries
+  // canon, roster, party profiles and memories.
+  const transcript = agentContextSplit(state, 12)
   const grounded = [
     prompt,
     '',
