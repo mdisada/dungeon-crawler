@@ -62,3 +62,30 @@ export function offerBanner(label: string, giverName: string, gold: number): str
   const reward = gold > 0 ? ` - ${gold} gp` : ''
   return `${label} (${giverName})${reward}`
 }
+
+/** What an accepted quest's contract is owed now: nothing yet, a payout, or a closed failure. */
+export type QuestResolution = 'pending' | 'completed' | 'failed'
+
+/**
+ * Decide a contract's fate from its objectives (F08 SS9).
+ *
+ * TWO sets, because they answer different questions. `terminal` is every objective that will
+ * never change again - completed OR failed, since fail-forward retires an objective by marking it
+ * completed with outcome 'failed'. `succeeded` is the subset the party actually managed.
+ *
+ * The live bug this exists to prevent (2026-07-28, adventure c29038df): resolution was a single
+ * `succeeded.has(every id)` test, so ONE failed objective made a contract unsatisfiable forever -
+ * the quest loop stayed active, the journal read "active" past the ending, and no payout or
+ * closing beat ever came. A contract with nothing left to wait for is finished either way; only
+ * the payday is conditional.
+ */
+export function questResolution(
+  objectiveIds: readonly string[],
+  succeeded: ReadonlySet<string>,
+  terminal: ReadonlySet<string>,
+): QuestResolution {
+  // An empty contract has no objectives to judge, so it never resolves on this path.
+  if (objectiveIds.length === 0) return 'pending'
+  if (!objectiveIds.every((id) => terminal.has(id))) return 'pending'
+  return objectiveIds.every((id) => succeeded.has(id)) ? 'completed' : 'failed'
+}

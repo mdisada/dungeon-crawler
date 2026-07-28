@@ -58,8 +58,9 @@ export {
 export type { LoopOpResult, LoopSeed } from './loops.ts'
 export {
   canReweave, canStageOffer, MAX_OPEN_OFFERS, MAX_REWEAVES, negotiatedGold, offerBanner,
-  openingTerms, parseOfferResponse, parseRewardBounds,
+  openingTerms, parseOfferResponse, parseRewardBounds, questResolution,
 } from './offers.ts'
+export type { QuestResolution } from './offers.ts'
 export { corpsePropText, scenePropsAt } from './props.ts'
 export type { PropRow, ScenePropView } from './props.ts'
 export { deflectDirective, deflectLevel } from './deflect.ts'

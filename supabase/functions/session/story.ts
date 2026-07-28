@@ -10,9 +10,9 @@ import type { CheckResult } from '../_shared/play/index.ts'
 import type { Json, OfferBannerView, QuestJournalView, StateDiff } from '../_shared/state/index.ts'
 import {
   canReweave, canStageOffer, completeLoop, negotiatedGold, offerBanner, openingTerms,
-  parseDeadlineRecords, parseRewardBounds, pushLoop, scheduleDeadline,
+  parseDeadlineRecords, parseRewardBounds, pushLoop, questResolution, scheduleDeadline,
 } from '../_shared/story/index.ts'
-import type { OfferTerms, RewardBounds } from '../_shared/story/index.ts'
+import type { CoreLoop, OfferTerms, RewardBounds } from '../_shared/story/index.ts'
 import { runOfferClassifier } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { loadLoops, persistLoops, planAndOpenBeat } from './beats.ts'
@@ -44,10 +44,13 @@ interface OfferRow {
   core_loop_id: string | null
   reweave_count: number
   paid_at: string | null
+  failed_at: string | null
 }
 
 /** Negotiation check context parked in dm.conversation.pendingContext while the die is out. */
 const CONTRACT_COLUMNS = 'id, label, giver_npc_id, is_entry, reward, stakes, deadline, objective_ids'
+const OFFER_COLUMNS =
+  'id, contract_id, quest_label, giver_npc_id, terms, status, core_loop_id, reweave_count, paid_at, failed_at'
 
 function termsOf(offer: OfferRow): OfferTerms {
   const obj = (typeof offer.terms === 'object' && offer.terms !== null ? offer.terms : {}) as Record<string, Json>
@@ -84,7 +87,7 @@ async function loadContract(service: SupabaseClient, adventureId: string, contra
 async function offersByStatus(service: SupabaseClient, adventureId: string, statuses: string[]): Promise<OfferRow[]> {
   const { data, error } = await service
     .from('quest_offers')
-    .select('id, contract_id, quest_label, giver_npc_id, terms, status, core_loop_id, reweave_count, paid_at')
+    .select(OFFER_COLUMNS)
     .eq('adventure_id', adventureId)
     .in('status', statuses)
     .order('offered_at', { ascending: true })
@@ -126,13 +129,17 @@ export async function journalViews(
     .filter((r) => r.status === 'accepted')
     .map((r) => {
       const terms = termsOf(r)
-      const status = r.paid_at
-        ? 'completed'
-        : r.core_loop_id && loopStatus.get(r.core_loop_id) === 'completed'
+      // failed_at outranks the loop: a botched quest closes its loop exactly like a finished one,
+      // so reading loop status alone would show the party a job they lost as "completed".
+      const status = r.failed_at
+        ? 'failed'
+        : r.paid_at
           ? 'completed'
-          : r.core_loop_id && loopStatus.get(r.core_loop_id) === 'suspended'
-            ? 'suspended'
-            : 'active'
+          : r.core_loop_id && loopStatus.get(r.core_loop_id) === 'completed'
+            ? 'completed'
+            : r.core_loop_id && loopStatus.get(r.core_loop_id) === 'suspended'
+              ? 'suspended'
+              : 'active'
       return {
         id: r.id,
         label: r.quest_label,
@@ -621,7 +628,7 @@ export async function finishNegotiation(
 ): Promise<void> {
   const { data, error } = await service
     .from('quest_offers')
-    .select('id, contract_id, quest_label, giver_npc_id, terms, status, core_loop_id, reweave_count, paid_at')
+    .select(OFFER_COLUMNS)
     .eq('id', stash.offerId)
     .maybeSingle()
   assertOk(error, 'offer load failed')
@@ -685,9 +692,36 @@ export async function finishNegotiation(
 }
 
 /**
+ * Retire a quest's loop and its open beat. Identical whether the party won or lost - the loop is
+ * bookkeeping, not a verdict, and the outcome lives in paid_at/failed_at.
+ */
+async function closeQuestLoop(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  loops: CoreLoop[],
+  questLoop: CoreLoop | null,
+): Promise<void> {
+  if (!questLoop) return
+  const done = completeLoop(loops, questLoop.id)
+  if (!done.ok) return
+  await persistLoops(service, env.adventureId, loops, done.loops)
+  // The quest's own beat dies with it (2026-07-27). Nothing closed it before, so once the spine
+  // opens its own loop the adventure carries two `active` beats, and route health - which reads
+  // the loop's currentBeatId - can be judged against a scene belonging to a finished quest.
+  const { error: beatError } = await service
+    .from('beats').update({ status: 'completed' })
+    .eq('core_loop_id', questLoop.id).eq('status', 'active')
+  assertOk(beatError, 'quest beat close failed')
+  if (done.resumedId) {
+    await logEvent(service, env.adventureId, sessionId, 'loop_resumed', { core_loop_id: done.resumedId })
+  }
+}
+
+/**
  * Completes the quest's loop and pays the ledger exactly once (idempotency via paid_at). Reached
  * two ways: the DM/creator `complete_quest` override (F07 SS5.2), and automatically when a quest's
- * final objective completes (see maybeCompleteQuestForObjective, F08 SS9).
+ * final objective completes (see maybeResolveQuestForObjective, F08 SS9).
  */
 export async function completeQuest(
   service: SupabaseClient,
@@ -697,7 +731,7 @@ export async function completeQuest(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const { data, error } = await service
     .from('quest_offers')
-    .select('id, contract_id, quest_label, giver_npc_id, terms, status, core_loop_id, reweave_count, paid_at')
+    .select(OFFER_COLUMNS)
     .eq('adventure_id', env.adventureId)
     .eq('id', offerId)
     .maybeSingle()
@@ -713,23 +747,7 @@ export async function completeQuest(
     return { status: 409, body: { error: 'Quest already completed' } }
   }
 
-  if (questLoop) {
-    const done = completeLoop(loops, questLoop.id)
-    if (done.ok) {
-      await persistLoops(service, env.adventureId, loops, done.loops)
-      // The quest's own beat dies with it (2026-07-27). Nothing closed it before, so once the
-      // spine opens its own loop the adventure carries two `active` beats, and route health -
-      // which reads the loop's currentBeatId - can be judged against a scene belonging to a
-      // finished quest.
-      const { error: beatError } = await service
-        .from('beats').update({ status: 'completed' })
-        .eq('core_loop_id', questLoop.id).eq('status', 'active')
-      assertOk(beatError, 'quest beat close failed')
-      if (done.resumedId) {
-        await logEvent(service, env.adventureId, sessionId, 'loop_resumed', { core_loop_id: done.resumedId })
-      }
-    }
-  }
+  await closeQuestLoop(service, env, sessionId, loops, questLoop)
 
   const terms = termsOf(offer)
   let paid = false
@@ -809,28 +827,111 @@ export async function completeQuest(
 }
 
 /**
- * F08 SS9 deterministic quest completion: when a completed objective was the last open objective
- * of an accepted quest's contract, close the quest (loop + one-time ledger payout) the same way
- * the DM `complete_quest` override does. No-op for objectives with no contract or whose contract
- * still has open objectives. Returns true when a quest was completed.
+ * Ends an accepted quest the party did NOT manage: the loop and its beat close exactly as they do
+ * on success, but nothing is paid and the journal says so. Idempotent via failed_at.
  */
-export async function maybeCompleteQuestForObjective(
+export async function failQuest(
   service: SupabaseClient,
   env: AgentEnv,
   sessionId: string,
-  completedObjectiveId: string,
-  completedObjectiveIds: Set<string>,
+  offerId: string,
+  narrate = true,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const { data, error } = await service
+    .from('quest_offers')
+    .select(OFFER_COLUMNS)
+    .eq('adventure_id', env.adventureId)
+    .eq('id', offerId)
+    .maybeSingle()
+  assertOk(error, 'offer load failed')
+  const offer = data as OfferRow | null
+  if (!offer || offer.status !== 'accepted') {
+    return { status: 409, body: { error: 'No accepted quest with that id' } }
+  }
+  if (offer.paid_at || offer.failed_at) {
+    return { status: 409, body: { error: 'Quest already resolved' } }
+  }
+
+  // Claim first - the failed_at guard makes a concurrent second call a no-op, exactly as paid_at
+  // does on the payout path.
+  const { data: claimed, error: claimError } = await service
+    .from('quest_offers')
+    .update({ failed_at: new Date().toISOString() })
+    .eq('id', offer.id)
+    .is('failed_at', null)
+    .is('paid_at', null)
+    .select('id')
+  assertOk(claimError, 'failure claim failed')
+  if ((claimed ?? []).length === 0) {
+    return { status: 409, body: { error: 'Quest already resolved' } }
+  }
+
+  const loops = await loadLoops(service, env.adventureId)
+  await closeQuestLoop(service, env, sessionId, loops, offer.core_loop_id ? loops.find((l) => l.id === offer.core_loop_id) ?? null : null)
+
+  const names = await npcNames(service, [offer.giver_npc_id ?? ''])
+  const giver = names.get(offer.giver_npc_id ?? '') ?? 'someone'
+  const patch = await journalPatch(service, env.adventureId)
+  await commitDiffs(service, env.adventureId, (s) => [
+    appendLinesDiff(s, [newLine(null, null, `Quest failed: ${offer.quest_label} - no payment`)]),
+    patch,
+  ])
+  await logEvent(service, env.adventureId, sessionId, 'quest_failed', {
+    offer_id: offer.id, core_loop_id: offer.core_loop_id, contract_id: offer.contract_id,
+  })
+  // Silent when the caller is already narrating this loss: fail-forward publishes the world's
+  // response AND an antagonist turn, so a third beat on the same turn is the pile-up the payout
+  // path was fixed for. The journal line and the status flip still land either way.
+  if (!narrate) return { status: 200, body: { ok: true, paid: false, gold: 0 } }
+  // Same fence as the payout beat: narrate the RECKONING, never "the resolution". The narrator
+  // filling a vacuum is what invented actions nobody took on the success path (live 2026-07-26),
+  // and a failure gives it even more room to invent - what went wrong, whose fault it was.
+  await narrationBeat(
+    service, env, sessionId,
+    `The job "${offer.quest_label}" is over and the party did not deliver it. ${giver} settles ` +
+      'up with nothing to hand over. Narrate ONLY that moment: what is said, and ' +
+      `${giver}'s manner while saying it - consistent with how they last treated the party. ` +
+      'Do NOT narrate what the party did or failed to do, do NOT assign blame, and do NOT ' +
+      'declare any consequence beyond the pay being withheld. What the job left undone stays undone.',
+    'Quest failed',
+    'outcome',
+  )
+  return { status: 200, body: { ok: true, paid: false, gold: 0 } }
+}
+
+/**
+ * F08 SS9 deterministic quest resolution: when the objective just resolved was the LAST open one
+ * of an accepted quest's contract, end the quest - paid when the party managed all of them, failed
+ * when any of them did not. No-op for objectives with no contract or whose contract still has open
+ * objectives. Returns true when a quest was resolved either way.
+ *
+ * Both sets matter (2026-07-28). This used to take only the succeeded set and complete the quest
+ * when it covered the contract, which silently made a contract holding ONE failed objective
+ * unresolvable forever: the loop stayed active, the journal read "active" past the ending, and no
+ * payout or closing beat ever came. Failure is an ending too - it just isn't a payday.
+ */
+export async function maybeResolveQuestForObjective(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  resolvedObjectiveId: string,
+  succeededObjectiveIds: Set<string>,
+  terminalObjectiveIds: Set<string>,
+  narrateFailure = true,
 ): Promise<boolean> {
   const accepted = await offersByStatus(service, env.adventureId, ['accepted'])
-  let completed = false
+  let resolved = false
   for (const offer of accepted) {
-    if (!offer.contract_id || offer.paid_at) continue
+    if (!offer.contract_id || offer.paid_at || offer.failed_at) continue
     const contract = await loadContract(service, env.adventureId, offer.contract_id)
     const objectiveIds = contract?.objective_ids ?? []
-    if (objectiveIds.length === 0 || !objectiveIds.includes(completedObjectiveId)) continue
-    if (!objectiveIds.every((id) => completedObjectiveIds.has(id))) continue
-    const result = await completeQuest(service, env, sessionId, offer.id)
-    if (result.status === 200) completed = true
+    if (!objectiveIds.includes(resolvedObjectiveId)) continue
+    const verdict = questResolution(objectiveIds, succeededObjectiveIds, terminalObjectiveIds)
+    if (verdict === 'pending') continue
+    const result = verdict === 'completed'
+      ? await completeQuest(service, env, sessionId, offer.id)
+      : await failQuest(service, env, sessionId, offer.id, narrateFailure)
+    if (result.status === 200) resolved = true
   }
-  return completed
+  return resolved
 }

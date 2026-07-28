@@ -22,7 +22,7 @@ import { appendLinesDiff, newLine, typingDiff } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
 import { beatRouteHealth } from './route-health.ts'
 import { antagonistTurn } from './steward.ts'
-import { maybeCompleteQuestForObjective, maybeReweaveDeclined } from './story.ts'
+import { maybeResolveQuestForObjective, maybeReweaveDeclined } from './story.ts'
 import { personalEpilogueLines } from './personal.ts'
 import { runClimaxAuthor } from './story-agents.ts'
 import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
@@ -190,15 +190,19 @@ async function completeObjective(
     return diffs
   })
 
-  // If this closed the last open objective of an accepted quest's contract, close the quest
-  // (loop complete + one-time payout).
-  // SUCCEEDED objectives only. `reveal_state: 'completed'` means TERMINAL since fail-forward
-  // landed (failObjective sets it alongside outcome:'failed'), so filtering on it alone would
-  // hand a quest its payout for objectives the party never managed - paying gold for failure.
-  const completedIds = new Set(
+  // If this closed the last open objective of an accepted quest's contract, resolve the quest.
+  // TWO sets, because `reveal_state: 'completed'` means TERMINAL since fail-forward landed
+  // (failObjective sets it alongside outcome:'failed'): the terminal set says the contract has
+  // nothing left to wait for, the succeeded set says whether it earned a payout. Passing only the
+  // succeeded set - which is what this did - paid nobody and closed nothing when an objective
+  // failed, leaving the quest open for the rest of the adventure.
+  const terminalIds = new Set(ordered.filter((o) => o.reveal_state === 'completed').map((o) => o.id))
+  const succeededIds = new Set(
     ordered.filter((o) => o.reveal_state === 'completed' && o.outcome !== 'failed').map((o) => o.id),
   )
-  const questCompleted = await maybeCompleteQuestForObjective(service, env, sessionId, completed.id, completedIds)
+  const questCompleted = await maybeResolveQuestForObjective(
+    service, env, sessionId, completed.id, succeededIds, terminalIds,
+  )
 
   // Surface the next thread in the fiction. completeQuest already narrated the reward + "what comes
   // next" beat, so on the quest path we do NOT recap the accomplishment again - but the new objective
@@ -312,6 +316,21 @@ export async function failObjective(
       { domain: 'objectives', patch: { currentId: next?.id ?? null, list: list as unknown as Json } },
     ] as StateDiff[]
   })
+  // A failure can be a quest's LAST word too. `ordered` predates the update above, so the objective
+  // just retired is folded in by hand: terminal, never succeeded. Without this the contract that
+  // held it would wait forever for an objective that is never coming back (live 2026-07-28) - and
+  // the failure path is where that lands most often, since the last thing to resolve in a losing
+  // run is usually a loss.
+  const terminalIds = new Set(
+    ordered.filter((o) => o.id === current.id || o.reveal_state === 'completed').map((o) => o.id),
+  )
+  const succeededIds = new Set(
+    ordered
+      .filter((o) => o.id !== current.id && o.reveal_state === 'completed' && o.outcome !== 'failed')
+      .map((o) => o.id),
+  )
+  await maybeResolveQuestForObjective(service, env, sessionId, current.id, succeededIds, terminalIds, false)
+
   // The world took the win. An antagonist step makes the failure a real event rather than a
   // silent bookkeeping change.
   try {

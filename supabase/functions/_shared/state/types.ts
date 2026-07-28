@@ -212,7 +212,9 @@ export interface QuestJournalView {
   giverName: string
   gold: number
   stakes: string
-  status: 'active' | 'suspended' | 'completed'
+  // 'failed' is a RESOLVED quest the party did not manage - a contracted objective failed, so it
+  // closed without payout. Terminal like 'completed', and never the same thing (2026-07-28).
+  status: 'active' | 'suspended' | 'completed' | 'failed'
 }
 
 export interface ObjectivesState {

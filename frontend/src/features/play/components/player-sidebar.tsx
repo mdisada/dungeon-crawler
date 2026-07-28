@@ -55,13 +55,20 @@ export function PlayerSidebar() {
             <ul className="mt-0.5 flex flex-col gap-0.5">
               {quests.map((quest) => (
                 <li key={quest.id} className="text-xs">
-                  <span className={cn('font-medium', quest.status === 'completed' && 'text-muted-foreground line-through')}>
+                  <span
+                    className={cn(
+                      'font-medium',
+                      (quest.status === 'completed' || quest.status === 'failed') &&
+                        'text-muted-foreground line-through',
+                    )}
+                  >
                     {quest.label}
                   </span>
                   <span className="text-muted-foreground">
                     {' '}- {quest.giverName}
                     {quest.gold > 0 ? `, ${quest.gold} gp` : ''}
                     {quest.status === 'suspended' ? ' (paused)' : ''}
+                    {quest.status === 'failed' ? ' (failed)' : ''}
                   </span>
                 </li>
               ))}
