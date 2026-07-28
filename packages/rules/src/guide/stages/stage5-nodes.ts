@@ -34,6 +34,8 @@ export interface Stage5NodesContext {
   objectives: Stage5NodesObjective[]
   /** Living, present NPCs the chapter can stage (social nodes pick from these). */
   npcs: { key: string; name: string }[]
+  /** Places this chapter can stage a node at. Closed vocabulary - a node may pick no other. */
+  locations: { key: string; name: string }[]
   partySkills: string[]
 }
 
@@ -107,6 +109,10 @@ export function buildRescueNode(objectiveId: string, route: GuaranteedRoute): St
     },
     affordances: [{ key: 'attempt', label: affordanceLabel('skill_challenge', route.label), hint: route.label }],
     transitions: [{ on: 'full', toNodeKey: null, arrivalContext: '' }],
+    // Deliberately unplaced. A rescue node is the floor the director drops a spent party onto, and
+    // it has to be reachable from wherever they already stand - pinning it to one location would
+    // make the last resort require a journey. The runtime treats a null location as "here".
+    locationKey: null,
     localAtoms: [],
   }
 }
@@ -126,12 +132,14 @@ Rules:
 - setback: the ONE thing that changes when the party falls short here - a short flag name and a kind. Name the consequence, not the failure ("warden_suspicious", not "check_failed"). It must be specific to THIS scene, never the objective's own goal.
 - setback_line: one line describing how the party arrives at their next attempt having just fallen short here. Never phrase it as a success.
 
+- Give every node a "location_key" naming WHERE it happens, chosen from the places listed below and nothing else. Two nodes may share a place. Pick the place the scene physically occupies, not one it merely concerns: a node about reading a stolen ledger happens wherever the party reads it. This is what lets the game tell a party standing somewhere else that they still have to travel, so an invented place is worse than none.
+
 Respond with ONLY a JSON object:
 {
   "objectives": [
     { "objective_number": 1, "nodes": [
       { "kind": "social", "narration_seed": "...", "stakes": "...",
-        "npc_keys": ["npc:..."],
+        "npc_keys": ["npc:..."], "location_key": "loc:...",
         "affordances": [ { "key": "press", "hint": "press her on the ledger" } ],
         "setback": { "name": "warden_suspicious", "kind": "flag" },
         "setback_line": "Shut out, the party must try the cellar instead." }
@@ -143,12 +151,14 @@ Respond with ONLY a JSON object:
     .map((o, i) => `${i + 1}. ${o.title} - ${o.hiddenDescription}`)
     .join('\n')
   const npcList = ctx.npcs.map((n) => `${n.key} (${n.name})`).join(', ') || 'none'
+  const locationList = ctx.locations.map((l) => `${l.key} (${l.name})`).join(', ') || 'none'
   const user = `Chapter ${ctx.chapterNumber}: ${ctx.chapterTitle}
 
 Objectives:
 ${objectiveList}
 
 Living NPCs available to stage: ${npcList}
+Places available to stage a node at: ${locationList}
 Party skills: ${ctx.partySkills.join(', ') || 'unknown'}`
 
   return { system, user, maxTokens: 4000 }
@@ -167,6 +177,7 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
 
   const c = new Check()
   const npcKeySet = new Set(ctx.npcs.map((n) => n.key))
+  const locationKeySet = new Set(ctx.locations.map((l) => l.key))
   const nodes: AuthoredNode[] = []
   const localAtoms: AtomProposal[] = []
 
@@ -254,6 +265,12 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
 
       const npcKeys = (Array.isArray(n.npc_keys) ? n.npc_keys : [])
         .filter((k): k is string => typeof k === 'string' && npcKeySet.has(k))
+
+      // Closed vocabulary, same contract as npc_keys: an off-list place is DROPPED, not invented.
+      // A node with no location reads as "wherever the party is", which is the safe failure - the
+      // unsafe one is a place that exists only in this field and that nothing can travel to.
+      const authoredLocation = typeof n.location_key === 'string' ? n.location_key.trim() : ''
+      const locationKey = locationKeySet.has(authoredLocation) ? authoredLocation : null
       // A social node nobody can staff is downgraded to a skill challenge carrying the SAME
       // outcome maps - the tier bridge makes that lossless for the spine, and it is exactly what
       // the runtime already does at open time (story/staging.ts). Authoring it away here means the
@@ -319,6 +336,7 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
         // labels cut mid-word ("...sealing his solitary sacri", 2026-07-26).
         label: nodeLabel(affordances[0]?.hint ?? '', objective.title),
         narrationSeed,
+        locationKey,
         encounter: {
           kind: resolvedKind, label: objective.title, stakes, rationale: '',
           params: {} as Json,
@@ -346,6 +364,20 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
   // Chapter-local structural pass (dangling / failure-loop / missing full transition) - feeds the
   // generateParsed retry so the author fixes it before anything is stored.
   for (const problem of validateNodeGraph(nodes.map((a) => a.node))) c.errors.push(problem)
+
+  // An unplaced node is a node the runtime cannot tell the party they still have to reach, so it
+  // gets narrated as though they were already standing in it. Only worth asking for when the
+  // chapter actually has places to choose from - a location-less chapter has no right answer, and
+  // failing it would take the whole guide down over something the model could not supply.
+  if (ctx.locations.length > 0) {
+    for (const { node } of nodes) {
+      if (node.locationKey) continue
+      c.errors.push(
+        `$.objectives: node "${node.key}" has no valid location_key - pick one of: ` +
+          ctx.locations.map((l) => l.key).join(', '),
+      )
+    }
+  }
 
   return c.result({ nodes, localAtoms })
 }

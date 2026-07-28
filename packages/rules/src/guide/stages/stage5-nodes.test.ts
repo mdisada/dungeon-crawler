@@ -8,6 +8,7 @@ import { validateNodeGraph } from '../nodes'
 const ctx: Stage5NodesContext = {
   chapterNumber: 1,
   chapterTitle: 'The Drowned Ledger',
+  locations: [],
   objectives: [
     {
       id: 'o1',
@@ -344,6 +345,49 @@ describe('parseStage5Nodes', () => {
     // now the ladder: this is the last route node, so its setback routes to the rescue.
     expect(second.transitions.find((t) => t.on === 'failed')?.toNodeKey)
       .toBe(`${objectiveKeyOf('o1')}#r0`)
+  })
+})
+
+describe('nodes are placed (2026-07-28)', () => {
+  const placedCtx: Stage5NodesContext = {
+    ...ctx,
+    locations: [{ key: 'loc:office', name: 'The Harbour Office' }, { key: 'loc:quay', name: 'The Quay' }],
+  }
+  const doc = (first: Record<string, unknown>) => JSON.stringify({
+    objectives: [{ objective_number: 1, nodes: [
+      { kind: 'skill_challenge', narration_seed: 'x.', affordances: [{ key: 'a', hint: 'go' }],
+        transitions: [{ on: 'full', to: 'done', arrival_context: '' }], ...first },
+      { kind: 'skill_challenge', narration_seed: 'y.', affordances: [{ key: 'b', hint: 'go' }],
+        transitions: [{ on: 'full', to: 'done', arrival_context: '' }], location_key: 'loc:quay' },
+    ] }],
+  })
+
+  it('keeps a location the chapter actually has', () => {
+    const result = parseStage5Nodes(doc({ location_key: 'loc:office' }), placedCtx)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.nodes[0].node.locationKey).toBe('loc:office')
+  })
+
+  it('rejects a node left unplaced when the chapter has places to choose from', () => {
+    const result = parseStage5Nodes(doc({}), placedCtx)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.join(' ')).toMatch(/no valid location_key/)
+  })
+
+  it('rejects an invented place rather than storing a dangling reference', () => {
+    const result = parseStage5Nodes(doc({ location_key: 'loc:the_sunken_cathedral' }), placedCtx)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.errors.join(' ')).toMatch(/no valid location_key/)
+  })
+
+  it('asks for nothing when the chapter has no locations at all', () => {
+    const result = parseStage5Nodes(doc({}), ctx)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.nodes[0].node.locationKey).toBeNull()
   })
 })
 

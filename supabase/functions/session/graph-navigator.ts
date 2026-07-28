@@ -31,6 +31,10 @@ export interface OpenNodeContext {
   combatBudget: number
   /** Extra narration framing from the caller (rung delivery, climax pitch). */
   narrationContext?: string
+  /** Where the party is standing RIGHT NOW, so an unreached node is opened as a pull, not an
+   *  arrival. Caller-supplied because this module stays acyclic and does not load state. */
+  partyLocationId?: string | null
+  partyLocationName?: string
   trigger: string
 }
 
@@ -220,11 +224,29 @@ export async function openAuthoredNode(
     : ` For your own framing only, the party can act on these and nothing else: ${ways.join('; ')}. ` +
       'Land the scene somewhere at least one of them is an obvious thing to reach for - but do ' +
       'NOT name, list or allude to them as options. They are already on the player\'s screen.'
+  // NOT THERE YET (2026-07-28). A node now carries WHERE it happens, and until it did, a beat
+  // whose scene sits somewhere else was opened as though the party had already walked in. Live
+  // run 77451545: the beat "Attack Cael Wytherr to stop his writing" opened at 05:58:20 and
+  // published "Bram kicks the sealed door inward" eight seconds later - the party travelled to
+  // that office at 05:58:52, and the encounter then narrated the same door a second time.
+  //
+  // One clause telling the narrator not to presume travel could never win: every other line of
+  // the prompt - the seed, the label, the stakes, the beat's own imperative name - describes the
+  // scene as though it were underway. So when the place does not match, the instruction changes
+  // shape entirely: this is a pull toward somewhere, not a scene being entered.
+  const elsewhere = Boolean(node.locationId) && Boolean(ctx.partyLocationId) &&
+    node.locationId !== ctx.partyLocationId
+  const standing = elsewhere
+    ? `The party is NOT there - they are still at ${ctx.partyLocationName || 'where they were'}, ` +
+      'and have taken no step toward it. Write only the pull: what reaches them from it where ' +
+      'they stand - a sound, a rumour, a messenger, a change in the air. Do NOT place them in ' +
+      'the scene, move them, or narrate any part of what happens once they arrive. '
+    : 'Pick up from where the party actually stands - never presume travel or actions they did not take. '
   await narrationBeat(
     service, env, sessionId,
     `${ctx.narrationContext ? `${ctx.narrationContext} ` : ''}${arrivalContext ? `${arrivalContext} ` : ''}` +
       `${climaxFraming}Open this scene: ${node.narrationSeed} ` +
-      'Pick up from where the party actually stands - never presume travel or actions they did not take. ' +
+      standing +
       // The scene-opening cutscene lands with the previous narration still in the context window,
       // and once reproduced it verbatim - closing menu included - so the node's authored seed never
       // reached the page at all (live 2026-07-27).

@@ -313,6 +313,9 @@ export async function planAndOpenBeat(
         loop, loops, beatCount: (beatRows.data ?? []).length,
         isClimax: pace.isClimax, combatCount: pace.combatCount, combatBudget: COMBAT_BUDGET,
         narrationContext, trigger,
+        // Lets the navigator tell "open this scene" from "pull them toward it".
+        partyLocationId: state.scene.locationId ?? null,
+        partyLocationName: state.scene.locationName || '',
       },
       (before, after) => persistLoops(service, env.adventureId, before, after),
       trigger === 'director_replan' ? 'replan_beat' : trigger === 'guaranteed_route' ? 'guaranteed_route' : null,

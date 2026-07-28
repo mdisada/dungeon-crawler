@@ -53,6 +53,16 @@ export interface StoryNodeSpec {
   role: NodeRole
   label: string
   narrationSeed: string
+  /**
+   * WHERE this node happens - a key from the chapter's location list, or null when the guide has
+   * no locations to choose from (legacy adventures, and the rescue nodes code materializes).
+   *
+   * Authored from a CLOSED vocabulary and validated on parse, the same contract `npcKeys` uses.
+   * Which place a scene occupies is a fiction decision, so the model makes it; the closed list is
+   * what stops the answer being wrong. The runtime reads this to tell "the party is standing here"
+   * from "the party has not gone there yet" instead of inferring it from prose.
+   */
+  locationKey: string | null
   /** Same shape beats.encounter_spec has always used; outcome maps are the progression writers. */
   encounter: BeatEncounterSpec
   affordances: NodeAffordance[]
@@ -149,7 +159,13 @@ export function parseNodeSpec(raw: unknown, ctx: NodeParseContext): { ok: true; 
   if (c.errors.length > 0) return { ok: false, errors: c.errors }
   return {
     ok: true,
-    node: { key, objectiveKey: ctx.objectiveKey, index, kind, role, label, narrationSeed, encounter, affordances, transitions, localAtoms },
+    // `NodeParseContext` carries no location vocabulary, so this parser cannot validate one and
+    // does not guess. Stage 5b is where nodes get placed; anything parsed here reads as "wherever
+    // the party is", which is the same safe default a rescue node uses.
+    node: {
+      key, objectiveKey: ctx.objectiveKey, index, kind, role, label, narrationSeed,
+      locationKey: null, encounter, affordances, transitions, localAtoms,
+    },
   }
 }
 

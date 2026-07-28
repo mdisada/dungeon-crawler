@@ -21,6 +21,11 @@ export interface AuthoredNodeRow {
   role: 'route' | 'rescue'
   label: string
   narrationSeed: string
+  /**
+   * WHERE this node happens, or null for "wherever the party already is" - rescue nodes, and
+   * guides authored before nodes were placed. Read from the row, never inferred from prose.
+   */
+  locationId: string | null
   spec: Record<string, unknown> | null
   affordances: { key: string; label: string; hint: string }[]
   transitions: { on: NavTier; toNodeKey: string | null; arrivalContext: string }[]
@@ -41,7 +46,7 @@ export async function loadObjectiveNodes(
 ): Promise<AuthoredNodeRow[]> {
   const { data, error } = await service
     .from('story_nodes')
-    .select('id, key, objective_id, index, kind, role, label, narration_seed, encounter_spec, affordances, transitions')
+    .select('id, key, objective_id, index, kind, role, label, narration_seed, location_id, encounter_spec, affordances, transitions')
     .eq('adventure_id', adventureId)
     .eq('objective_id', objectiveId)
     .order('index')
@@ -58,6 +63,7 @@ export async function loadObjectiveNodes(
     role: n.role === 'rescue' ? 'rescue' : 'route',
     label: (n.label as string) ?? '',
     narrationSeed: (n.narration_seed as string) ?? '',
+    locationId: (n.location_id as string | null) ?? null,
     spec: (typeof n.encounter_spec === 'object' && n.encounter_spec !== null
       ? n.encounter_spec as Record<string, unknown>
       : null),

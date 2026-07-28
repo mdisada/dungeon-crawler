@@ -379,7 +379,10 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
   const keyedNpcs: KeyedNpc[] = npcKeys.list.map(({ key, name, row }) => ({
     key, name, id: row.id, initialState: row.initial_state,
   }))
-  await authorChapterNodes(env, chapterId, objectives, keyedNpcs, chapter)
+  const keyedLocations: KeyedLocation[] = locationKeys.list.map(({ key, name, row }) => ({
+    key, name, id: row.id as string,
+  }))
+  await authorChapterNodes(env, chapterId, objectives, keyedNpcs, keyedLocations, chapter)
 
   // Last chapter to clear stage 5 starts the whole-guide weave.
   const { data: remaining, error: remainingError } = await env.db
@@ -423,16 +426,19 @@ type Stage5Objective = {
 }
 
 interface KeyedNpc { key: string; name: string; id: string; initialState: string }
+interface KeyedLocation { key: string; name: string; id: string }
 
 async function authorChapterNodes(
   env: StageEnv,
   chapterId: string,
   objectives: Stage5Objective[],
   npcs: KeyedNpc[],
+  locations: KeyedLocation[],
   chapter: { index: number; title: string },
 ): Promise<void> {
   const living = npcs.filter((n) => n.initialState !== 'dead' && n.initialState !== 'absent')
   const npcIdByKey = new Map(npcs.map((n) => [n.key, n.id]))
+  const locationIdByKey = new Map(locations.map((l) => [l.key, l.id]))
   const ctx: Stage5NodesContext = {
     chapterNumber: chapter.index + 1,
     chapterTitle: chapter.title,
@@ -440,6 +446,7 @@ async function authorChapterNodes(
       id: o.id, title: o.title, hiddenDescription: o.hiddenDescription, completionPredicates: o.completionPredicates,
     })),
     npcs: living.map(({ key, name }) => ({ key, name })),
+    locations: locations.map(({ key, name }) => ({ key, name })),
     partySkills: [],
   }
   const output = await env.generate('beat_planner', buildStage5NodesPrompt(ctx), (raw) => parseStage5Nodes(raw, ctx))
@@ -475,6 +482,10 @@ async function authorChapterNodes(
       adventure_id: env.adventure.id, chapter_id: chapterId, objective_id: objectiveId(node.objectiveKey),
       key: node.key, index: node.index, kind: node.kind, role: node.role, label: node.label,
       narration_seed: node.narrationSeed, encounter_spec: storedSpec(node, npcIds),
+      // Resolved here, exactly as npc keys are: the model authors a key from a closed list and the
+      // orchestrator turns it into an id. An unresolvable key stores null - "wherever the party
+      // is" - rather than a dangling reference.
+      location_id: node.locationKey ? locationIdByKey.get(node.locationKey) ?? null : null,
       affordances: node.affordances as unknown as Json, transitions: storedTransitions(node),
       local_atoms: node.localAtoms as unknown as Json,
     })
@@ -487,6 +498,8 @@ async function authorChapterNodes(
       adventure_id: env.adventure.id, chapter_id: chapterId, objective_id: o.id,
       key: node.key, index: node.index, kind: node.kind, role: node.role, label: node.label,
       narration_seed: node.narrationSeed, encounter_spec: storedSpec(node, []),
+      // Rescue nodes stay unplaced on purpose - see buildRescueNode.
+      location_id: null,
       affordances: node.affordances as unknown as Json, transitions: storedTransitions(node),
       local_atoms: [] as unknown as Json,
     })

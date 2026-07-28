@@ -97,7 +97,7 @@ describe('nodeKeyFor', () => {
 function node(over: Partial<StoryNodeSpec> = {}): StoryNodeSpec {
   return {
     key: 'n0', objectiveKey: 'o1', index: 0, kind: 'skill_challenge', role: 'route',
-    label: 'x', narrationSeed: 's',
+    label: 'x', narrationSeed: 's', locationKey: null,
     encounter: { kind: 'skill_challenge', label: 'x', stakes: '', rationale: '', params: {}, onSuccess: ['a'], onPartial: [], onFailure: ['setback'] },
     affordances: [{ key: 'go', label: 'Attempt: go', hint: 'go' }],
     transitions: [{ on: 'full', toNodeKey: null, arrivalContext: '' }],
