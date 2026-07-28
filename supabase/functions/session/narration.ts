@@ -346,6 +346,19 @@ export async function publishNarration(
     await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
     return ''
   }
+  // CONCURRENT NARRATION (2026-07-28). Once kickTail has fired, a second narrator is drafting the
+  // next scene in another worker. Neither can see the other, so whichever lands second contradicts
+  // the first about where the party is standing - measured at 7 of 95 pairs by the continuity
+  // probe, every one 0.39-6.65s apart and in two different narrator styles.
+  //
+  // Reported, not blocked. WHICH call sites publish after the kick is exactly what is not known
+  // (evaluateStoryProgress has 11 callers), and suppressing a line on a guess trades a
+  // contradiction for a hole in the story. This names the offenders so the fix can be precise.
+  if (env.tailKicked) {
+    await logEvent(service, env.adventureId, sessionId, 'incident', {
+      kind: 'narration_after_tail_kick', style, prompt: prompt.slice(0, 120),
+    }).catch(() => {})
+  }
   const npcStates = state.dm?.facts.npcStates ?? {}
   // CANON ONLY for the checker (Phase 6). It used to receive the live transcript plus the
   // generating prompt verbatim - so a draft that correctly followed its instruction was flagged as

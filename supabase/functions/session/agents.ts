@@ -29,6 +29,16 @@ export interface AgentEnv {
   demo: boolean
   /** Adventure mode - the Slice 2 review gate only ever engages for 'assist'. */
   mode: 'full_ai' | 'assist' | null
+  /**
+   * Set once this request has handed its tail to a fresh worker (see kickTail). From that moment
+   * a SECOND narrator is drafting the next scene concurrently, and anything this request still
+   * publishes is written without knowledge of it - and it without knowledge of ours.
+   *
+   * That is the mechanism behind every location contradiction the continuity probe finds: 7 in 95
+   * pairs, all of them published 0.39-6.65s apart in two different narrator styles. Per-request,
+   * so it dies with the request.
+   */
+  tailKicked?: boolean
 }
 
 export async function agentJson(

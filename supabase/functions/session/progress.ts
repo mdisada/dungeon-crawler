@@ -641,6 +641,9 @@ function kickTail(env: AgentEnv, sessionId: string, ctx: TailContext): boolean {
   if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) {
     EdgeRuntime.waitUntil(Promise.race([request, grace]))
   }
+  // From here a SECOND narrator is drafting the next scene in another worker. publishNarration
+  // reports anything this request still writes, because the two cannot see each other.
+  env.tailKicked = true
   return true
 }
 
