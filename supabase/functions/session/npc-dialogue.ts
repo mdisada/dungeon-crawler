@@ -420,8 +420,23 @@ export async function npcReply(
     }
     return diffs
   })
+  // THE WHOLE FUNNEL, NOT JUST THE END (2026-07-28). This logged only what the gate ALLOWED, so a
+  // conversation that revealed nothing was indistinguishable from three different failures: the
+  // NPC held no entitled knowledge at all, or held it and never offered it, or offered it and was
+  // refused. Only the refusal had an event (`reveal_blocked`).
+  //
+  // That ambiguity was live. Run 1d405957 held 10 social encounters and 7 replies and produced
+  // zero reveals, and answering "why" needed a separate query over ingredient PLACEMENTS to work
+  // out the NPCs had almost nothing to give - 3 of 17 clues sat on people. The record should have
+  // said so directly.
+  //
+  // held -> proposed -> revealed makes it one read: empty `held` is a guide-authoring problem,
+  // `held` without `proposed` is the NPC agent declining to use what it has, and `proposed`
+  // without `revealed` is the entitlement gate doing its job.
   await logEvent(service, env.adventureId, sessionId, 'npc_reply', {
     npc_id: npcId, addressed: output.addressPc, revealed: gate.allowed, tone: output.tone,
+    held: knowledge.map((k) => k.candidate.id),
+    proposed: output.reveals,
   })
 
   // An accepted leave executes (F14: nothing else ends a social scene in full-AI): the NPC
