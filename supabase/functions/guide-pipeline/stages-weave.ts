@@ -122,6 +122,33 @@ async function reclassifyGroupNpcs(env: StageEnv): Promise<void> {
     assertOk(error, 'group chapter reclassification failed')
   }
 
+  // THE PROSE OUTLIVES THE ROW. Everything above cleans the STRUCTURED references - npc_ids,
+  // ingredient placements, both registries - and none of it touches what the scenes SAY. A node
+  // keeps its label "Present Warden Selk with the evidence of the Cursed Silver" after Selk stops
+  // existing, and the narrator, reading the scene it was given, stages him: 7 of 26 narrations in
+  // run 15fc82be, one of them handing him spoken dialogue.
+  //
+  // Reported rather than rewritten, deliberately. Repairing this prose means an LLM rewrite per
+  // node, and the stage-7 repair loop was deleted this same day precisely because model rewrites
+  // of guide prose made guides worse in 8 of 8 measured cases. A warning the creator can act on is
+  // worth more than an edit nobody can trust. The runtime half is covered separately: canon now
+  // tells the narrator a force is not a person, so a surviving label is far less likely to become
+  // a speaking character.
+  const proseWarnings: { node: string; name: string }[] = []
+  if (removed.length > 0) {
+    const { data: nodeRows, error: nodeError } = await env.db
+      .from('story_nodes')
+      .select('key, label, narration_seed')
+      .eq('adventure_id', env.adventure.id)
+    assertOk(nodeError, 'group-check story_nodes load failed')
+    for (const node of (nodeRows ?? []) as { key: string; label: string; narration_seed: string }[]) {
+      const blob = `${node.label ?? ''} ${node.narration_seed ?? ''}`
+      for (const gone of removed) {
+        if (blob.includes(gone.name)) proseWarnings.push({ node: node.key, name: gone.name })
+      }
+    }
+  }
+
   const warningRows = groups.map((n) => ({
     adventure_id: env.adventure.id,
     stage: 6,
@@ -138,12 +165,25 @@ async function reclassifyGroupNpcs(env: StageEnv): Promise<void> {
     // Auto-removed rows are a record of a fix; a kept (human-edited) row needs a human.
     kind: n.human_edited ? 'warning' : 'info',
   }))
-  const { error: warnError } = await env.db.from('guide_warnings').insert(warningRows)
+  const proseWarningRows = proseWarnings.map(({ node, name }) => ({
+    adventure_id: env.adventure.id,
+    stage: 6,
+    target_table: 'story_nodes',
+    target_id: null,
+    message: `${GROUP_WARNING_PREFIX}scene "${node}" still names "${name}" in its label or opening, but ` +
+      `that NPC row was removed as a group. Nothing can stage, voice or track them, so the scene reads ` +
+      `as though someone is there who is not. Rewrite the scene around a named individual, or around ` +
+      `the force itself rather than a person.`,
+    kind: 'warning',
+  }))
+  const { error: warnError } = await env.db.from('guide_warnings').insert([...warningRows, ...proseWarningRows])
   assertOk(warnError, 'group warnings insert failed')
 
   await logPipelineEvent(env.db, env.adventure.id, 'group_npc_reclassified', {
     removed: removed.map((n) => n.name),
     kept_human_edited: groups.filter((n) => n.human_edited).map((n) => n.name),
+    // Named so the size of the residue is on the record, not just its existence.
+    orphaned_scenes: proseWarnings.map((p) => `${p.node}:${p.name}`),
   })
 }
 
