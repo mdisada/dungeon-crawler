@@ -389,7 +389,33 @@ Deliberately NOT chosen: a narration lock. It can stall a turn behind a dead wor
 failure mode `TYPING_STALE_MS` exists to clean up after, and this system has been bitten by locked
 tables twice already.
 
-## Why a run takes 14 minutes on a "fast" model (lead, not a conclusion)
+## Where a turn's time actually goes - MEASURED 2026-07-29, and the obvious theory was wrong
+
+Instrumented (`takeStatePerf` in util.ts, `perf_state_io` events) and run on 9a5f87a6, 40 play
+requests:
+
+| | | |
+|---|---|---|
+| request time | 480s | 100% |
+| model latency | 218s | **45%** |
+| **state I/O** | **21s** | **4%** |
+| unaccounted | 241s | **50%** |
+
+**The state-blob theory below was wrong and is disproven.** `adventure_state` is read ~16 times and
+written ~6 times per request, but each costs 25ms and 31ms respectively - the blob is 21.8 KB, not
+the 35-48 KB extrapolated from finished adventures, and there were ZERO write conflicts. Moving the
+apply into Postgres would buy back 4% of a turn. Do not build it.
+
+Half the request is still unexplained. The instrument only counted `adventure_state`, because that
+was the theory being tested; every OTHER query is invisible to it - party characters, locations,
+npcs, event_log reads and writes, story_nodes, beats, ingredients, proposals - plus one or two
+Realtime broadcast POSTs per state write (~360 of them in this run). That is where to look next,
+and the instrument should be widened rather than deleted.
+
+Worth keeping in mind before optimising anything: at 45%, model latency is now the single largest
+share, and `npc_agent` is its most expensive role at 5.25s mean against the narrator's 1.79s.
+
+## Why a run takes 14 minutes on a "fast" model (superseded by the section above)
 
 From run e8a51f01 (30 turns, flash-lite flattened, 14.0 min, $0.081):
 
@@ -410,6 +436,28 @@ it cannot shorten the chain.
 Worth a look when this is picked up: `summarizer` is the single most-called role at 1.5 per turn
 (46 calls, more than the narrator's 29), and it is not obvious why a turn needs one and a half
 summaries.
+
+## Plumbing pass, 2026-07-29 - verified on 9a5f87a6
+
+The first verification run ever done on a guide with PLACED nodes (6 of 9, only rescue nodes
+unplaced). Every earlier run this session used a pre-placement guide, so the travel guard, the pull
+framing and the divergence detector were inert in all of them - `guide_ready` reuse candidates are
+now all pre-placement, so testing that layer means generating a fresh guide. Placement runs on
+`beat_planner`, already flash-lite, so pinning costs nothing there.
+
+| check | before | after |
+|---|---|---|
+| echo suppression leaving a turn unanswered | 9 of 20 | **0 of 1** |
+| `narration_after_tail_kick` | 17 | **0** |
+| `engage_before_arrival` (travel guard) | never fired in a verification run | **2** |
+| `scene_location_diverged` | 0 (could not fire) | 0 (nothing diverged) |
+| `context_echo_stripped` | n/a | 0 - no leak occurred, so the guard is UNEXERCISED |
+
+Still true and still unexplained: **0 objectives completed**, in this run and in every run today.
+Beats open (4) and milestones credit (3), but nothing finishes an objective. That is the next thing
+worth chasing, and it is not a narration problem.
+
+Also unresolved and now seen again: "1 of 30 turns were rejected by the API".
 
 ## Measured vs assumed
 
