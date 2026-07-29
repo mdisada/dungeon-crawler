@@ -25,6 +25,7 @@ import {
 import type { CharacterRow } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
 import { applySceneEffects } from './scene-director.ts'
+import { setScene } from './state.ts'
 import { openSocialEncounter } from './social-encounter.ts'
 import { runAdhocDesigner } from './story-agents.ts'
 import { noteSuspicion } from './steward.ts'
@@ -130,6 +131,39 @@ async function nodeAffordances(
     const af = a as Record<string, unknown>
     return typeof af.key === 'string' ? [{ key: af.key, hint: String(af.hint ?? '') }] : []
   })
+}
+
+/**
+ * The place this beat's scene happens, when the party is NOT there yet - otherwise null.
+ *
+ * Null covers every "act here" case: a rescue node (deliberately unplaced, it happens wherever the
+ * party stands), a legacy guide with no node placement, and the ordinary case of already being in
+ * the right room. Only a scene with a location the party has not reached answers with a name.
+ */
+async function sceneAwaitingArrival(
+  service: SupabaseClient,
+  adventureId: string,
+  beatId: string | null,
+): Promise<{ locationId: string; name: string; partyAt: string; partyName: string } | null> {
+  if (!beatId) return null
+  const { data: beat } = await service.from('beats').select('node_id').eq('id', beatId).maybeSingle()
+  const nodeId = (beat?.node_id as string | null) ?? null
+  if (!nodeId) return null
+  const { data: node } = await service.from('story_nodes').select('location_id').eq('id', nodeId).maybeSingle()
+  const locationId = (node?.location_id as string | null) ?? null
+  if (!locationId) return null
+
+  const { state } = await loadState(service, adventureId)
+  const partyAt = state.scene.locationId ?? ''
+  if (!partyAt || partyAt === locationId) return null
+
+  const { data: place } = await service.from('locations').select('name').eq('id', locationId).maybeSingle()
+  return {
+    locationId,
+    name: (place?.name as string | undefined) ?? 'where it happens',
+    partyAt,
+    partyName: state.scene.locationName || 'where they were',
+  }
 }
 
 export async function handleCutsceneIntent(
@@ -309,6 +343,50 @@ async function executeEntry(
 
   if (entry === 'offered') {
     const offered = spec!
+    // YOU CANNOT ACT ON A SCENE YOU HAVE NOT REACHED (2026-07-29).
+    //
+    // A node carries the place it happens, and openAuthoredNode narrates a "pull" when the party is
+    // elsewhere - but it publishes that node's affordances regardless, and this branch then opened
+    // the encounter wherever the party happened to be standing. So the prose said they had not
+    // travelled while the chips said they could act as though they had.
+    //
+    // Live run a6ed7df4: the party never travelled to the Harbourmaster's Office, yet Eilam Marsh
+    // answered them through the door, met Bram's eyes "through the doorway", and a player typed "I
+    // slam my hand on the desk, rattling the ledgers" - all from Pier Nine. `scene_location_diverged`
+    // fired, recording the fiction inside a room the state had never entered.
+    //
+    // Enforced HERE rather than on the chips because free text routes through the same mapper: a
+    // chip-only fix is bypassed by typing the action out. Chips are presentation; this is the gate.
+    //
+    // Resolves as TRAVEL, never as a refusal. Refusing is what killed the Maren beat - the encounter
+    // returned null, the beat went stillborn, and the party paid its setback for a scene nobody
+    // saw. The beat stays open and its affordances stay valid; the party simply has to arrive first.
+    const awaiting = await sceneAwaitingArrival(service, env.adventureId, beatId)
+    if (awaiting) {
+      await logEvent(service, env.adventureId, sessionId, 'incident', {
+        kind: 'engage_before_arrival', node_key: offered.nodeKey ?? null,
+        scene_at: awaiting.name, party_at: awaiting.partyName,
+      }).catch(() => {})
+      // COMMIT the journey, do not merely describe it. Narrating "they set out" while leaving
+      // scene.locationId untouched would send the party straight back here on their next attempt,
+      // and the turn after that - a chip that can never be satisfied is worse than one that opens
+      // the wrong scene. Engaging a scene IS the decision to go to it; a DM would say "that's
+      // across town - you head over", and the node is authored at that place anyway, so this moves
+      // the party to somewhere the story already expects them.
+      await setScene(service, env.adventureId, env.creatorId, { location_id: awaiting.locationId })
+      await logEvent(service, env.adventureId, sessionId, 'scene_travel', {
+        location_id: awaiting.locationId, name: awaiting.name, proposed: awaiting.name,
+        via: 'engage_before_arrival',
+      }).catch(() => {})
+      await narrationBeat(
+        service, env, sessionId,
+        `The party sets out for ${awaiting.name} to act on "${offered.label}", leaving ` +
+          `${awaiting.partyName} behind. Narrate the journey and their arrival - but stop at the ` +
+          'threshold: do NOT begin the scene itself, and do NOT resolve anything.',
+        'Setting out',
+      )
+      return { status: 200, body: { ok: true, resolved: 'travelled', destination: awaiting.name } }
+    }
     if (offered.kind === 'combat') {
       await runCombatPlaceholderEncounter(
         service, env, sessionId, offered,
