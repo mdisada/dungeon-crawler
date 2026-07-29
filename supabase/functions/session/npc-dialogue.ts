@@ -485,13 +485,19 @@ export async function npcReply(
   const post = (await loadState(service, env.adventureId)).state
   if (post.encounter?.kind === 'social' && sessionId) {
     await recordSocialExchange(service, env, sessionId, utterance.actorCharacterId)
+    // NOT GATED ON A STAGED CAST (2026-07-29). This ran only when `dialogue.speakers` was
+    // non-empty, and the ceiling that force-closes a stuck conversation lives inside
+    // detectSocialExit - so an encounter with nobody staged could never reach it. That is the most
+    // stuck case there is, not the one to skip. `speakers` is the ROUTING field and is deliberately
+    // left empty on several paths, so this was reachable in ordinary play.
+    //
+    // detectSocialExit takes the staged ids only for the hostile-disposition check, which simply
+    // does not apply when nobody is on stage.
     const stagedIds = post.dialogue.speakers.map((sp) => sp.npcId)
-    if (stagedIds.length > 0) {
-      const detected = await detectSocialExit(service, env, sessionId, stagedIds)
-      if (detected) {
-        await endEncounter(service, env.adventureId, env.creatorId, { frameExit: 'skip' })
-        await resolveSocialExit(service, env, sessionId, detected.exit, detected.forced)
-      }
+    const detected = await detectSocialExit(service, env, sessionId, stagedIds)
+    if (detected) {
+      await endEncounter(service, env.adventureId, env.creatorId, { frameExit: 'skip' })
+      await resolveSocialExit(service, env, sessionId, detected.exit, detected.forced)
     }
   }
 }

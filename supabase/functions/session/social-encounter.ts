@@ -42,6 +42,46 @@ export const HOSTILE_EXIT_THRESHOLD = -8
  */
 export const SOCIAL_MAX_EXCHANGES = 8
 
+/**
+ * Turns a conversation may stay open, whether or not anybody actually spoke.
+ *
+ * The exchange ceiling only counts NPC REPLIES, so a party that stops talking to the NPC and
+ * starts searching the room ages the conversation not at all. Live run de468377: the final social
+ * encounter absorbed the last TWENTY turns of a 50-turn run and logged six exchanges - two short
+ * of the ceiling - so it never closed. That matters far more than the turns it wasted, because an
+ * open encounter is the condition three guards key on: the director floors its gentle rungs, blanks
+ * its rescue rung on `!state.encounter`, and route health calls the beat 'healthy' on the grounds
+ * that it is "still being played". The director escalated twice in fifty turns because it could not
+ * see a problem.
+ *
+ * Time spent is the honest measure of "this conversation has stopped being the way forward", and it
+ * cannot be gamed by silence.
+ */
+export const SOCIAL_MAX_TURNS = 12
+
+function turnCount(progress: Json | undefined): number {
+  if (typeof progress !== 'object' || progress === null || Array.isArray(progress)) return 0
+  const raw = (progress as Record<string, Json>).turns
+  return typeof raw === 'number' ? raw : 0
+}
+
+/**
+ * One turn passed with this conversation open. Counted from the routing path so it ticks whether
+ * the party talked, searched, rolled or said nothing useful - see SOCIAL_MAX_TURNS.
+ */
+export async function ageSocialEncounter(
+  service: SupabaseClient,
+  adventureId: string,
+): Promise<void> {
+  const state = (await loadState(service, adventureId)).state
+  const encounter = activeEncounter(state)
+  if (encounter?.kind !== 'social') return
+  const turns = turnCount(encounter.progress) + 1
+  await commitDiffs(service, adventureId, () => [
+    { domain: 'encounter', patch: { progress: { turns } } },
+  ]).catch(() => {})
+}
+
 function exchangeCount(progress: Json | undefined): number {
   if (typeof progress !== 'object' || progress === null || Array.isArray(progress)) return 0
   const raw = (progress as Record<string, Json>).exchanges
@@ -233,7 +273,8 @@ export async function detectSocialExit(
     // A timeout is a PARTIAL outcome: something was achieved, the conversation simply stopped
     // being the way forward. Prefer the authored partial exit; fall back to failure only when
     // the designer wrote no partial at all.
-    if (exchangeCount(encounter.progress) >= SOCIAL_MAX_EXCHANGES) {
+    if (exchangeCount(encounter.progress) >= SOCIAL_MAX_EXCHANGES ||
+        turnCount(encounter.progress) >= SOCIAL_MAX_TURNS) {
       const partial = exits.find((e) => e.tier === 'partial') ?? null
       return { exit: partial, forced: true }
     }

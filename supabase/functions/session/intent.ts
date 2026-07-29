@@ -25,7 +25,7 @@ import {
   specFromCommandBody,
 } from './encounters.ts'
 import { handlePuzzleIntent, openPuzzleFromSpec } from './puzzle-encounter.ts'
-import { openSocialEncounter } from './social-encounter.ts'
+import { ageSocialEncounter, openSocialEncounter } from './social-encounter.ts'
 import {
   activePcIds, agentContextLines, appendLinesDiff, characterProfiles, loadCharacter,
   loadPartyCharacters, loadPlayContext, newLine, partySkillList, pendingDiffs, skillModifierFor,
@@ -227,6 +227,13 @@ export async function playerIntent(
     }
     // Assist with nobody staged keeps classifyIntent's verdict (free adjudication).
   }
+  // AGE AN OPEN CONVERSATION EVERY TURN, whatever the party did with it. The exchange counter
+  // only ticks on an NPC reply, so a party that stops talking and starts searching keeps a social
+  // encounter open indefinitely - and while it is open the director is blind (see SOCIAL_MAX_TURNS).
+  if (row.state.encounter?.kind === 'social') {
+    await ageSocialEncounter(service, adventureId).catch(() => {})
+  }
+
   // Variety/classifier bookkeeping wants the interpreted pillar, not the button pressed.
   const pillarKind = route === 'dialogue' || route === 'encounter_talk' || route === 'chat'
     ? 'say'
