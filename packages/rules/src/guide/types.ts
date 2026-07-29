@@ -108,6 +108,17 @@ export interface LocationDraft {
   name: string
   description: string
   imagePrompt: string
+  /**
+   * Examinable detail - what a player finds when they poke at this room (2026-07-29).
+   *
+   * 72% of folded player inputs are questions and examinations, and a location used to carry ONE
+   * sentence (measured: 134 chars each). The narrator had nothing to read, so it invented, and the
+   * invention was recorded nowhere for the next turn - which is the contradiction engine. This is
+   * the "features" half of a published module's boxed-text-plus-features shape.
+   */
+  features: { name: string; detail: string }[]
+  /** One or two sentences for arriving here, so travel reads as authored rather than improvised. */
+  arrivalLine: string
 }
 
 export type IngredientType = 'clue' | 'secret' | 'event' | 'item' | 'rumor'

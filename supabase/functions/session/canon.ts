@@ -123,6 +123,43 @@ async function establishedSoFar(service: SupabaseClient, adventureId: string): P
   return lines.slice(-MAX_ESTABLISHED)
 }
 
+
+/**
+ * WHAT IS IN THIS ROOM, as the guide wrote it (2026-07-29).
+ *
+ * 72% of folded player inputs are questions and examinations - "what's the pounding", "what's in
+ * the chest", "what did the notice say". A location carried ONE sentence (measured: 134 chars
+ * each), so there was nothing for the narrator to read and it invented; the invention was recorded
+ * nowhere, so the next turn dropped it or re-invented it differently. Authoring the features turns
+ * an examination from an invention into a LOOKUP, which is the only version of this that can be
+ * consistent.
+ *
+ * Only the party's CURRENT location - the rooms they are not standing in are not theirs to see,
+ * and that is the same rule pickReveal follows.
+ */
+async function hereFeatures(
+  service: SupabaseClient,
+  adventureId: string,
+  locationId: string | null,
+): Promise<string> {
+  if (!locationId) return ''
+  const { data } = await service
+    .from('locations')
+    .select('features')
+    .eq('adventure_id', adventureId)
+    .eq('id', locationId)
+    .maybeSingle()
+  const raw = (data?.features ?? []) as unknown
+  const feats = (Array.isArray(raw) ? raw : []).flatMap((f) => {
+    if (typeof f !== 'object' || f === null) return []
+    const o = f as Record<string, unknown>
+    const name = typeof o.name === 'string' ? o.name.trim() : ''
+    const detail = typeof o.detail === 'string' ? o.detail.trim() : ''
+    return name && detail ? [`${name} - ${detail}`] : []
+  })
+  return feats.length > 0 ? feats.slice(0, 6).join('; ') : ''
+}
+
 /**
  * Durable world facts only. Deliberately EXCLUDES: recent dialogue lines, the generating
  * prompt, retrieved memories (prose summaries, not verified state), and anything an agent
@@ -287,7 +324,12 @@ export async function buildCanon(
   // rules that used to travel with this text now live in the narrator's system prompt, where they
   // are sent once instead of re-explained on every call.
   const established = await establishedSoFar(service, adventureId)
+  const features = await hereFeatures(service, adventureId, state.scene.locationId ?? null)
   const story = [
+    // The authored contents of the room the party is standing in. Ahead of everything else because
+    // it is what a player is most likely to ask about next.
+    features ? `HERE   ${features} - authored detail: use it when they look, and do NOT invent ` +
+      'other fixtures or contents for this place.' : '',
     // The authored record of what has already happened, ahead of the flag list below: a sentence
     // the guide wrote beats a de-slugged fragment every time.
     established.length > 0 ? `STORY  ${established.join(' ')}` : '',

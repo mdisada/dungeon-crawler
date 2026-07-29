@@ -169,7 +169,7 @@ async function sceneAwaitingArrival(
   service: SupabaseClient,
   adventureId: string,
   beatId: string | null,
-): Promise<{ locationId: string; name: string; partyAt: string; partyName: string } | null> {
+): Promise<{ locationId: string; name: string; arrivalLine: string; partyAt: string; partyName: string } | null> {
   if (!beatId) return null
   const { data: beat } = await service.from('beats').select('node_id').eq('id', beatId).maybeSingle()
   const nodeId = (beat?.node_id as string | null) ?? null
@@ -182,10 +182,14 @@ async function sceneAwaitingArrival(
   const partyAt = state.scene.locationId ?? ''
   if (!partyAt || partyAt === locationId) return null
 
-  const { data: place } = await service.from('locations').select('name').eq('id', locationId).maybeSingle()
+  const { data: place } = await service
+    .from('locations').select('name, arrival_line').eq('id', locationId).maybeSingle()
   return {
     locationId,
     name: (place?.name as string | undefined) ?? 'where it happens',
+    // Authored at stage 4 (2026-07-29) so arriving reads as written rather than improvised. Empty
+    // on guides that predate it, which degrades to the previous behaviour.
+    arrivalLine: (place?.arrival_line as string | undefined) ?? '',
     partyAt,
     partyName: state.scene.locationName || 'where they were',
   }
@@ -461,7 +465,11 @@ async function executeEntry(
         service, env, sessionId,
         `The party sets out for ${awaiting.name} to act on "${offered.label}", leaving ` +
           `${awaiting.partyName} behind. Narrate the journey and their arrival - but stop at the ` +
-          'threshold: do NOT begin the scene itself, and do NOT resolve anything.',
+          'threshold: do NOT begin the scene itself, and do NOT resolve anything.' +
+          // The authored arrival, so the end of the journey is the guide's words and not an
+          // invention. bac9f4b9 improvised one and produced a cart ride "leaving Ashbridge" out of
+          // an underground chamber, arriving at Toll House to be shown a different building.
+          (awaiting.arrivalLine ? ` Their arrival, as written - work it in: ${awaiting.arrivalLine}` : ''),
         'Setting out',
       )
       return { status: 200, body: { ok: true, resolved: 'travelled', destination: awaiting.name } }

@@ -128,6 +128,8 @@ Rules:
 - Every scene's cast and places must exist: create the NPCs and locations the scene sketches imply. Mark the chapter's main villain (if present here) as role "boss".
 - "initial_state" is where the NPC stands when play BEGINS: "alive" (default), "dead", or "absent" (alive but not reachable yet). A murder victim, or anyone the premise says is already dead or missing, MUST NOT be "alive" - the live game will otherwise stage them and have them speak.
 - Reuse existing NPCs/locations by their key instead of duplicating them.
+- Every location needs "features": 3-5 things in it a player might point at and examine, each with the DETAIL they find on looking closely. This is the single most-used thing you will author: players spend most of their turns asking about and examining the room, and anything you do not write here the narrator has to invent on the spot - which is where contradictions come from. Write what is THERE and what it tells them ("the bellows: the leather is new, replaced within the month, though the foundry has cast nothing in a year"), never a puzzle solution and never a secret the chapter is saving.
+- Every location needs an "arrival_line": one or two sentences for the moment the party gets here, written so it works whether they walked, were sent, or arrived in a hurry.
 - Keys are short lowercase slugs unique in this response, e.g. "npc:volgarth", "loc:sunken-chapel".
 - image_prompt fields describe the visual for later image generation (style-neutral, concrete).
 - Every NPC gets a lightweight "combat" block so it can appear in combat: pick an "archetype"
@@ -143,7 +145,9 @@ ${coopRules}
 Respond with ONLY a JSON object, no prose, in exactly this shape:
 {
   "npcs": [ { "key": "npc:...", "name": "...", "role": "npc"|"boss", "initial_state": "alive"|"dead"|"absent", "personality": { "traits": "...", "voice": "...", "wants": "..." }, "faction": "...", "description": "...", "image_prompt": "...", "combat": { "cr": "1/4", "archetype": "brute"|"skirmisher"|"sniper"|"caster"|"leader"|"minion", "skills": ["Perception"], "attack": "Rusty Cutlass" } } ],
-  "locations": [ { "key": "loc:...", "name": "...", "description": "...", "image_prompt": "..." } ],
+  "locations": [ { "key": "loc:...", "name": "...", "description": "...", "image_prompt": "...",
+                   "arrival_line": "...",
+                   "features": [ { "name": "the bellows", "detail": "what a character finds on looking closely" } ] } ],
   "coop_sets": [ { "key": "coop:...", "kind": "split_knowledge"|"complementary_obstacle", "reveals": "the combined conclusion once pooled" } ],
   "ingredients": [ { "type": "clue"|"secret"|"event"|"item"|"rumor", "content": { "text": "..." }, "placement": { "location_key": "...", "npc_key": "...", "condition": "..." }, "reveals": "...", "pillar_tags": ["social"], "reveals_to": null | {"skill":"..."} | {"class":"..."} | {"background_tag":"..."}, "coop_set_key": null | "coop:...", "objective_numbers": [1] } ]
 }`
@@ -261,11 +265,23 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
   const locations: LocationDraft[] = c.arr(root.locations, '$.locations', 0, 15).map((raw, i) => {
     const path = `$.locations[${i}]`
     const l = c.obj(raw, path)
+    // Features and arrival line are THIN, NOT FATAL - the same treatment narration_seed gets.
+    // A guide that ships without them behaves exactly as guides did before 2026-07-29; failing a
+    // paid generation over an omitted field is the worse outcome, and the pattern this file
+    // already follows everywhere else.
+    const features = c.arr(l.features ?? [], `${path}.features`, 0, 6).flatMap((f, fi) => {
+      const feat = c.obj(f, `${path}.features[${fi}]`)
+      const name = typeof feat.name === 'string' ? feat.name.trim() : ''
+      const detail = typeof feat.detail === 'string' ? feat.detail.trim() : ''
+      return name && detail ? [{ name, detail }] : []
+    })
     return {
       key: c.str(l.key, `${path}.key`),
       name: c.str(l.name, `${path}.name`),
       description: c.str(l.description, `${path}.description`),
       imagePrompt: c.str(l.image_prompt, `${path}.image_prompt`),
+      features,
+      arrivalLine: typeof l.arrival_line === 'string' ? l.arrival_line.trim() : '',
     }
   })
 

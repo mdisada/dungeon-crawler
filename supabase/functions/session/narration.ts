@@ -131,6 +131,48 @@ async function outcomeGuard(
  */
 export const OUTCOME_CLAIM_CHECK: 'off' | 'shadow' | 'enforce' = 'enforce'
 
+
+/**
+ * THE MACHINE MUST NOT SPEAK IN THE FICTION'S VOICE (2026-07-29).
+ *
+ * NARRATOR_BASE has said "Never mention dice, rolls, checks, or game mechanics" since it was
+ * written, and the prose still reaches the player carrying the engine's vocabulary:
+ *
+ *   "The failure clings to you like the foundry dust"        (bac9f4b9 #5)
+ *   "The first setback already cost you... Now the second settles in"   (bc918319 #13)
+ *
+ * Which is the whole lesson of this session in one line: an instruction the model can quietly
+ * ignore is not a limit. So this is the shape that has actually held here - claimGuard and
+ * outcomeGuard - deterministic detection, one constrained regeneration, and keep the prose if the
+ * second attempt is no better. A guaranteed-bad canned line is worse than an odd word.
+ *
+ * Word-boundary matched, and deliberately narrow: these are terms with no innocent use in second-
+ * person present-tense fiction. "fail" and "failed" are NOT here - "you fail to shift it" is
+ * perfectly good prose; "the failure" as a noun the player possesses is not.
+ */
+const MECHANICAL_VOCAB = /(the failure|a failure|setbacks?|the check|a check|skill check|dice|die roll|rolled?|d20|encounter|objectives?|tier|milestones?|hit points?|HP|DC)/i
+
+async function mechanicsGuard(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  draft: string,
+  regenerate: (constraint: string) => Promise<string>,
+): Promise<string> {
+  const hit = MECHANICAL_VOCAB.exec(draft)
+  if (!hit) return draft
+  await logEvent(service, env.adventureId, sessionId, 'incident', {
+    kind: 'mechanical_vocab_in_prose', term: hit[0], draft: draft.slice(0, 200),
+  }).catch(() => {})
+  const second = await regenerate(
+    `NEVER use the words "${hit[0]}" or any other game-machinery vocabulary - no failure, setback, ` +
+    'check, roll, dice, encounter, objective, tier, milestone, hit points or DC. The player is ' +
+    'reading a story, not a record of a game. Say what happened in the fiction instead.',
+  ).catch(() => draft)
+  // Keep whichever is clean; a second offence keeps the prose rather than a mechanical fallback.
+  return MECHANICAL_VOCAB.test(second) ? draft : second
+}
+
 /**
  * Characters from outside the adventure's language, published to the player (2026-07-28).
  *
@@ -565,6 +607,8 @@ export async function publishNarration(
     text = await claimGuard(service, env, sessionId, text, canon, (constraint) =>
       runNarrator(env, grounded, constraint, style))
     text = await outcomeGuard(service, env, sessionId, text, state, (constraint) =>
+      runNarrator(env, grounded, constraint, style))
+    text = await mechanicsGuard(service, env, sessionId, text, (constraint) =>
       runNarrator(env, grounded, constraint, style))
     let verdict = await runConsistency(env, text, canon.npcs, canon.npcStates, canon.text, { restrictions: canon.restrictions })
     if (!verdict.ok) {

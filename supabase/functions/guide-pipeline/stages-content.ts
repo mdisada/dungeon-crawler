@@ -170,6 +170,11 @@ export async function runStage4(env: StageEnv, chapterId: string): Promise<void>
           name: l.name,
           description: l.description,
           image_prompt: l.imagePrompt,
+          // Examinable detail and the arrival line (2026-07-29). A location used to carry ONE
+          // sentence, and 72% of folded player inputs are questions and examinations about the
+          // room - so the narrator invented, and inventions are recorded nowhere.
+          features: l.features as unknown as Json,
+          arrival_line: l.arrivalLine,
         })),
       )
       .select('id')
