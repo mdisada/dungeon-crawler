@@ -8,9 +8,10 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import type { Json } from '../_shared/state/index.ts'
 import { runEntryMapper } from './agents.ts'
-import type { AgentEnv, SceneEffects } from './agents.ts'
+import type { AgentEnv, EntryKind, SceneEffects } from './agents.ts'
 import { loadLoops, planAndOpenBeat } from './beats.ts'
-import { activeLoop } from '../_shared/story/index.ts'
+import { activeLoop, seeksInformation } from '../_shared/story/index.ts'
+import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import {
   handleChallengeIntent, openSkillChallengeFromSpec, parseStoredBeatSpec, runCombatPlaceholderEncounter,
 } from './encounters.ts'
@@ -228,13 +229,26 @@ export async function handleCutsceneIntent(
       .eq('adventure_id', env.adventureId)
       .eq('type', 'entry_mapped')
       .order('id', { ascending: false })
-      .limit(3),
+      // Was 3, which is shorter than the stall it exists to notice: the audited runs hold streaks
+      // of eight consecutive folds, and a 3-row window cannot count past three of them.
+      .limit(12),
   ])
+  const recentEntries = (recentEntryRows.data ?? []) as { payload: Record<string, Json> }[]
   // Anti-circling context (playtest 2026-07-20): the mapper sees what it already folded in,
-  // so "I walk forward" a second time reads as commitment, never another fold.
-  const recentFolds = ((recentEntryRows.data ?? []) as { payload: Record<string, Json> }[])
+  // so "I walk forward" a second time reads as commitment, never another fold. Still the most
+  // RECENT three - a longer list of quoted text dilutes the prompt rather than sharpening it.
+  const recentFolds = recentEntries
     .filter((e) => e.payload.entry === 'fold_in' && typeof e.payload.text === 'string')
+    .slice(0, 3)
     .map((e) => (e.payload.text as string).slice(0, 100))
+  // The stall SHAPE the repeat rule above is blind to: eight different questions in a row circle
+  // just as hard as one question asked eight times, and look nothing alike. Rows are newest-first,
+  // so this counts back from now until the last reply that was not folded.
+  let foldStreak = 0
+  for (const e of recentEntries) {
+    if (e.payload.entry !== 'fold_in') break
+    foldStreak++
+  }
 
   let mapping
   try {
@@ -248,6 +262,7 @@ export async function handleCutsceneIntent(
       knownNpcs: ((npcRows.data ?? []) as { name: string }[]).map((n) => n.name),
       recentEvents: agentContextLines(state, 5),
       recentFolds,
+      foldStreak,
       affordances,
     })
   } catch (err) {
@@ -272,7 +287,13 @@ async function executeEntry(
   character: CharacterRow,
   text: string,
   entry: 'offered' | 'adhoc' | 'fold_in',
-  mapping: { interpretation: string; sceneEffects: SceneEffects | null; affordanceKey?: string | null },
+  mapping: {
+    interpretation: string
+    sceneEffects: SceneEffects | null
+    affordanceKey?: string | null
+    /** The mapper's OWN verdict, before the no-spec downgrade below rewrote it. */
+    entry?: EntryKind
+  },
   spec: StoredBeatSpec | null,
   beatId: string | null,
   party: CharacterRow[],
@@ -282,10 +303,19 @@ async function executeEntry(
   // intent (a real off-script move railroaded into an affordance, or an on-script reply bounced
   // to adhoc) is the mapper's remaining failure mode - this is what makes it measurable in the
   // lab instead of anecdotal.
+  //
+  // `mapper_entry` and `had_offer` are what separate the two very different stories behind a
+  // fold (2026-07-29). A fold can mean the MODEL judged the reply to be colour, or it can mean the
+  // model said "offered" and the downgrade above rewrote it because no spec was on offer. Those
+  // want opposite fixes, and the log recorded neither - answering "which was it?" across six runs
+  // needed a three-way join of event_log, beats and encounter_resolved to reconstruct. It is one
+  // field. (The answer, for the record: 50 of 78 folds were the model's own call.)
   if (!opts?.alreadyLogged) {
     await logEvent(service, env.adventureId, sessionId, 'entry_mapped', {
       entry, character_id: character.id, beat_id: beatId, text: text.slice(0, 200),
       affordance_key: mapping.affordanceKey ?? null, via: 'mapper',
+      mapper_entry: mapping.entry ?? entry, had_offer: spec !== null,
+      hook_kind: spec?.kind ?? null,
     })
   }
   await recordProposal(service, {
@@ -503,12 +533,45 @@ async function executeEntry(
     }
   }
 
+  // ASKING AND LOOKING ARE PLAY, AND MUST BE ABLE TO PAY (2026-07-29).
+  //
+  // Audited across six runs, 76% of mapped intents fold (78 of 102) - and 64% of those folds
+  // happened with a live encounter spec on offer, so this is the mapper's own verdict, not the
+  // `offered && !spec` downgrade above. Reading what was folded says why: 37% are questions about
+  // the fiction and 35% are examinations. The mapper is RIGHT about all of them; they change
+  // nothing about where the party stands. The taxonomy is what has no room for them, so the
+  // commonest thing players do in a cutscene wrote nothing and the Progress Director ended up
+  // driving the story alone (in ac78e517: 16 player intents, 9 director actions, 0 objectives).
+  //
+  // So consult the location reveal gate the same way a successful search does. Everything that
+  // makes that gate safe still applies unchanged - it refuses clues placed anywhere but this
+  // room, refuses already-discovered ones, honours affinity binding, and hands back at most one.
+  // What differs is only the entitlement: the deliberate act of examining the authored room IS
+  // the attempt. `ingredient_revealed` is already spine progress, so a question that lands now
+  // resets the stall counters the same as any other real move.
+  //
+  // Best-effort throughout: a clue that fails to surface must never cost the player their turn.
+  let discoveryFragment = ''
+  if (seeksInformation(text)) {
+    try {
+      const { state: now } = await loadState(service, env.adventureId)
+      const reveals = await discoverAtLocation(
+        service, env, sessionId,
+        { locationId: now.scene.locationId ?? null, actorCharacterId: character.id, checkPassed: true },
+        'cutscene_inquiry',
+      )
+      discoveryFragment = discoveryNote(reveals)
+    } catch (err) {
+      console.error('cutscene inquiry discovery failed', err)
+    }
+  }
+
   // fold_in: the action happens and CARRIES the party forward - a folded reply must never
   // read as the story circling back to a question already answered (playtest 2026-07-20).
   await narrationBeat(
     service, env, sessionId,
     `Carry this forward: ${character.name} - ${text}. Let it actually happen and MOVE the ` +
-      `scene with it - describe what changes as they act.${sceneNote} Never re-ask a question ` +
+      `scene with it - describe what changes as they act.${sceneNote}${discoveryFragment} Never re-ask a question ` +
       'the party already answered and never re-offer directions they already chose; if the ' +
       'fiction has one way onward, take them along it and give the in-fiction reason it is ' +
       'the way.' +

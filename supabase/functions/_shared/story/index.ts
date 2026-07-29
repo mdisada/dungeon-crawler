@@ -36,6 +36,7 @@ export {
 export type {
   DifficultyPreset, PacingGroup, PacingKnob, PacingKnobKey, PacingOverrides, PacingProfile,
 } from './pacing.ts'
+export { seeksInformation } from './asking.ts'
 export { pickReveal } from './reveals.ts'
 export { isSpineProgress, progressedSince as spineProgressed } from './progress-signal.ts'
 export type { ProgressEvent } from './progress-signal.ts'

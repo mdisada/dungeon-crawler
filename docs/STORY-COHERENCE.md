@@ -144,6 +144,7 @@ node tests/lab/guide-audit.mjs <adventure_id>       # prose vs structure: names,
 node tests/lab/guide-dump.mjs <adventure_id>        # the whole guide in reading order
 node tests/lab/transcript.mjs <adventure_id>        # a run's story, interleaved with structural events
 node tests/lab/name-provenance.mjs <adv> <Name>     # which pipeline stage first wrote a name
+node tests/lab/entry-audit.mjs <adv> [<adv> ...]    # where cutscene inputs went: fold rate, why, and what shape
 ```
 
 `guide-audit` reports prose heuristics, not proofs. Read every finding before believing it - four
@@ -202,8 +203,30 @@ instead of starting over; a conversation ages by turns and its ceiling is no lon
 
 ## Open, in the order I would take them
 
-1. **`fold_in` dominance.** 10 of 15 mapped intents were absorbed without advancing anything. Pure
-   investigation, no paid runs, and it is the progression bottleneck.
+1. ~~**`fold_in` dominance.**~~ **Diagnosed and fixed at the source 2026-07-29; UNMEASURED until a
+   run.** It reproduces everywhere - 76% of mapped intents fold (78 of 102 across six runs), not
+   10-of-15 in one - but the cause was not the mapper misfiling and not the `offered && !spec`
+   downgrade, which accounts for only 28 of the 78. **50 folds happened with a live spec on
+   offer**, and reading them says why: 37% are questions about the fiction, 35% are examinations.
+   The mapper is right about every one of them. The taxonomy is what has no bucket for
+   investigation, so the commonest thing players do in a cutscene wrote nothing, and the Progress
+   Director drove the story alone (ac78e517: 16 player intents, 9 director actions, 0 objectives
+   completed - the ladder reaching `replan_beat` and `guaranteed_route` is what hid this, because
+   the story kept moving).
+
+   Fixed: a folded question or examination now consults the location reveal gate exactly as a
+   successful search does (`seeksInformation` + `discoverAtLocation`), so asking can surface an
+   authored clue placed in the room and score `ingredient_revealed` - already spine progress. The
+   gate is unchanged and still refuses clues placed elsewhere. Also: the anti-circling guard only
+   ever caught the same push worded twice, and the real stall shape is eight DIFFERENT questions
+   in a row, so the mapper is now told the fold streak; and `entry_mapped` records `mapper_entry` /
+   `had_offer`, because answering "the model's call or the downgrade?" needed a three-way join
+   across three tables when it should have been one field.
+
+   Still open here: 9% of folds are physical actions absorbed as colour - "I shove Rosten Vale
+   aside and grab Selka's pen" during a live combat hook. Suspect the `when unsure between adhoc
+   and fold_in, prefer fold_in` tiebreaker in `ENTRY_SYSTEM`. Untouched, because changing it
+   trades one bias for another and wants a measured run first.
 2. **Concurrency.** 2-5 narrations per run land under 9s apart and contradict each other. The last
    piece of the original complaint. Serialize FIRST - a faster model narrows the collision window
    without closing it - then use authored transitions to precompute the likely next opening.
@@ -218,6 +241,8 @@ instead of starting over; a conversation ages by turns and its ceiling is no lon
 
 Assumed, and worth proving before relying on: the narrator removal rule (prompt only, no detector);
 the `CAST (at X)` line actually improving prose; the travel guard's cost in turns beyond the single
-observed firing.
+observed firing; every part of the fold fix above - the reveal-on-inquiry path, the fold-streak
+line, and whether either actually moves the 76%. Re-run `entry-audit.mjs` after the next play; it
+now reads `mapper_entry`/`had_offer` directly instead of reconstructing them.
 
 Never diagnosed: "N turns were rejected by the API" (1/50, 3/31, 4/20 across runs).

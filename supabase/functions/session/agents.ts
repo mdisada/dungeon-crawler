@@ -897,6 +897,14 @@ export interface EntryContext {
   /** Recently folded-in replies - a repeat/continuation of one of these must not fold again. */
   recentFolds: string[]
   /**
+   * How many replies in a row have folded (2026-07-29).
+   *
+   * `recentFolds` only catches CIRCLING - the same push worded twice - and the real stall shape is
+   * not repetition, it is variety: streaks of eight consecutive folds in the audited runs, every
+   * one a different question or examination, none of which the repeat rule could ever see.
+   */
+  foldStreak: number
+  /**
    * The authored node's affordances (2026-07-26). When present the mapper's job shrinks from
    * open judgment to MATCHING against a closed menu: which authored way in is this, or none.
    */
@@ -917,6 +925,13 @@ export async function runEntryMapper(env: AgentEnv, ctx: EntryContext): Promise<
     `Recent events: ${ctx.recentEvents.join(' | ') || 'none'}`,
     ctx.recentFolds.length > 0
       ? `Already folded in (a repeat or continuation of these is COMMITMENT - never fold_in again): ${ctx.recentFolds.map((f) => `"${f}"`).join(' | ')}`
+      : '',
+    // Said as a fact about the table, not as an instruction to force engagement: the party may be
+    // legitimately investigating, and railroading them out of that is the failure mode on the
+    // other side. It is the model's call - it simply now knows how long this has been going on.
+    ctx.foldStreak >= 3
+      ? `The last ${ctx.foldStreak} replies in a row were folded in as colour and moved nothing. ` +
+        'If this one reaches for anything at all, it is engagement - fold it only if it genuinely is not.'
       : '',
     // The closed menu. Matching an authored way in is a far narrower question than judging
     // engagement in the abstract, and every option here is one the scene was BUILT to handle.

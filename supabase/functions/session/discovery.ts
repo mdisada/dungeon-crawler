@@ -30,6 +30,8 @@ export async function discoverAtLocation(
   env: AgentEnv,
   sessionId: string | null,
   ctx: DiscoveryContext,
+  /** What earned the clue - kept on the event so each entitlement stays measurable separately. */
+  source = 'location_search',
 ): Promise<string[]> {
   if (!ctx.checkPassed || !ctx.locationId) return []
 
@@ -66,7 +68,7 @@ export async function discoverAtLocation(
   assertOk(updateError, 'ingredient discover failed')
   for (const id of ids) {
     await logEvent(service, env.adventureId, sessionId, 'ingredient_revealed', {
-      ingredient_id: id, location_id: ctx.locationId, to: ctx.actorCharacterId, source: 'location_search',
+      ingredient_id: id, location_id: ctx.locationId, to: ctx.actorCharacterId, source,
     })
   }
   return found.map((f) => f.reveals).filter(Boolean)
