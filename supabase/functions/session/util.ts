@@ -88,14 +88,62 @@ export interface StateRow {
   state_version: number
 }
 
+/**
+ * State I/O accounting for one request (2026-07-29, TEMPORARY - see the note below).
+ *
+ * Measured on run e8a51f01: only 24% of a turn's wall clock is spent waiting on models (204s of
+ * 840s). The other 62% of turn time - 10.6s of every 17.1s - is unaccounted for, and the leading
+ * theory is this module: `state` is a single 35-48 KB JSONB blob, 70-76% of it the dialogue
+ * transcript, and every write is a read-modify-write of the whole thing. `state_version` reached
+ * 243 in 30 turns, so roughly 8 of those cycles per turn, moving ~640 KB to record changes that
+ * are individually tiny (`typingDiff(false)` flips one boolean and costs 80 KB of traffic).
+ *
+ * That is a THEORY. context-window.ts already proved the same instinct right for prompts - "it is
+ * the PAYLOAD, not the length of the agent chain" - but this codebase's own rule is to read before
+ * believing an instrument, and the last two efficiency theories in this session were both wrong on
+ * first inspection. So: measure, then decide whether to move the apply into Postgres.
+ *
+ * DELETE THIS once the question is answered. It is instrumentation, not a feature.
+ */
+interface StatePerf {
+  reads: number
+  readMs: number
+  writes: number
+  writeMs: number
+  conflicts: number
+  /** Serialized size of the state, sampled ONCE per request - measuring it is not free either. */
+  bytes: number
+}
+
+let statePerf: StatePerf = { reads: 0, readMs: 0, writes: 0, writeMs: 0, conflicts: 0, bytes: 0 }
+
+/** Read and reset the counters. Called once per request by index.ts. */
+export function takeStatePerf(): StatePerf {
+  const sample = statePerf
+  statePerf = { reads: 0, readMs: 0, writes: 0, writeMs: 0, conflicts: 0, bytes: 0 }
+  return sample
+}
+
 export async function loadState(service: SupabaseClient, adventureId: string): Promise<StateRow> {
+  const startedAt = Date.now()
   const { data, error } = await service
     .from('adventure_state')
     .select('state, state_version')
     .eq('adventure_id', adventureId)
     .maybeSingle()
+  statePerf.reads++
+  statePerf.readMs += Date.now() - startedAt
   assertOk(error, 'state load failed')
-  if (data) return { state: data.state as GameState, state_version: Number(data.state_version) }
+  if (data) {
+    // Sampled once: JSON.stringify on a 40 KB object is cheap but not free, and doing it on every
+    // read would have this instrument distorting the very number it exists to measure.
+    if (statePerf.bytes === 0) {
+      try {
+        statePerf.bytes = JSON.stringify(data.state).length
+      } catch { /* size is diagnostic only */ }
+    }
+    return { state: data.state as GameState, state_version: Number(data.state_version) }
+  }
   return { state: initialGameState(), state_version: 0 }
 }
 
@@ -146,6 +194,7 @@ export async function applyAndBroadcast(
   const nextVersion = before.state_version + 1
 
   // Optimistic lock on the version we read: a concurrent writer makes this a 0-row update.
+  const startedAt = Date.now()
   const { data: updated, error } = await service
     .from('adventure_state')
     .update({
@@ -156,8 +205,15 @@ export async function applyAndBroadcast(
     .eq('adventure_id', adventureId)
     .eq('state_version', before.state_version)
     .select('state_version')
+  statePerf.writes++
+  statePerf.writeMs += Date.now() - startedAt
   assertOk(error, 'state write failed')
-  if (!updated || updated.length === 0) throw new Error('state write conflict (stale state_version)')
+  if (!updated || updated.length === 0) {
+    // Counted separately: a conflict means commitDiffs re-reads and re-writes the whole blob
+    // again, so a high conflict rate would be its own answer to "where does the time go".
+    statePerf.conflicts++
+    throw new Error('state write conflict (stale state_version)')
+  }
 
   const playerDiffs = diffs.filter((d) => d.domain !== 'dm')
   const dmDiffs = diffs.filter((d) => d.domain === 'dm')

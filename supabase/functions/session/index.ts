@@ -4,6 +4,7 @@
 // pipeline (router, Adjudicator, NPC dialogue, proposals, pending-check lifecycle). Every
 // state mutation is service-role and server-validated; this function is the one writer.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { corsHeaders } from '../_shared/cors.ts'
 import { idleNudgeAction } from './beats.ts'
@@ -11,7 +12,7 @@ import { hintAction } from './hints.ts'
 import { debugUsage } from './debug.ts'
 import { labInspect, labList } from './lab-inspect.ts'
 import { playerIntent } from './intent.ts'
-import { runStoryProgressTail } from './progress.ts'
+import { flushParkedTails, runStoryProgressTail } from './progress.ts'
 import { endSession, manualCheckpoint, restoreCheckpoint, startSession } from './lifecycle.ts'
 import { activate, admit, join, leave, pickCharacter, regenInvite, setReady } from './membership.ts'
 import { narrateNext } from './narration.ts'
@@ -20,6 +21,7 @@ import { createGenericNpc, endEncounter, startSocial } from './social-staging.ts
 import { decideProposal } from './proposals.ts'
 import { claimAssist, resolvePending, rollPending } from './prompts.ts'
 import { demoStep, moveIntent, resync, setScene } from './state.ts'
+import { takeStatePerf } from './util.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
@@ -37,6 +39,11 @@ type ActionResult = { status: number; body: Record<string, unknown> }
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
   if (req.method !== 'POST') return json(405, { error: 'Method not allowed' })
+
+  const requestStartedAt = Date.now()
+  let perfAction = 'unknown'
+  let perfAdventureId = ''
+  let perfService: SupabaseClient | null = null
 
   try {
     const authHeader = req.headers.get('Authorization') ?? ''
@@ -87,6 +94,9 @@ Deno.serve(async (req) => {
     const body = await req.json()
     const action: string = body.action
     const adventureId: string = body.adventure_id
+    perfAction = action
+    perfAdventureId = adventureId
+    perfService = service
 
     const requireAdventure = (): ActionResult | null =>
       adventureId ? null : { status: 400, body: { error: 'adventure_id required' } }
@@ -243,5 +253,51 @@ Deno.serve(async (req) => {
   } catch (err) {
     console.error(err)
     return json(500, { error: err instanceof Error ? err.message : 'Internal error' })
+  } finally {
+    // THE TAIL STARTS WHEN THE REQUEST STOPS TALKING (2026-07-29).
+    //
+    // The story-progress head parks its tail instead of kicking it (see parkTail), because the
+    // head returning is not the request being over - the caller goes on to narrate, and the tail
+    // worker cannot see it. This is the one place that knows the request is genuinely done.
+    //
+    // In `finally`, so a tail is never lost to a thrown action: the tail carries the beat re-plan
+    // and the ending scores, and dropping it on an error would silently stall the story rather
+    // than fail loudly. And in `finally` rather than after the `return`, because kickTail
+    // registers `EdgeRuntime.waitUntil` and must do so while this worker is still alive.
+    //
+    // Never throws into the response: a failed kick is already logged as `tail_kick_failed`.
+    try {
+      flushParkedTails()
+    } catch (err) {
+      console.error('tail flush failed', err)
+    }
+
+    // TEMPORARY state-I/O accounting - see takeStatePerf in util.ts, and delete both together.
+    // One extra event_log write per request, which is itself the cheap kind of write this exists
+    // to compare against. Fire-and-forget and fully swallowed: an instrument must never be able
+    // to fail the request it is measuring.
+    const perf = takeStatePerf()
+    if (perfService && perfAdventureId && perf.reads + perf.writes > 0) {
+      perfService
+        .from('event_log')
+        .insert({
+          adventure_id: perfAdventureId,
+          session_id: null,
+          type: 'perf_state_io',
+          payload: {
+            action: perfAction,
+            request_ms: Date.now() - requestStartedAt,
+            state_reads: perf.reads,
+            state_read_ms: perf.readMs,
+            state_writes: perf.writes,
+            state_write_ms: perf.writeMs,
+            write_conflicts: perf.conflicts,
+            state_bytes: perf.bytes,
+          },
+        })
+        .then(({ error }) => {
+          if (error) console.error('perf sample insert failed', error)
+        })
+    }
   }
 })

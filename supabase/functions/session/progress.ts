@@ -595,11 +595,71 @@ declare const EdgeRuntime: { waitUntil?: (p: Promise<unknown>) => void } | undef
  * WORKER_RESOURCE_LIMIT is a per-worker ceiling, not a timeout, so deferring within the same
  * worker would not help - only a new invocation gets a new budget.
  */
+/**
+ * Could this env hand its tail off at all? Demo adventures run canned agents - no cost, no
+ * resource pressure - and the $0 suites assert immediately after each intent, so deferring there
+ * would only introduce a race. Without service credentials there is nothing to call.
+ */
+function canKickTail(env: AgentEnv): boolean {
+  return !env.demo && Boolean(SUPABASE_URL) && Boolean(SUPABASE_SERVICE_ROLE_KEY)
+}
+
+/**
+ * Tails waiting for their request to stop narrating (2026-07-29). See `parkTail`.
+ *
+ * A QUEUE, not a slot. The edge runtime reuses an isolate across requests, so a single slot could
+ * be overwritten by a second request and silently drop a tail - and a lost tail costs a beat
+ * re-plan and an ending score. Draining a list cannot lose one. The residual race is that request
+ * B's flush may fire a tail A parked moments earlier; that still fires the RIGHT tail, since each
+ * carries its own env, session and context, just marginally early - which remains strictly better
+ * than the old behaviour of firing it before the narration instead of after.
+ */
+const parkedTails: { env: AgentEnv; sessionId: string; ctx: TailContext }[] = []
+
+/**
+ * Defer the tail until the REQUEST is finished, not merely the head (2026-07-29).
+ *
+ * `runStoryProgressHead` used to end with `if (kickTail(...)) return`, and returning from the head
+ * is not the same as the request being over: `evaluateStoryProgress` has 11 call sites and every
+ * one of them keeps working afterwards, holding an env that now says `tailKicked`. So the caller
+ * narrated while a second worker was already drafting the next scene, and neither could see the
+ * other. Measured: 20 narration pairs under 9s apart across seven runs, and 34
+ * `narration_after_tail_kick` incidents naming the offenders - 12 the director rung, 9 the climax,
+ * 6 an encounter close. director.ts alone kicks at rung >= 2 and then runs four narrating paths.
+ *
+ * Parking costs nothing. Nobody waits on the tail - it is background bookkeeping - so the only
+ * price is that the next scene starts being drafted a little later.
+ *
+ * Repeat parks for the same session MERGE rather than queue twice: several call sites can run a
+ * progress pass in one turn, and the tail is one "catch the story up" job, not one per pass.
+ */
+function parkTail(env: AgentEnv, sessionId: string, ctx: TailContext): void {
+  const existing = parkedTails.find((p) => p.env.adventureId === env.adventureId && p.sessionId === sessionId)
+  if (!existing) {
+    parkedTails.push({ env, sessionId, ctx })
+    return
+  }
+  existing.ctx = {
+    objectiveJustCompleted: existing.ctx.objectiveJustCompleted || ctx.objectiveJustCompleted,
+    questJustCompleted: existing.ctx.questJustCompleted || ctx.questJustCompleted,
+    // The rung that asked most recently is what the recognition judge should hear about.
+    recognitionRung: ctx.recognitionRung ?? existing.ctx.recognitionRung ?? null,
+  }
+}
+
+/**
+ * Fire every parked tail. Called once the request has published everything it is going to.
+ *
+ * Synchronous by design: `kickTail` registers its own `EdgeRuntime.waitUntil`, so this has to run
+ * while the worker is still alive - i.e. from a `finally`, before the Response is delivered.
+ */
+export function flushParkedTails(): void {
+  const due = parkedTails.splice(0, parkedTails.length)
+  for (const p of due) kickTail(p.env, p.sessionId, p.ctx)
+}
+
 function kickTail(env: AgentEnv, sessionId: string, ctx: TailContext): boolean {
-  // Demo adventures run canned agents: no cost, no resource pressure, and the $0 suites assert
-  // immediately after each intent - deferring there would only introduce a race.
-  if (env.demo) return false
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return false
+  if (!canKickTail(env)) return false
   const request = fetch(`${SUPABASE_URL}/functions/v1/session`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' },
@@ -774,7 +834,14 @@ async function runStoryProgressHead(
   }
 
   const ctx: TailContext = { objectiveJustCompleted, questJustCompleted, recognitionRung }
-  if (kickTail(env, sessionId, ctx)) return
+  // PARK, do not kick - see parkTail. The head returning is not the request being over, and
+  // everything this caller still narrates would otherwise race the tail worker.
+  if (canKickTail(env)) {
+    parkTail(env, sessionId, ctx)
+    return
+  }
+  // Demo and credential-less paths keep running the tail INLINE, exactly as before: it is
+  // synchronous, so it cannot collide with anything, and the $0 suites assert on it immediately.
   await runStoryProgressTail(service, env, sessionId, ctx)
 }
 

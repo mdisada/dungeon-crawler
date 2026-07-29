@@ -247,6 +247,13 @@ instead of starting over; a conversation ages by turns and its ceiling is no lon
    n=12 on a different adventure NEITHER IS EVIDENCE. Three or four more cheap runs settle it for
    about thirty cents; that is the cheapest real answer on this whole list.
 
+   **Measured across 3 more runs after deploy** (44 intents): fold rate 75%, essentially unchanged
+   from the 76% baseline - but that was never the target. The folds now PAY: **8 `cutscene_inquiry`
+   reveals** where there were 0, from 22 inquiries, a 36% landing rate matching the 33% the
+   historical replay predicted. The open item said folds were "absorbed without advancing
+   anything"; roughly a third of them now advance. Streaks of 8 persist, so the fold-streak prompt
+   line has NOT visibly worked - it is the one part of this still unproven.
+
    Still open here: 9% of folds are physical actions absorbed as colour - "I shove Rosten Vale
    aside and grab Selka's pen" during a live combat hook. Suspect the `when unsure between adhoc
    and fold_in, prefer fold_in` tiebreaker in `ENTRY_SYSTEM`. Untouched, because changing it
@@ -322,11 +329,61 @@ widen the condition: for `offered` the two narrations describe the same moment a
 right, but a `fold_in` narration is the answer to what the player just typed, and suppressing it
 leaves their turn unanswered. Different problem, different fix.
 
-Serialize instead, as the original note said. The kick belongs at the end of the REQUEST, not the
-end of the head: park it on `env` (a `pendingTail`) and fire it once in `index.ts` after the action
-result is built. That closes the window rather than narrowing it, and costs nothing, because the
-tail is already fire-and-forget and nobody is waiting on it. The only tradeoff is that the next
-scene starts being drafted slightly later.
+### What was built (2026-07-29) - and what it does NOT close
+
+Serialize, as the original note said. `runStoryProgressHead` now PARKS its tail (`parkTail` in
+progress.ts) and `index.ts` fires every parked tail from a `finally`, which is the one place that
+knows the request is genuinely done. A queue rather than a slot, because the edge runtime reuses
+isolates and a single slot could be overwritten and silently drop a tail - and a lost tail costs a
+beat re-plan and an ending score. Demo and credential-less paths still run the tail INLINE exactly
+as before, so the $0 suites are untouched.
+
+**Read the next measurement carefully, because this closes one of two races.**
+
+- **Same-request (closed).** Turn N's own narration racing the tail turn N kicked. This was the
+  whole of the 34 `narration_after_tail_kick` incidents, and that counter is the clean metric: it
+  should now sit at ~0, because nothing narrates on an env after its tail is kicked.
+- **Cross-request (open, and possibly slightly worse).** Turn N's tail racing turn N+1's
+  narration. Those are different workers and no `env` connects them, so parking cannot help - and
+  because the tail now STARTS later, it is marginally more likely to still be running when the
+  next turn arrives. If the `<9s` pair count drops but not to zero, this is why.
+
+Closing the cross-request race means holding `typing` across the tail, and that was tried and
+reverted on 2026-07-21: it turned every turn arriving mid-tail into a 409 and lost 6 of 26. Do not
+re-try it without a different idea. `sceneAlreadyOpened` is the existing partial mitigation and is
+gated to `entry === 'offered'`.
+
+### THE `<9s` METRIC IS INVALID ON CHEAP RUNS - read this before measuring concurrency again
+
+Measured after the fix, 3 runs, 114 narrations:
+
+| metric | pre-fix (6 runs) | post-fix (3 runs) |
+|---|---|---|
+| `narration_after_tail_kick` | 17 | **0** |
+| narration pairs <9s apart | 19 / 241 (7.9%) | 11 / 114 (9.6%) |
+
+Only the first row means anything. **The `<9s` rule assumes a narration takes 9-33s to write** -
+continuity-probe.mjs says so in its own header, and that is where `CONCURRENT_S = 8` comes from.
+The premise is that a line published within 8s of the previous one was *drafted before that one
+existed*. On flattened flash-lite a narration takes **1.35s**, so two perfectly sequential,
+causally-ordered narrations land 2-8s apart and are indistinguishable from concurrent ones. The
+post-fix runs are all flash-lite; the pre-fix set is a mix of pinned and unpinned. The comparison
+is confounded, and the apparent "increase" is an artifact.
+
+Verified by reading rather than assumed, which is the only reason it was caught: both
+"contradictions" the probe reported in `30e840d5` are false positives. One is
+`"The old harbourmaster's office groans around you"` -> `"You wrench open the cellar door"`, which
+is the party walking through a door - the probe's own header warns about exactly this and relies on
+`CONCURRENT_S` to exclude it. The other quotes `"before you"` -> `"as you step forward"`, neither of
+which is a location at all; it should have abstained.
+
+So: **the concurrency fix cannot be validated on cheap runs**, and neither can the contradiction
+rate. Either run deployed defaults (where narration is slow again and the 8s premise holds), or
+measure something timing-independent. One already exists and is the row that moved:
+`narration_after_tail_kick` is causal, not temporal, and it went to zero.
+
+If continuity-probe is to keep working on cheap runs, `CONCURRENT_S` must be derived from the
+run's measured narrator latency rather than hard-coded at 8.
 
 Deliberately NOT chosen: a narration lock. It can stall a turn behind a dead worker, which is the
 failure mode `TYPING_STALE_MS` exists to clean up after, and this system has been bitten by locked
