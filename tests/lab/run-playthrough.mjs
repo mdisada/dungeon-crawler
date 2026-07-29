@@ -9,7 +9,7 @@ import { createRunLogger } from './lab-log.mjs'
 import { checkInvariants } from './invariants.mjs'
 import { completeActiveObjective } from './autocomplete.mjs'
 import { generatePlayerTurn, pickQuality } from './player-agent.mjs'
-import { act, createConfirmedUser, pipeline, seededRng, serviceRest, signIn, sleep } from './shared.mjs'
+import { act, createConfirmedUser, describeError, pipeline, seededRng, serviceRest, signIn, sleep } from './shared.mjs'
 
 const FALLBACK = 'The attempt is resolved; the outcome stands.'
 /** Turns between mid-run spine checks. Cheap (2 reads); the point is failing in minutes. */
@@ -464,7 +464,7 @@ export async function executeRun(run) {
       status: (await cancelled().catch(() => false)) ? 'cancelled' : 'failed',
       finished_at: new Date().toISOString(),
       spent_usd: await spentUsd().catch(() => 0),
-      error: String(err?.message ?? err).slice(0, 500),
+      error: describeError(err).slice(0, 500),
     }).catch(() => {})
     throw err
   }

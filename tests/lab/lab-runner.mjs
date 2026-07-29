@@ -8,7 +8,7 @@
 //
 // PAID: every run spends real OpenRouter credits, bounded per run by config.budget_usd.
 import { executeRun } from './run-playthrough.mjs'
-import { serviceRest, sleep } from './shared.mjs'
+import { describeError, serviceRest, sleep } from './shared.mjs'
 
 const POLL_MS = 3000
 
@@ -28,7 +28,7 @@ async function execute(run) {
     const summary = await executeRun(run)
     console.log(`=== done in ${((Date.now() - started) / 60000).toFixed(1)}min - $${summary.spend.total_usd.toFixed(4)} ===`)
   } catch (err) {
-    console.error(`=== FAILED: ${err?.message ?? err} ===`)
+    console.error(`=== FAILED: ${describeError(err)} ===`)
   }
 }
 

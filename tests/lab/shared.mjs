@@ -25,8 +25,35 @@ const admin = {
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-/** Retry the TRANSPORT only - an HTTP error response is the caller's business. */
-export async function withRetry(label, fn, attempts = 4) {
+/**
+ * Node's fetch reports EVERY transport failure as the same opaque `TypeError: fetch failed`, and
+ * puts the fact worth knowing - ECONNRESET vs ENOTFOUND vs UND_ERR_HEADERS_TIMEOUT - on `.cause`.
+ * Every layer here then logged `err.message`, so six lab runs died with a one-line error that
+ * cannot be acted on and nobody ever learned which failure it was.
+ */
+export function describeError(err) {
+  const chain = []
+  for (let cur = err, depth = 0; cur && depth < 5; depth++, cur = cur.cause) {
+    const code = cur.code ? ` [${cur.code}]` : ''
+    const where = cur.address ? ` ${cur.address}${cur.port ? `:${cur.port}` : ''}` : ''
+    chain.push(`${cur.name ?? 'Error'}: ${cur.message ?? String(cur)}${code}${where}`)
+  }
+  return chain.join('  <-  ')
+}
+
+/**
+ * Retry the TRANSPORT only - an HTTP error response is the caller's business.
+ *
+ * Eight attempts, backoff capped at 30s: 1+2+4+8+16+30+30 = ~91 seconds of tolerance. It was four
+ * attempts, which is 1+2+4 = SEVEN SECONDS, and that is shorter than any real network
+ * interruption - a wifi reconnect, a laptop waking, a router blip. Six lab runs died with "fetch
+ * failed" at 6.8, 10.4, 11.7 and 19.9 minutes, timings with no pattern except that something
+ * briefly went away, and each one threw away a 20-40 minute paid run to ride out something that
+ * would have cleared in under a minute.
+ *
+ * Waiting 90 seconds to save a 25-minute run is trivially the right trade.
+ */
+export async function withRetry(label, fn, attempts = 8) {
   let lastError
   for (let i = 0; i < attempts; i++) {
     try {
@@ -36,10 +63,15 @@ export async function withRetry(label, fn, attempts = 4) {
       const transient = err instanceof TypeError ||
         /fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(err?.message ?? err))
       if (!transient) throw err
-      await sleep(1000 * 2 ** i)
+      // Every attempt is reported, not just the last. A run that survives on attempt 3 looks
+      // identical to one that never stumbled, so the fact that the transport is degrading -
+      // which is what precedes the failures - has been invisible.
+      console.error(`  [retry ${i + 1}/${attempts}] ${label}: ${describeError(err)}`)
+      await sleep(Math.min(1000 * 2 ** i, 30_000))
     }
   }
-  throw lastError
+  // Named so the run row says WHICH call gave up, not just that something did.
+  throw new Error(`${label} failed after ${attempts} attempts: ${describeError(lastError)}`, { cause: lastError })
 }
 
 export async function serviceRest(method, path, payload) {

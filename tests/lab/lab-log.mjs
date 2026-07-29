@@ -4,7 +4,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
-import { serviceRest } from './shared.mjs'
+import { describeError, serviceRest } from './shared.mjs'
 
 export function createRunLogger(runId, logPath) {
   mkdirSync(dirname(logPath), { recursive: true })
@@ -38,7 +38,7 @@ export function createRunLogger(runId, logPath) {
       log(phase, fn, label, { ...detail, ...(result?.logDetail ?? {}) }, Date.now() - started)
       return result
     } catch (err) {
-      log(phase, fn, `${label} FAILED`, { ...detail, error: String(err?.message ?? err) }, Date.now() - started)
+      log(phase, fn, `${label} FAILED`, { ...detail, error: describeError(err) }, Date.now() - started)
       throw err
     }
   }
