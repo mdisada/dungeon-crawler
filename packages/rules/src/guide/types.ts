@@ -73,6 +73,16 @@ export interface ObjectiveDraft {
   title: string
   hiddenDescription: string
   completionPredicates: Json
+  /**
+   * `main` = a plot point, rendered for the player so they can see where the story is. It becomes
+   * true regardless of how its routes went and can never be failed. `side` = an optional thread
+   * that can genuinely be lost, where losing only colours the story.
+   *
+   * See docs/DECISIONS.md 2026-07-29. Defaults to `main` on parse: the safe direction is "cannot
+   * be failed", because a side objective wrongly marked main costs a losable thread, while a main
+   * one wrongly marked side can strip a fact the plot depends on.
+   */
+  kind: 'main' | 'side'
 }
 
 /**

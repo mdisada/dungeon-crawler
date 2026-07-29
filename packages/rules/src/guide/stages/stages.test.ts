@@ -213,6 +213,47 @@ describe('stage 3 (objectives + predicates)', () => {
     expect(result.ok).toBe(true)
   })
 
+  it('defaults an unlabelled objective to kind main - the safe direction (2026-07-29)', () => {
+    // A side thread wrongly marked main costs a losable thread; a plot point wrongly marked side
+    // lets the spine lose a fact later objectives assume. Only the second one breaks stories.
+    const result = parseStage3(JSON.stringify({
+      objectives: [{ title: 'Reach the drowned quay', hidden_description: 'The way in.', completion_predicates: { flag: 'quay_reached', eq: true } }],
+    }))
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data[0].kind).toBe('main')
+  })
+
+  it('keeps an authored side objective', () => {
+    const result = parseStage3(JSON.stringify({
+      objectives: [
+        { title: 'Recover the pawned locket', kind: 'side', hidden_description: 'Optional colour.', completion_predicates: { flag: 'locket_recovered', eq: true } },
+        { title: 'Break the Drowned Accord', kind: 'main', hidden_description: 'The climax.', completion_predicates: { flag: 'accord_broken', eq: true } },
+      ],
+    }))
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.map((o) => o.kind)).toEqual(['side', 'main'])
+  })
+
+  it('refuses a climax the party is allowed to lose', () => {
+    // The last objective is what earns an ending. It can never be the losable one.
+    const result = parseStage3(JSON.stringify({
+      objectives: [
+        { title: 'Find the ledger', kind: 'main', hidden_description: 'Setup.', completion_predicates: { flag: 'ledger_found', eq: true } },
+        { title: 'Recover the locket', kind: 'side', hidden_description: 'Optional.', completion_predicates: { flag: 'locket_recovered', eq: true } },
+      ],
+    }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.join(' ')).toMatch(/climax and must be kind "main"/)
+  })
+
+  it('refuses a chapter with no spine at all', () => {
+    const result = parseStage3(JSON.stringify({
+      objectives: [{ title: 'Recover the locket', kind: 'side', hidden_description: 'Optional.', completion_predicates: { flag: 'locket_recovered', eq: true } }],
+    }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.join(' ')).toMatch(/at least one objective must be kind "main"/)
+  })
+
   it('accepts an event-only predicate as claimable (2.1)', () => {
     const result = parseStage3(JSON.stringify({
       objectives: [{

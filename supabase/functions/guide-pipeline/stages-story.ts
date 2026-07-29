@@ -152,8 +152,12 @@ export async function runStage3(env: StageEnv, chapterId: string): Promise<void>
       title: o.title,
       hidden_description: o.hiddenDescription,
       completion_predicates: o.completionPredicates,
+      // main = a plot point that becomes true however its routes went and can never be failed;
+      // side = an optional thread that can be lost, where losing only colours the story.
+      // See docs/DECISIONS.md 2026-07-29.
+      kind: o.kind,
     })),
-  ).select('id, title, hidden_description, completion_predicates')
+  ).select('id, title, hidden_description, completion_predicates, kind')
   assertOk(insertError, 'objectives insert failed')
 
   // Guaranteed routes (overhaul Phase 4): a code-authored rescue encounter per objective,

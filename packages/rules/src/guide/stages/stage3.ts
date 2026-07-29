@@ -92,8 +92,10 @@ ${ctx.adventureType === 'one_shot'
     ? `- Earlier chapters already cover these - do NOT repeat or re-word any of them: ${(ctx.priorObjectiveTitles ?? []).join(' | ')}.
 `
     : ''}
+- "kind" is "main" or "side". MAIN is a PLOT POINT: something the story requires to happen, shown to the player so they know where they are in it. The party cannot fail a main objective - however their scenes go, it becomes true, and how it went changes only the flavour, the price and which ending they steer toward. SIDE is an optional thread that can genuinely be lost, where losing it changes nothing later depends on. Default to "main". Author a "side" objective ONLY when the adventure reads exactly the same without it - if any later objective assumes it happened, it is main. The LAST objective is the climax and is always "main".
+
 Respond with ONLY a JSON object, no prose, in exactly this shape:
-{ "objectives": [ { "title": "...", "hidden_description": "...", "completion_predicates": { ... } } ] }`
+{ "objectives": [ { "title": "...", "kind": "main", "hidden_description": "...", "completion_predicates": { ... } } ] }`
 
   const sceneList = ctx.scenes.map((s, i) => `Scene ${i + 1}: ${s.sketch}`).join('\n')
   // Stage 1's entity registry, which this prompt used to withhold. Without it the only way to
@@ -170,12 +172,28 @@ export function parseStage3(raw: string): ParseResult<ObjectiveDraft[]> {
         // residue warning a human had to read. Form check, bound here at the author.
         c.errors.push(`${path}.hidden_description: ends mid-thought ("...${hiddenDescription.slice(-30)}") - finish the sentence`)
       }
+      // main vs side (2026-07-29). A main objective is a PLOT POINT - it becomes true however its
+      // routes went and can never be failed; a side objective is an optional thread that can be
+      // lost, where losing only colours the story. Absent reads as `main`, which is the safe
+      // direction: a side thread wrongly marked main costs a losable thread, while a plot point
+      // wrongly marked side lets the spine lose a fact later objectives assume.
+      const kind = c.oneOf(o.kind ?? 'main', `${path}.kind`, ['main', 'side'] as const)
       return {
         title,
         hiddenDescription,
         completionPredicates: (o.completion_predicates ?? null) as ObjectiveDraft['completionPredicates'],
+        kind: (kind ?? 'main') as ObjectiveDraft['kind'],
       }
     })
+
+  // The ladder must be a spine, not a pile of optional threads. The climax in particular is what
+  // earns an ending, so it can never be the objective the party is allowed to lose.
+  if (objectives.length > 0 && objectives[objectives.length - 1].kind !== 'main') {
+    c.errors.push('$.objectives: the LAST objective is the climax and must be kind "main"')
+  }
+  if (objectives.length > 0 && !objectives.some((o) => o.kind === 'main')) {
+    c.errors.push('$.objectives: at least one objective must be kind "main" - the chapter needs a spine')
+  }
 
   const seen = new Set<string>()
   for (const objective of objectives) {

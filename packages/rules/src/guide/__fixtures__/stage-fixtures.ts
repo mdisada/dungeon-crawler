@@ -145,9 +145,9 @@ export const STAGE4_CONTEXT: Stage4Context = {
   chapterNumber: 1,
   scenes: STAGE3_CONTEXT.scenes,
   objectives: [
-    { title: 'Learn why the tide stopped', hiddenDescription: 'Connect tide to bells.', completionPredicates: null },
-    { title: "Find the salvagers' route", hiddenDescription: 'Route to the chapel.', completionPredicates: null },
-    { title: 'Deal with Mother Brine', hiddenDescription: 'Commit to a stance.', completionPredicates: null },
+    { title: 'Learn why the tide stopped', hiddenDescription: 'Connect tide to bells.', completionPredicates: null, kind: 'main' },
+    { title: "Find the salvagers' route", hiddenDescription: 'Route to the chapel.', completionPredicates: null, kind: 'main' },
+    { title: 'Deal with Mother Brine', hiddenDescription: 'Commit to a stance.', completionPredicates: null, kind: 'main' },
   ],
   requiredEntities: [
     { kind: 'npc', name: 'Mother Brine', note: 'salvager-priest antagonist' },
