@@ -181,6 +181,10 @@ export async function generateParsed<T>(
       system: prompt.system,
       user,
       maxTokens,
+      // Every guide-time call goes to the strong model (owner direction, 2026-07-29). The guide is
+      // authored once and inherited by every session played on it, so its quality compounds in a
+      // way a per-turn call's never does. See GUIDE_MODEL in _shared/model-routing.ts.
+      phase: 'guide',
     })
 
   const invocationStart = Date.now()

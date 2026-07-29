@@ -5,6 +5,7 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { isAgentRole, resolveModel } from './model-routing.ts'
+import type { ResolvePhase } from './model-routing.ts'
 
 const OPENROUTER_CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_EMBEDDINGS_URL = 'https://openrouter.ai/api/v1/embeddings'
@@ -72,6 +73,12 @@ export interface AgentTextCall {
   user: string
   maxTokens: number
   /**
+   * Which side of the app is calling. `guide` routes every role to the strong model - see
+   * GUIDE_MODEL in model-routing.ts for why the guide is worth paying for and a turn is not.
+   * Defaults to `play`, so only the guide pipeline needs to opt in.
+   */
+  phase?: ResolvePhase
+  /**
    * JSON Schema for the reply. Every curated model advertises `structured_outputs` (verified
    * against the OpenRouter models API, 2026-07-21), and the Settings picker only offers curated
    * models - but model_map is free-form jsonb, so a rejected schema falls back to the prose
@@ -122,7 +129,7 @@ export async function callAgentTextWithMeta(call: AgentTextCall): Promise<AgentT
     throw new AgentCallError('Guide generation requires the OpenRouter provider (local worker mode has no pipeline support yet)')
   }
   if (!isAgentRole(agentRole)) throw new AgentCallError(`Unknown agent_role: ${agentRole}`)
-  const model = resolveModel(agentRole, (settings.model_map as Record<string, string>) ?? {})
+  const model = resolveModel(agentRole, (settings.model_map as Record<string, string>) ?? {}, call.phase)
 
   const requestBody = (withReasoningOff: boolean, tokens: number, withSchema: boolean) =>
     JSON.stringify({

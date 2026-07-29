@@ -1301,3 +1301,73 @@ passed them by.
 split out of `graph-navigator.ts` so `progress.ts` can consult the graph without a cycle);
 `session/progress.ts`, `session/director.ts`, `session/graph-navigator.ts`,
 `guide-pipeline/stages-endings.ts`, `tests/lab/prove-guide.ts`.
+
+---
+
+## 2026-07-29 — Plot facts are established by PLAYING a beat, not by winning it
+
+**What:** The story spine becomes true because a beat was resolved, at any tier. Encounter outcome
+maps (`onSuccess` / `onPartial` / `onFailure`) stop carrying plot-satisfying atoms and carry only
+flavour: rewards, setbacks, and ending-steer. Objectives gain a `kind` (`main` | `side`), authored
+at guide time. A `main` objective is a plot point rendered for the player so they can see where the
+story is — it cannot be failed. A `side` objective is an optional thread that can be lost, and
+losing it only colours things.
+
+**Why:** Owner direction, and it COMPLETES the 2026-07-23 entry above rather than reversing it.
+That entry already stated the Adventurers League shape — "each Part ends with a Success/Failure box
+and *both* branches hand off to the next Part". The implementation only did half of it: the pointer
+advances on failure, but `failObjective` credits NO atoms, so the fact the beat existed to
+establish is never written. The plot pointer moves and the plot's ground truth does not.
+
+Measured 2026-07-29 across 103 story nodes in 12 guides:
+
+- 103 of 103 (100%) have an `onSuccess` atom that its objective NEEDS to complete.
+- 103 of 103 (100%) have NO plot-satisfying atom in `onFailure`.
+- 32 of 103 (31%) have an entirely empty `onFailure` — no price at all for going badly.
+
+So winning the encounter *was* the plot. Live in run 9a5f87a6 the party lost all three routes of
+objective 0 — the social route being unwinnable by construction (see below) — and the objective was
+retired `failed` with `marcus_vances_workshop_explored` never written, while its setbacks
+(`warden_suspicious`, `obvious_clues`) all fired. The price was recorded and the fact was not.
+
+That asymmetry is the whole defect, and it means the fix is small: the cost half already works.
+
+**Also found, and now reclassified:** 0 of 57 social route nodes across 23 guides have authored
+`params.exits`. `socialExits` reads a field the guide pipeline has never written, and
+`runSocialExitJudge` returns null before its model call when the list is empty — the same dead-judge
+shape as `runConsistency`. Every conversation ever played was a guaranteed loss. Under the old
+coupling that was plot-breaking; under this decision it is a FLAVOUR bug (every conversation reads
+as a defeat), still worth fixing, no longer an emergency.
+
+**Consequences:** `failObjective` must never apply to a `main` objective. Outcome-map authoring at
+stage 5 must exclude plot atoms, and a node must declare separately what it ESTABLISHES. The
+guide-time lint gains a coupling check. Existing guides carry the old coupling and are not
+migrated — they are pre-decision content.
+
+---
+
+## 2026-07-29 — Guide generation always uses the strong model
+
+**What:** Every guide-pipeline call resolves to `z-ai/glm-5.2`, via a new `phase: 'guide'` on
+`AgentTextCall` and a third argument to `resolveModel`. A user's explicit `model_map` entry still
+wins, which is what lets the lab pin a whole run to one model.
+
+**Why:** Owner direction. The guide carries the coherence burden by design — the plot is prewritten
+precisely so live play has less room to drift — and a weak premise or a mis-shaped node graph is
+inherited by every turn of every session played on that guide. Guides are also authored once and
+reused, so the cost amortises over whole playthroughs in a way a per-turn call never does.
+
+This supersedes the `beat_planner` demotion in the 2026-07-26 tiering FOR GUIDE TIME ONLY. That was
+a cost decision about "menu-picking work" and still holds for the live beat planner; it stops
+holding for the stage that authors the story graph, its seeds, its placement and its outcome maps.
+
+Phase-scoped rather than a flat tier change because `beat_planner` and `consistency_checker` serve
+both sides: promoting them globally would slow every turn, and model latency is already 45% of a
+turn's wall clock (measured, run 9a5f87a6).
+
+**Note:** `frontend/src/features/settings/model-routing.ts` mirrors the play-time defaults for the
+Settings UI and deliberately does NOT carry the phase argument — it displays what a role resolves
+to during play.
+
+**Updated:** `supabase/functions/_shared/model-routing.ts`, `_shared/llm.ts`,
+`guide-pipeline/runner.ts`.

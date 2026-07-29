@@ -96,7 +96,37 @@ export function isAgentRole(value: string): value is AgentRole {
   return value in SYSTEM_DEFAULT_MODEL_MAP
 }
 
-/** User's model_map entry wins; falls back to the MAIN-SPEC SS4.7 system default for the role. */
-export function resolveModel(agentRole: AgentRole, modelMap: Record<string, string>): string {
-  return modelMap[agentRole] ?? SYSTEM_DEFAULT_MODEL_MAP[agentRole]
+/**
+ * Which side of the app is asking (2026-07-29). Guide generation and live play share agent ROLES
+ * but not priorities, and until now they shared the tier table too - so `beat_planner`, demoted to
+ * flash-lite on cost grounds, authored the whole story graph on the cheap tier.
+ */
+export type ResolvePhase = 'play' | 'guide'
+
+/**
+ * EVERY guide-time call goes to the strong model (owner direction, 2026-07-29).
+ *
+ * The guide carries the coherence burden BY DESIGN: the plot is prewritten precisely so live play
+ * has less room to drift. A weak premise, a mis-shaped node graph or a missing outcome map cannot
+ * be linted back into a good one - it is inherited by every turn of every session ever played on
+ * that guide. And guides are generated once and reused, so the cost amortises over whole
+ * playthroughs in a way a per-turn call never does.
+ *
+ * This supersedes the beat_planner demotion above FOR GUIDE TIME ONLY. That was a cost decision
+ * about menu-picking work and it still holds for the LIVE beat planner; it stops holding for the
+ * stage that authors the story graph.
+ *
+ * A user's explicit `model_map` entry still wins, per the contract at the top of this file - that
+ * is what lets the lab pin an entire run to one model.
+ */
+const GUIDE_MODEL = 'z-ai/glm-5.2'
+
+/** User's model_map entry wins; then the phase default; then the MAIN-SPEC SS4.7 role default. */
+export function resolveModel(
+  agentRole: AgentRole,
+  modelMap: Record<string, string>,
+  phase: ResolvePhase = 'play',
+): string {
+  if (modelMap[agentRole]) return modelMap[agentRole]
+  return phase === 'guide' ? GUIDE_MODEL : SYSTEM_DEFAULT_MODEL_MAP[agentRole]
 }
