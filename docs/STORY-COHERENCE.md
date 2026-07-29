@@ -43,57 +43,53 @@ Rule 1 is largely enforced. Rule 2 is still the open work (see "Open", item 2).
 
 ---
 
-# In flight: plot facts decouple from encounter outcomes
+# Done 2026-07-29: plot facts decoupled from encounter outcomes
 
-Decided 2026-07-29 with the owner; see `DECISIONS.md` for the full entry. **This is the next thing
-to build and everything else is lower priority.**
+Decided with the owner; full entry in `DECISIONS.md`. **Built, deployed, and NOT yet verified live -
+see "What to do next".**
 
-## The defect, measured
+## What was wrong
 
-103 story nodes across 12 guides:
+103 story nodes across 12 guides: 103 of 103 had an `onSuccess` atom their objective NEEDED to
+complete, 103 of 103 credited no plot atom on failure, and 31% credited nothing at all on failure.
+Winning the encounter WAS the plot, which inverts the invariant.
+
+Live in 9a5f87a6 the party lost all three routes of objective 0 - the social one being unwinnable by
+construction - and it was retired `failed` with its plot atom never written, while every setback
+fired. **The price was recorded and the fact was not.** That asymmetry meant the cost half already
+worked, which is why the fix was small.
+
+## What was built
 
 | | |
 |---|---|
-| `onSuccess` carries an atom its objective NEEDS to complete | **103 / 103 (100%)** |
-| `onFailure` carries no plot-satisfying atom | **103 / 103 (100%)** |
-| `onFailure` is entirely empty | 32 / 103 (31%) |
+| `objectives.kind` (`main` \| `side`) | migration; authored at stage 3; climax must be main |
+| `story_nodes.establishes` | the objective's minimal satisfying set, DERIVED at stage 5 |
+| outcome maps | demoted to flavour - `onSuccess` is now empty on new guides |
+| `resolveOpenEncounter` | credits `establishes` on ANY tier, source `node_established` |
+| `failObjective` | refuses to fail a `main` objective |
+| stage 5 social `exits` | 2-4 per node, repaired not rejected, always a non-failure way out |
+| stage 5 call shape | ONE CALL PER OBJECTIVE (was per chapter - it hit the 4000-token cap) |
+| `OBJECTIVE_CREDIT_SOURCES` | `node_established` added - see the trap below |
 
-So winning the encounter *is* the plot. That contradicts the invariant directly.
+**The trap that nearly hid all of it:** the first run after building this had a perfect guide (9/9
+nodes with `establishes`, 3/3 social nodes with exits) and credited NOTHING - `established: []` on
+every resolution. The spine gate in `credit.ts` only lets an allow-list of "real deed" sources
+complete an objective, and `node_established` was not on it. Guide right, runtime right, tests
+green, run completed, an objective even completed - and the feature was inert. Only reading
+`objective_credit_blocked` in the event log found it.
 
-Live in run 9a5f87a6: the party lost all three routes of objective 0, it was retired `failed`, and
-`marcus_vances_workshop_explored` was never written - while its setbacks (`warden_suspicious`,
-`obvious_clues`) all fired. **The price was recorded and the fact was not.** That asymmetry is the
-whole defect, and it means the cost half already works.
+**Existing guides are NOT migrated.** They carry the old coupling and are pre-decision content, so
+the `guide_ready` reuse pool is useless for testing any of this - generate fresh.
 
-`failObjective` credits NO atoms. It flips `reveal_state='completed', outcome='failed'`, activates
-the next objective, and moves on. For a `main` objective that state should be unreachable.
+## What to do next
 
-## The build, in dependency order
-
-1. **`objectives.kind`** (`main` | `side`) - migration, then authored at stage 3, validated on parse.
-2. **`establishes` on a node** - what plot fact this beat makes true, authored at stage 5,
-   SEPARATE from the outcome maps and validated against the objective's atom menu.
-3. **Runtime: credit `establishes` on ANY resolution tier**, in `resolveOpenEncounter`, alongside
-   the tier's outcome map.
-4. **Runtime: `failObjective` never applies to a `main` objective.** Routes spent -> credit the
-   completion atoms, leave the already-fired setbacks standing, narrate it as achieved the hard way.
-5. **Social exits authored at guide time** (see below) - now flavour, not progression.
-6. **Lint: outcome maps must not contain plot-satisfying atoms.**
-
-**Existing guides are NOT migrated.** They carry the old coupling and are pre-decision content.
-Testing this needs freshly generated guides, which also invalidates the `guide_ready` reuse pool.
-
-## Social encounters can never be won
-
-0 of 57 social route nodes across 23 guides have authored `params.exits`. `socialExits` reads a
-field the guide pipeline has NEVER written, and `runSocialExitJudge` returns null before its model
-call when the list is empty - the same dead-judge shape as `runConsistency`. Null exit ->
-`exitTier(null)` -> `failed`. **Every conversation ever played was a guaranteed loss.**
-
-Under the old coupling that was plot-breaking. Under the decision above it is a FLAVOUR bug - every
-conversation reads as a defeat - still worth fixing, no longer an emergency.
-
----
+1. **ONE run on a freshly generated guide.** Two things have never executed live: the
+   `node_established` credit fix, and the per-objective stage 5 split. Check
+   `encounter_resolved.established` is non-empty on a FAILED tier - that is the whole decoupling in
+   one number - and that no `objective_credit_blocked` names `node_established`.
+2. Optional belt-and-braces: a lint that outcome maps carry no plot-satisfying atom. Low value now,
+   because stage 5 derives `onSuccess` as empty and the model cannot author it.
 
 # Traps: read before believing an instrument
 
@@ -244,7 +240,8 @@ last one's outcome; a conversation ages by turns and its ceiling is no longer sk
 
 ## Open, in the order I would take them
 
-1. **The decoupling build above.** Everything else waits on it.
+1. **Verify the decoupling live** - see "What to do next" above. It is built and deployed but two
+   pieces have never executed: the `node_established` credit fix and the stage-5 split.
 2. **The affordance lifecycle, steps 2-4.** Chips are still published for scenes elsewhere; the
    `PULLED -> PRESENT` transition still does not exist, so arriving never republishes a beat's real
    affordances; NPC-presence affordances untouched. Step 1 (the mapper guard) shipped and fires
@@ -258,8 +255,15 @@ last one's outcome; a conversation ages by turns and its ceiling is no longer sk
 6. **`runConsistency` is dead code** - `canon.restrictions` is always empty, so it returns ok before
    the model call. Repair it with real propositions or delete it.
 7. **Widen the perf instrumentation** to all queries; 50% of a request is unexplained.
-8. **31% of nodes have an empty `onFailure`** - no price at all for going badly. A flavour gap once
-   the decoupling lands.
+8. **31% of nodes have an empty `onFailure`** - no price at all for going badly. This matters MORE
+   now: since the plot advances either way, the outcome map is the only thing that distinguishes
+   winning from losing, so a node with an empty failure map is a scene where losing is free.
+9. **Nothing detects single-narrator canon drift** - a narrator contradicting what it established
+   four paragraphs earlier. Seen live in bc918319 (a forced door re-attributed from an unknown
+   intruder to an ally, destroying a clue) and 5a5e6c7f (a hidden compartment found, then "no
+   hidden compartments" one turn later). The continuity probe is location-and-concurrency only,
+   `runConsistency` is dead, and `scene_location_diverged` is necessarily narrow. **This is the
+   largest unmeasured coherence risk in the system.**
 
 ## Measured vs assumed
 
