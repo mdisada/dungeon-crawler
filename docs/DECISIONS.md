@@ -1371,3 +1371,39 @@ to during play.
 
 **Updated:** `supabase/functions/_shared/model-routing.ts`, `_shared/llm.ts`,
 `guide-pipeline/runner.ts`.
+
+---
+
+## 2026-07-29 — ...except the two guide roles where the strong model measurably makes things worse
+
+**What:** `beat_planner` and `encounter_designer` are exempt from the guide-phase strong-model
+default set earlier today. They resolve to their flash-lite system defaults at guide time as well as
+at play time. `story_director`, `ingredient_generator`, `hook_weaver` and `consistency_checker` keep
+glm-5.2 for guide work.
+
+**Why:** the first guide generated under the new routing FAILED. Stage 5 blew the edge function's
+~150s wall clock four times running and took the whole guide down. Same role, same task, measured:
+
+```
+google/gemini-2.5-flash-lite   4.7s   1006 output tokens   213 tok/s   (11 calls)
+z-ai/glm-5.2                  83.3s   4000 output tokens    48 tok/s
+```
+
+4.4x slower per token AND four times the output, landing exactly on the 4000-token cap - so the
+reply was also TRUNCATED. The promotion bought a cut-off answer and a failed generation, not
+quality. `encounter_designer` showed the same shape at 33-87s across six calls, adding ~5 minutes.
+
+These are the roles the 2026-07-26 tiering demoted for being schema-constrained, lint-gated
+menu-picking, and that argument is STRONGER after today: outcomes, transitions and `establishes` are
+now all code-derived, so the model writes fiction and picks from closed menus. The roles that
+actually shape a story keep the strong model, which is what the owner's direction was reaching for.
+
+**Consequences / known gap:** stage 5 authors a whole chapter's node graph in ONE call, and the
+truncation will bite on any model as guides grow. The real fix is one call per OBJECTIVE. Until
+that lands, this exemption is what keeps guide generation finishing at all.
+
+Also worth recording, because it cost a paid run: `pin_models: true` writes an explicit `model_map`,
+and an explicit entry beats the phase default - so it pins the GUIDE too. A lab run that wants a
+real guide must pass a PARTIAL `model_map` naming only the play-side roles.
+
+**Updated:** `supabase/functions/_shared/model-routing.ts`.

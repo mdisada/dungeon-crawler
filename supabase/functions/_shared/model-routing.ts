@@ -104,22 +104,50 @@ export function isAgentRole(value: string): value is AgentRole {
 export type ResolvePhase = 'play' | 'guide'
 
 /**
- * EVERY guide-time call goes to the strong model (owner direction, 2026-07-29).
+ * Guide-time calls go to the strong model (owner direction, 2026-07-29) - except the roles in
+ * GUIDE_MODEL_EXEMPT below, which measurement removed from it the same day.
  *
  * The guide carries the coherence burden BY DESIGN: the plot is prewritten precisely so live play
- * has less room to drift. A weak premise, a mis-shaped node graph or a missing outcome map cannot
- * be linted back into a good one - it is inherited by every turn of every session ever played on
- * that guide. And guides are generated once and reused, so the cost amortises over whole
- * playthroughs in a way a per-turn call never does.
- *
- * This supersedes the beat_planner demotion above FOR GUIDE TIME ONLY. That was a cost decision
- * about menu-picking work and it still holds for the LIVE beat planner; it stops holding for the
- * stage that authors the story graph.
+ * has less room to drift. A weak premise or a thin cast cannot be linted back into a good one - it
+ * is inherited by every turn of every session ever played on that guide. And guides are generated
+ * once and reused, so the cost amortises over whole playthroughs in a way a per-turn call never
+ * does.
  *
  * A user's explicit `model_map` entry still wins, per the contract at the top of this file - that
- * is what lets the lab pin an entire run to one model.
+ * is what lets the lab pin an entire run to one model. Note the consequence: `pin_models: true`
+ * pins the GUIDE too, so a lab run that wants a real guide must use a PARTIAL model_map naming
+ * only the play-side roles.
  */
 const GUIDE_MODEL = 'z-ai/glm-5.2'
+
+/**
+ * Guide-time roles the strong model is NOT worth paying for, measured 2026-07-29.
+ *
+ * `beat_planner` authors a whole chapter's node graph in ONE call. Same role, same task:
+ *
+ *   google/gemini-2.5-flash-lite   4.7s   1006 output tokens   213 tok/s   (11 calls)
+ *   z-ai/glm-5.2                  83.3s   4000 output tokens    48 tok/s
+ *
+ * 4.4x slower per token AND four times the output - landing exactly on the 4000-token cap, so the
+ * reply was TRUNCATED. Stage 5 then retried inside the same invocation and blew the edge function's
+ * ~150s wall clock four times running, taking the whole guide down with it. `encounter_designer`
+ * showed the same shape at 33-87s across six calls.
+ *
+ * So the promotion bought a cut-off answer and a failed generation, not quality. And these are
+ * precisely the roles the 2026-07-26 tiering demoted for being schema-constrained, lint-gated
+ * menu-picking - an argument that is STRONGER after 2026-07-29, because outcomes, transitions and
+ * `establishes` are now all code-derived and the model only writes fiction and picks from closed
+ * menus. The roles that actually shape the story - story_director, ingredient_generator,
+ * hook_weaver - keep the strong model.
+ *
+ * The real fix for stage 5 is to author one call per OBJECTIVE rather than per chapter; the
+ * truncation will bite on any model as guides grow. Until then this exemption is what keeps guide
+ * generation finishing at all.
+ */
+const GUIDE_MODEL_EXEMPT: ReadonlySet<AgentRole> = new Set<AgentRole>([
+  'beat_planner',
+  'encounter_designer',
+])
 
 /** User's model_map entry wins; then the phase default; then the MAIN-SPEC SS4.7 role default. */
 export function resolveModel(
@@ -128,5 +156,6 @@ export function resolveModel(
   phase: ResolvePhase = 'play',
 ): string {
   if (modelMap[agentRole]) return modelMap[agentRole]
-  return phase === 'guide' ? GUIDE_MODEL : SYSTEM_DEFAULT_MODEL_MAP[agentRole]
+  if (phase === 'guide' && !GUIDE_MODEL_EXEMPT.has(agentRole)) return GUIDE_MODEL
+  return SYSTEM_DEFAULT_MODEL_MAP[agentRole]
 }
