@@ -75,6 +75,16 @@ export async function deliverRung(
       service, env, sessionId,
       `${ground} ${pendingOffer?.giverName ?? 'The one who made the offer'} is still waiting on an ` +
         `answer about "${pendingOffer?.label ?? 'the job'}"${pendingOffer?.stakes ? ` - ${pendingOffer.stakes}` : ''}. ` +
+        // THE PRICE IS CANON, SO SAY IT (2026-07-29). This asked the giver to "restate what it is
+        // worth" without ever telling it what that was, so the narrator invented a figure. Live run
+        // a6ed7df4: Rosa Kell offered "forty gold" at narration #0, the director pressed at #4 and
+        // she said "twenty silver each", pressed again at #6 - "twenty silver" - and then paid out
+        // forty gold at #14, because the PAYOUT reads the staged offer and the press did not.
+        //
+        // The number has always been on the offer. The speaker was simply never handed it.
+        (typeof pendingOffer?.gold === 'number' && pendingOffer.gold > 0
+          ? `The agreed price is ${pendingOffer.gold} gold - state it EXACTLY, never a different figure or currency. `
+          : '') +
         'Have them press for a decision NOW, in character: restate what they need and what it is ' +
         'worth, make the cost of waiting concrete, and end by asking the party plainly whether ' +
         'they are in. Do not answer for them.',
