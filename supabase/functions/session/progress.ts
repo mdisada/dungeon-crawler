@@ -80,12 +80,15 @@ interface ObjectiveRow {
   completion_predicates: Json
   /** DM-only intent - the recognition judge's core context (what the objective is REALLY about). */
   hidden_description: string | null
+  /** 'main' = a plot point that cannot be failed; 'side' = an optional thread that can be lost.
+   *  Absent on rows written before 2026-07-29; the column defaults to 'main'. */
+  kind?: string | null
 }
 
 export async function orderedObjectives(service: SupabaseClient, adventureId: string): Promise<ObjectiveRow[]> {
   const [{ data: chapters }, { data: objectives }] = await Promise.all([
     service.from('chapters').select('id, index').eq('adventure_id', adventureId).order('index'),
-    service.from('objectives').select('id, chapter_id, index, title, reveal_state, outcome, guaranteed_route, completion_predicates, hidden_description').eq('adventure_id', adventureId),
+    service.from('objectives').select('id, chapter_id, index, title, reveal_state, outcome, guaranteed_route, completion_predicates, hidden_description, kind').eq('adventure_id', adventureId),
   ])
   const chapterOrder = new Map(((chapters ?? []) as { id: string; index: number }[]).map((c) => [c.id, c.index]))
   return ((objectives ?? []) as ObjectiveRow[]).sort((a, b) => {
@@ -274,6 +277,56 @@ export async function failObjective(
   const state = (await loadState(service, env.adventureId)).state
   const current = ordered.find((o) => o.id === state.objectives.currentId)
   if (!current || current.reveal_state !== 'active') return false
+
+  // A MAIN OBJECTIVE CANNOT BE FAILED (2026-07-29).
+  //
+  // It is a plot point rendered for the player, not a challenge with a pass/fail: the story is
+  // prewritten and linear, so it becomes true however the routes went. Only a `side` thread is
+  // genuinely losable, and losing one only colours the story.
+  //
+  // In the normal case this branch never fires. The node's `establishes` credits the objective's
+  // atoms when its FIRST route resolves, at any tier, so the predicate is satisfied long before
+  // the routes run out and the ordinary completion path retires it. Reaching here means
+  // `establishes` was empty - an objective whose predicate yields no minimal satisfying set, which
+  // is a guide-authoring gap - so retire it as COMPLETED anyway and log the gap rather than strip
+  // a fact the rest of the adventure is written against. That is what happened to objective 0 of
+  // run 9a5f87a6 under the old coupling: retired `failed`, its plot atom never written, while
+  // every setback fired.
+  if ((current.kind ?? 'main') !== 'side') {
+    const { data: claimed } = await service
+      .from('objectives')
+      .update({ reveal_state: 'completed', outcome: 'completed' })
+      .eq('id', current.id).eq('reveal_state', 'active').select('id')
+    if (!claimed || claimed.length === 0) return false // another pass retired it first
+    await logEvent(service, env.adventureId, sessionId, 'incident', {
+      kind: 'main_objective_routes_spent', objective_id: current.id, title: current.title, reason, cause,
+    }).catch(() => {})
+    await logEvent(service, env.adventureId, sessionId, 'objective_completed', {
+      objective_id: current.id, title: current.title, evaluated: false, routes_spent: true,
+    })
+    const nextMain = ordered.find((o) => o.reveal_state === 'hidden' && o.id !== current.id)
+    if (nextMain) {
+      await service.from('objectives').update({ reveal_state: 'active' }).eq('id', nextMain.id)
+      await logEvent(service, env.adventureId, sessionId, 'objective_revealed', {
+        objective_id: nextMain.id, title: nextMain.title, after: 'routes_spent',
+      })
+    }
+    await commitDiffs(service, env.adventureId, (s) => {
+      const touched = new Set([current.id, ...(nextMain ? [nextMain.id] : [])])
+      return [{
+        domain: 'objectives',
+        patch: {
+          list: [
+            ...s.objectives.list.filter((o) => !touched.has(o.id)),
+            { id: current.id, title: current.title, state: 'completed' },
+            ...(nextMain ? [{ id: nextMain.id, title: nextMain.title, state: 'active' }] : []),
+          ],
+          currentId: nextMain?.id ?? null,
+        } as unknown as Json,
+      }]
+    }).catch(() => {})
+    return true
+  }
 
   if (env.mode !== 'full_ai') {
     // Assist: the human DM decides whether the story gives up on this thread.

@@ -168,8 +168,17 @@ exactly as well as an expensive one.
 authored once and inherited by every session played on it. An explicit `model_map` entry still
 overrides, which is how the lab pins a run.
 
-A 30-turn run costs about **$0.03-$0.08 and 12-14 minutes**. That is cheap enough that "measure it"
-is almost always the right answer.
+**A PAID RUN IS A LAST RESORT** (owner direction, 2026-07-29). Do not spend one verifying an
+individual change. Batch every question that genuinely needs deployed behaviour and spend ONE run
+on all of them when the work is finished, deploying once at the end rather than leaving a half-live
+state in between. A 30-turn run is only $0.03-$0.08 but it is 12-14 minutes of wall clock, and five
+of them in a session is a slow feedback loop, not a fast one.
+
+Verify with the free tools first and treat them as sufficient unless the question truly cannot be
+answered without a live run: the `packages/rules` unit tests, `deno check` against the per-file
+error baselines, read-only queries over the ~23 guides and ~20 recorded runs already on disk (most
+"is this systemic?" questions are answerable from data already paid for), and the free lab
+instruments listed above.
 
 ## Lab configuration that matters
 

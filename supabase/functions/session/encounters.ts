@@ -160,6 +160,39 @@ export async function resolveOpenEncounter(
     ? await applyMilestones(service, env, sessionId, mapped, 'encounter_outcome')
     : []
 
+  // THE PLOT FACT LANDS WHATEVER THE TIER (2026-07-29).
+  //
+  // A node's `establishes` is the objective's minimal satisfying set, derived at stage 5. It is
+  // credited because the beat RESOLVED, not because it was won - which is the whole invariant:
+  // the plot is prewritten and linear, and an encounter changes narration, rewards, price and
+  // ending-steer, never whether the story advances.
+  //
+  // It used to live in `onSuccess`, so losing withheld it. Measured across 103 nodes in 12 guides,
+  // 103 of 103 gated a plot atom behind a win. Live in run 9a5f87a6 a party lost all three routes
+  // of objective 0 - including the rescue, on a 0-2 roll - and its fact was never written while
+  // every setback fired: the price recorded, the fact not.
+  //
+  // Read from the DB rather than carried in `encounterSpec` so it cannot go stale against the
+  // guide, and applied under its own source so the provenance is visible in `milestone_reached`.
+  // Best-effort: a lookup failure must not strand an encounter that has already resolved.
+  let established: string[] = []
+  if (spec.nodeKey) {
+    try {
+      const { data } = await service
+        .from('story_nodes')
+        .select('establishes')
+        .eq('adventure_id', env.adventureId)
+        .eq('key', spec.nodeKey)
+        .maybeSingle()
+      const atoms = ((data?.establishes ?? []) as unknown[]).filter((a): a is string => typeof a === 'string')
+      if (atoms.length > 0) {
+        established = await applyMilestones(service, env, sessionId, atoms, 'node_established')
+      }
+    } catch (err) {
+      console.error('node establishes lookup failed', err)
+    }
+  }
+
   const restored = encounter.interrupted ?? null
   const restoredSpec = spec.interrupted ?? null
   await commitDiffs(service, env.adventureId, (s) => [
@@ -176,6 +209,10 @@ export async function resolveOpenEncounter(
   await logEvent(service, env.adventureId, sessionId, 'encounter_resolved', {
     encounter_id: encounter.id, kind: encounter.kind, label: encounter.label,
     tier, milestones: applied as unknown as Json,
+    // Separate from `milestones` on purpose: these landed because the beat resolved, not because
+    // the tier awarded them, and keeping them apart is what makes "did the plot advance on a
+    // loss?" answerable from the log alone.
+    established: established as unknown as Json,
     // Which authored node just resolved - the navigator follows THIS node's edge for THIS tier.
     ...(spec.nodeKey ? { node_key: spec.nodeKey } : {}),
   })
