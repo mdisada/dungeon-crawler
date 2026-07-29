@@ -37,8 +37,16 @@ const STUCK = /^\s*(?:(?:what|where)\s+(?:do|should)\s+(?:i|we)\b|what\s+(?:now|
 /** An interrogative opener - the question mark is optional, because players rarely type one. */
 const INTERROGATIVE = /^\s*(?:who|what|where|when|why|how|which|whose|did|does|do|is|are|was|were|can|could|has|have|tell)\b/i
 
-/** Directed attention at a thing: the verbs of a search, not of a move. */
-const EXAMINE = /\b(?:look|looks|looked|looking|examine|examines|examined|examining|inspect|inspects|inspecting|study|studies|studying|check|checks|checking|search|searches|searching|read|reads|reading|glance|glances|peer|peers|watch|watches|observe|observes|scan|scans|survey|surveys)\b/i
+/**
+ * Directed attention at a thing: the verbs of a search, not of a move.
+ *
+ * Listening earns its place here on evidence, not symmetry. The first run carrying this module
+ * folded "I listen to the conversations on the harbour steps" and this predicate refused it,
+ * because the list covered every way of looking and no way of hearing - and eavesdropping on a
+ * room is an examination of it by any reading. Bare `hear` stays out: "I hear you" is agreement,
+ * and a genuine question about it ("what do you hear") is already an interrogative.
+ */
+const EXAMINE = /\b(?:look|looks|looked|looking|examine|examines|examined|examining|inspect|inspects|inspecting|study|studies|studying|check|checks|checking|search|searches|searching|read|reads|reading|glance|glances|peer|peers|watch|watches|observe|observes|scan|scans|survey|surveys|listen|listens|listened|listening|overhear|overhears|overheard|eavesdrop|eavesdrops|eavesdropping)\b/i
 
 /**
  * True when a folded reply asks about the fiction or examines something in it.

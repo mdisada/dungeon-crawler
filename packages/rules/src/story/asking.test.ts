@@ -38,6 +38,15 @@ describe('seeksInformation', () => {
     }
   })
 
+  it('counts listening as examining - the run that caught this folded it', () => {
+    // Live in run e8a51f01 (2026-07-29), the first carrying this module: the list covered every
+    // way of looking and no way of hearing, so eavesdropping on a room read as banter.
+    expect(seeksInformation('I listen to the conversations on the harbour steps.')).toBe(true)
+    expect(seeksInformation('I overhear what the dockhands are saying.')).toBe(true)
+    // "hear" alone stays out - this is agreement, not investigation.
+    expect(seeksInformation('I hear you, Bram.')).toBe(false)
+  })
+
   it('refuses "what do I do" - asking the GAME, not the world', () => {
     // There is no object to find a clue on, and a stuck party is the Progress Director's job -
     // its `reveal` rung already exists for exactly this.

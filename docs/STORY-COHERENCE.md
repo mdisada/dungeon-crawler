@@ -187,6 +187,15 @@ iteration. Reserve them for the final pass.
   20-turn social stall for an entire session.
 - Reuse needs an adventure with no live session. `status = guide_ready` is the reliable marker for
   "never played"; it flips to `active` on first play.
+- A run costs about **$0.08 and 14 minutes** at 30 turns on flattened flash-lite. That is cheap
+  enough that "measure it" is almost always the right answer - several of the open items below
+  have been argued about for longer than it would take to settle them.
+- The queue is SERIAL and, until 2026-07-29, could be wedged forever by a runner killed outright:
+  `status` is only written by `executeRun`'s own try/catch, so a closed terminal left the row
+  `running` and `claimNext` refused everything behind it (one such row blocked the queue for 69
+  hours). `lab-runner.mjs` now reaps a run that is over 30 minutes old AND has written no
+  `lab_run_events` for 10 minutes. Both conditions are needed: age alone cannot tell a dead run
+  from a long one, and the heartbeat alone is what age cannot falsify.
 
 ## Fixed and deployed
 
@@ -194,6 +203,13 @@ Guide time: node outcome summaries + ladder-aware authoring; scene sketches reac
 the roster carries role and description (this is what stopped six phantom NPCs); lore reveal gate
 by last mention; duplicate-loss rejection; derived NPC itineraries; `npc_never_staged` lint. The
 stage-7 repair loop is deleted (838 lines) - it stalled on 8 of 8 guides and never once helped.
+
+Runtime (2026-07-29): a folded question or examination consults the location reveal gate, so asking
+about the world can surface an authored clue placed in the room (`seeksInformation` in
+packages/rules/src/story/asking.ts, wired at the fold branch of entry.ts); the entry mapper is told
+its consecutive-fold streak, not just what it repeated; `entry_mapped` carries `mapper_entry` /
+`had_offer` / `hook_kind`. Listening counts as examining - the first run carrying the predicate
+folded "I listen to the conversations on the harbour steps" and it was refused.
 
 Runtime: the `absent` state can no longer be written from prose; the narrator is told where the
 cast are; a named character is not the narrator's to remove (prompt only, UNMEASURED); acting on a
@@ -223,19 +239,120 @@ instead of starting over; a conversation ages by turns and its ceiling is no lon
    `had_offer`, because answering "the model's call or the downgrade?" needed a three-way join
    across three tables when it should have been one field.
 
+   **Verified live in run e8a51f01** (2026-07-29, 30 turns, $0.081, 14 min): the path fires. Two
+   `ingredient_revealed` events with `source: 'cutscene_inquiry'`, both from folded replies, both
+   correctly placed. 2 of the 6 folded inquiries landed a clue - 33%, exactly the "roughly a third"
+   the historical replay predicted, at n=6, so read that as "not contradicted" rather than
+   confirmed. Fold rate was 58% against the 76% baseline and the longest streak 4 against 8, but at
+   n=12 on a different adventure NEITHER IS EVIDENCE. Three or four more cheap runs settle it for
+   about thirty cents; that is the cheapest real answer on this whole list.
+
    Still open here: 9% of folds are physical actions absorbed as colour - "I shove Rosten Vale
    aside and grab Selka's pen" during a live combat hook. Suspect the `when unsure between adhoc
    and fold_in, prefer fold_in` tiebreaker in `ENTRY_SYSTEM`. Untouched, because changing it
-   trades one bias for another and wants a measured run first.
-2. **Concurrency.** 2-5 narrations per run land under 9s apart and contradict each other. The last
-   piece of the original complaint. Serialize FIRST - a faster model narrows the collision window
-   without closing it - then use authored transitions to precompute the likely next opening.
+   trades one bias for another and wants the measurement above first.
+2. **Concurrency - DIAGNOSED 2026-07-29, not yet fixed. This is the next thing to build.** See
+   "The concurrency defect" below for the full trace; the short version is that the cause is one
+   line, `if (kickTail(env, sessionId, ctx)) return` at the end of `runStoryProgressHead`, and the
+   fix is to defer the kick to the end of the REQUEST rather than the end of the head.
 3. **The affordance lifecycle, steps 2-4 above.** Chips are still published for scenes elsewhere.
 4. **Node prose built around deleted NPCs.** Stage 6 removes group-NPCs and never touches the node
    labels and seeds built around them.
 5. **`runConsistency` is dead code** - `canon.restrictions` is always empty, so it returns ok before
    the model call. Repair it with real propositions or delete it; advertising a fact-check that
    never runs is worse than either.
+
+## The concurrency defect (diagnosed 2026-07-29)
+
+### What it looks like from outside
+
+20 pairs of narrations across seven runs land less than 9s apart - 7% of all 267 narrations, 2-5
+per run, matching the original complaint. Six of the pairs are under 2s.
+
+Attributing them needed the `prompt` field on `narration_published` (added 2026-07-28; runs before
+that carry an empty prompt and 8 of the 20 are unattributable for that reason alone). Of the 12
+that could be attributed:
+
+| count | shape |
+|---|---|
+| 5 | beat opening <-> a `fold_in` entry narration |
+| 3 | `fold_in` entry narration <-> a DIRECTOR rung |
+| 1 | beat opening <-> beat opening |
+| 3 | assorted, involving the climax/finale prose |
+
+### Why it happens
+
+`evaluateStoryProgress` splits into a deterministic head and an agent-heavy tail, and the tail runs
+in a FRESH worker because `WORKER_RESOURCE_LIMIT` is a per-worker ceiling that was killing ~19% of
+turns. `kickTail` fires that second worker and `runStoryProgressHead` ends with:
+
+```ts
+if (kickTail(env, sessionId, ctx)) return
+```
+
+The head returns - but **the head is not the request.** `evaluateStoryProgress` has 11 call sites,
+and every one of them keeps working after it returns, with the same `env` object now carrying
+`tailKicked = true`. So the caller narrates while the tail worker is already drafting the next
+scene, and neither can see the other.
+
+The 2026-07-28 session anticipated exactly this and instrumented it rather than guessing -
+`publishNarration` logs a `narration_after_tail_kick` incident with the offending prompt, with the
+explicit note that "WHICH call sites publish after the kick is exactly what is not known". That
+question is now answered. 34 incidents across 12 adventures:
+
+| count | offender |
+|---|---|
+| 12 | the DIRECTOR rung |
+| 9 | the climax prose |
+| 6 | encounter close |
+| 3 | the final-confrontation beat |
+| 4 | assorted scene opens |
+
+And the call ordering confirms it. `director.ts:293` calls `evaluateStoryProgress` at rung >= 2,
+then goes on to `resolveOpenEncounter` (313), `promoteOpening` (337), `narrationBeat` (369) and
+`deliverRung` (401) - four narrating paths downstream of a kick that has already happened.
+`encounters.ts:239` does the same thing before `maybeSpawnEncounter`.
+
+### The fix, and why the existing guard is not it
+
+`sceneAlreadyOpened` (entry.ts) already suppresses ONE case: an `offered` entry narration echoing a
+beat opening from the previous turn's tail. It is gated on `entry === 'offered'`, and the largest
+measured collision shape is `beat open <-> fold_in`, which that condition excludes. Do not simply
+widen the condition: for `offered` the two narrations describe the same moment and dropping one is
+right, but a `fold_in` narration is the answer to what the player just typed, and suppressing it
+leaves their turn unanswered. Different problem, different fix.
+
+Serialize instead, as the original note said. The kick belongs at the end of the REQUEST, not the
+end of the head: park it on `env` (a `pendingTail`) and fire it once in `index.ts` after the action
+result is built. That closes the window rather than narrowing it, and costs nothing, because the
+tail is already fire-and-forget and nobody is waiting on it. The only tradeoff is that the next
+scene starts being drafted slightly later.
+
+Deliberately NOT chosen: a narration lock. It can stall a turn behind a dead worker, which is the
+failure mode `TYPING_STALE_MS` exists to clean up after, and this system has been bitten by locked
+tables twice already.
+
+## Why a run takes 14 minutes on a "fast" model (lead, not a conclusion)
+
+From run e8a51f01 (30 turns, flash-lite flattened, 14.0 min, $0.081):
+
+```
+session.player_intent    30 calls   mean 17.1s   max 57.3s   total 514s
+session.roll_pending     10 calls   mean 14.7s   max 31.4s   total 147s
+player_agent.generate    30 calls   mean  0.9s               total  28s
+```
+
+The simulated player is not the cost - it answers in under a second. The app's own turn is 17s, and
+79% of the run's wall clock is spent inside `session.player_intent` and `roll_pending`.
+
+The reason is chain length, not model speed: **154 model calls over 30 turns, 5.1 per turn**, run
+sequentially, each carrying canon + roster + party profiles + memories + 12 transcript lines, plus
+an embedding call per narration and a great many DB round trips. A faster model shortens each link;
+it cannot shorten the chain.
+
+Worth a look when this is picked up: `summarizer` is the single most-called role at 1.5 per turn
+(46 calls, more than the narrator's 29), and it is not obvious why a turn needs one and a half
+summaries.
 
 ## Measured vs assumed
 
