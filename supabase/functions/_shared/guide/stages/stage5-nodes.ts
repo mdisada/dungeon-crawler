@@ -53,6 +53,16 @@ export interface Stage5NodesContext {
   /** Places this chapter can stage a node at. Closed vocabulary - a node may pick no other. */
   locations: { key: string; name: string }[]
   /**
+   * Titles of the chapter's OTHER objectives, authored in their own calls (2026-07-29).
+   *
+   * Stage 5 is called once per objective rather than once per chapter, because one call for a
+   * whole chapter's node graph ran to 4000 output tokens - exactly the cap, so the reply was
+   * truncated - and 83s, which blew the edge function's ~150s wall clock and failed the guide.
+   * Splitting keeps each call small; this field is what stops the objectives drifting into each
+   * other's ground now that no single call sees them all.
+   */
+  otherObjectiveTitles?: string[]
+  /**
    * Stage 2's scene sketches - the concrete beats this chapter was PLANNED around.
    *
    * They were being loaded and handed to stages 3 and 4 and then dropped here, so the chapter got
@@ -272,11 +282,18 @@ ${ctx.scenes.map((s, i) => `${i + 1}. ${s}`).join('\n')}
 
 `
     : ''
+  // Named, never authored here. Stage 5 runs once per objective now, so without this the call has
+  // no idea the chapter has other threads and quietly reuses their scenes and their ground.
+  const siblingBlock = (ctx.otherObjectiveTitles ?? []).length > 0
+    ? `
+Other objectives in this chapter, authored SEPARATELY - do not write nodes for them, and do not spend their material on yours: ${(ctx.otherObjectiveTitles ?? []).join(' | ')}
+`
+    : ''
   const user = `Chapter ${ctx.chapterNumber}: ${ctx.chapterTitle}
 
 ${sceneBlock}Objectives:
 ${objectiveList}
-
+${siblingBlock}
 Living NPCs available to stage: ${npcList}
 Places available to stage a node at: ${locationList}
 Party skills: ${ctx.partySkills.join(', ') || 'unknown'}`

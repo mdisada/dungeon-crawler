@@ -6,7 +6,7 @@ import { buildStage5Prompt, parseStage5 } from '../_shared/guide/stages/stage5.t
 import {
   buildRescueNode, buildStage5NodesPrompt, parseStage5Nodes,
 } from '../_shared/guide/stages/stage5-nodes.ts'
-import type { Stage5NodesContext } from '../_shared/guide/stages/stage5-nodes.ts'
+import type { Stage5NodesContext, Stage5NodesOutput } from '../_shared/guide/stages/stage5-nodes.ts'
 import type { StoryNodeSpec } from '../_shared/guide/nodes.ts'
 import type { GuaranteedRoute } from '../_shared/guide/guaranteed-route.ts'
 import { minimalSatisfyingAtoms } from '../_shared/guide/guaranteed-route.ts'
@@ -464,7 +464,33 @@ async function authorChapterNodes(
     scenes: (await loadChapterScenes(env, chapterId)).map((s) => s.sketch).filter(Boolean),
     partySkills: [],
   }
-  const output = await env.generate('beat_planner', buildStage5NodesPrompt(ctx), (raw) => parseStage5Nodes(raw, ctx))
+  // ONE CALL PER OBJECTIVE, not per chapter (2026-07-29).
+  //
+  // This authored every node in the chapter in a single call. On glm-5.2 that ran to 4000 output
+  // tokens - exactly the cap, so the reply was TRUNCATED - and took 83s, which with the in-
+  // invocation retry blew the edge function's ~150s wall clock and failed the guide four times
+  // running. The truncation is a property of the CALL SIZE, not the model: flash-lite averaged
+  // 1006 tokens for the same work today, but that headroom shrinks as chapters grow.
+  //
+  // Splitting is safe for the authoring rules because every cross-node rule stage 5 enforces is
+  // WITHIN one objective - "route 2's seed must still be true after route 1 was lost" is about an
+  // objective's own ladder. What a per-objective call loses is sight of its SIBLINGS, so their
+  // titles travel in `otherObjectiveTitles` to stop the threads reusing each other's ground.
+  const output: Stage5NodesOutput = { nodes: [], localAtoms: [] }
+  for (const objective of ctx.objectives) {
+    const single: Stage5NodesContext = {
+      ...ctx,
+      objectives: [objective],
+      otherObjectiveTitles: ctx.objectives.filter((o) => o.id !== objective.id).map((o) => o.title),
+    }
+    const part = await env.generate(
+      'beat_planner',
+      buildStage5NodesPrompt(single),
+      (raw) => parseStage5Nodes(raw, single),
+    )
+    output.nodes.push(...part.nodes)
+    output.localAtoms.push(...part.localAtoms)
+  }
 
   // Register every declared setback atom (scope 'local') so the stage-8 gate does not flag it as
   // off-registry. Upsert-ignore keeps spine atoms and prior locals intact.

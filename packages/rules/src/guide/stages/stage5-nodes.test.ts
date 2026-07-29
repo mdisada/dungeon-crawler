@@ -585,3 +585,30 @@ describe('parseSocialExits', () => {
     expect(exits.some((e) => e.outcome === 'she_talks')).toBe(true)
   })
 })
+
+describe('per-objective authoring (2026-07-29)', () => {
+  // Stage 5 is called once per objective now: one call for a whole chapter ran to 4000 output
+  // tokens (the cap, so truncated) and 83s, blowing the edge wall clock and failing the guide.
+  const oneObjectiveCtx = { ...ctx, objectives: [ctx.objectives[0]], otherObjectiveTitles: ['Break the Drowned Accord'] }
+
+  it('names the sibling objectives without authoring them', () => {
+    const { user } = buildStage5NodesPrompt(oneObjectiveCtx)
+    expect(user).toContain('Break the Drowned Accord')
+    expect(user).toMatch(/authored SEPARATELY/)
+    // Only the one objective is up for authoring.
+    expect(user).toContain(ctx.objectives[0].title)
+  })
+
+  it('omits the sibling block entirely when there are no siblings', () => {
+    const { user } = buildStage5NodesPrompt({ ...ctx, objectives: [ctx.objectives[0]] })
+    expect(user).not.toMatch(/authored SEPARATELY/)
+  })
+
+  it('parses a single-objective response against a single-objective context', () => {
+    // objective_number is bounded by ctx.objectives.length, so a narrowed context must still
+    // resolve index 0 - that is the whole reason the split is safe to do at the caller.
+    const result = parseStage5Nodes(rawOutput(), oneObjectiveCtx)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.nodes.length).toBeGreaterThan(0)
+  })
+})
