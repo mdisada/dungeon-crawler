@@ -129,3 +129,68 @@ Each of these cost a real run or a real guide:
 - **Read before believing an instrument.** Four times this session the tool was wrong and the code
   was right - possessives read as unknown names, a Node-26 quirk mistaken for a CI failure, an
   audit query missing a column, a scanner matching "not dead" as a death.
+
+---
+
+# Current state (2026-07-29)
+
+## Tooling — `tests/lab/`
+
+Run these before spending anything on play. They cost nothing and have found most of the defects
+recorded above.
+
+```
+node tests/lab/guide-audit.mjs <adventure_id>       # prose vs structure: names, ladder, losses, itineraries
+node tests/lab/guide-dump.mjs <adventure_id>        # the whole guide in reading order
+node tests/lab/transcript.mjs <adventure_id>        # a run's story, interleaved with structural events
+node tests/lab/name-provenance.mjs <adv> <Name>     # which pipeline stage first wrote a name
+```
+
+`guide-audit` reports prose heuristics, not proofs. Read every finding before believing it - four
+times in one session the instrument was wrong and the code was right.
+
+## Lab configuration that matters
+
+- `pin_models: true` + `model: google/gemini-2.5-flash-lite` flattens every role to the cheap
+  model. Use it to debug MECHANICS - did the encounter close, did the guard fire. Do not judge
+  prose from a flattened run; the narrator is deliberately glm-5.2 on an A/B (model-routing.ts).
+- `autocomplete_objectives: false` is the only honest setting. With it on, the harness completes
+  objectives on a timer and every progression number flatters you - that is what hid the
+  20-turn social stall for an entire session.
+- Reuse needs an adventure with no live session. `status = guide_ready` is the reliable marker for
+  "never played"; it flips to `active` on first play.
+
+## Fixed and deployed
+
+Guide time: node outcome summaries + ladder-aware authoring; scene sketches reach the node author;
+the roster carries role and description (this is what stopped six phantom NPCs); lore reveal gate
+by last mention; duplicate-loss rejection; derived NPC itineraries; `npc_never_staged` lint. The
+stage-7 repair loop is deleted (838 lines) - it stalled on 8 of 8 guides and never once helped.
+
+Runtime: the `absent` state can no longer be written from prose; the narrator is told where the
+cast are; a named character is not the narrator's to remove (prompt only, UNMEASURED); acting on a
+scene the party has not reached travels them instead of teleporting the conversation; the offer
+price travels from offer to press to payout; a new scene continues from the last one's outcome
+instead of starting over; a conversation ages by turns and its ceiling is no longer skipped.
+
+## Open, in the order I would take them
+
+1. **`fold_in` dominance.** 10 of 15 mapped intents were absorbed without advancing anything. Pure
+   investigation, no paid runs, and it is the progression bottleneck.
+2. **Concurrency.** 2-5 narrations per run land under 9s apart and contradict each other. The last
+   piece of the original complaint. Serialize FIRST - a faster model narrows the collision window
+   without closing it - then use authored transitions to precompute the likely next opening.
+3. **The affordance lifecycle, steps 2-4 above.** Chips are still published for scenes elsewhere.
+4. **Node prose built around deleted NPCs.** Stage 6 removes group-NPCs and never touches the node
+   labels and seeds built around them.
+5. **`runConsistency` is dead code** - `canon.restrictions` is always empty, so it returns ok before
+   the model call. Repair it with real propositions or delete it; advertising a fact-check that
+   never runs is worse than either.
+
+## Measured vs assumed
+
+Assumed, and worth proving before relying on: the narrator removal rule (prompt only, no detector);
+the `CAST (at X)` line actually improving prose; the travel guard's cost in turns beyond the single
+observed firing.
+
+Never diagnosed: "N turns were rejected by the API" (1/50, 3/31, 4/20 across runs).
