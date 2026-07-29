@@ -504,6 +504,10 @@ async function authorChapterNodes(
       location_id: node.locationKey ? locationIdByKey.get(node.locationKey) ?? null : null,
       affordances: node.affordances as unknown as Json, transitions: storedTransitions(node),
       local_atoms: node.localAtoms as unknown as Json,
+      // The plot fact this beat makes true when it RESOLVES, at any tier. Derived from the
+      // objective's predicate; the encounter spec's outcome maps carry flavour only.
+      // See docs/DECISIONS.md 2026-07-29.
+      establishes: node.establishes,
     })
   }
   // Materialize each objective's rescue node from its guaranteed route.
@@ -519,6 +523,9 @@ async function authorChapterNodes(
       location_id: null,
       affordances: node.affordances as unknown as Json, transitions: storedTransitions(node),
       local_atoms: [] as unknown as Json,
+      // A rescue is the floor a spent party is dropped onto, so its plot fact must not be
+      // conditional on winning it - objective 0 of run 9a5f87a6 lost its canon on a 0-2 roll.
+      establishes: node.establishes,
     })
   }
   if (rows.length > 0) {

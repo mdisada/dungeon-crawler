@@ -215,7 +215,7 @@ async function runReachabilityGate(env: StageEnv): Promise<void> {
     env.db.from('encounters').select('id, chapter_id, type, outcome_atoms').eq('adventure_id', adventureId),
     env.db.from('ingredients').select('id, chapter_id, awards_atoms').eq('adventure_id', adventureId),
     env.db.from('endings').select('id, title, trigger_conditions').eq('adventure_id', adventureId),
-    env.db.from('story_nodes').select('id, key, objective_id, kind, role, encounter_spec, transitions').eq('adventure_id', adventureId),
+    env.db.from('story_nodes').select('id, key, objective_id, kind, role, encounter_spec, transitions, establishes').eq('adventure_id', adventureId),
     env.db.from('story_atoms').select('slug, scope').eq('adventure_id', adventureId),
     env.db.from('personal_slots').select('id, key, overlay_attachments').eq('adventure_id', adventureId),
   ])
@@ -275,7 +275,7 @@ async function runReachabilityGate(env: StageEnv): Promise<void> {
     }),
     nodes: ((nodes.data ?? []) as {
       id: string; key: string; objective_id: string; kind: string; role: string
-      encounter_spec: unknown; transitions: unknown
+      encounter_spec: unknown; transitions: unknown; establishes: unknown
     }[]).map((n) => {
       const spec = (typeof n.encounter_spec === 'object' && n.encounter_spec !== null ? n.encounter_spec : {}) as Record<string, unknown>
       const params = (typeof spec.params === 'object' && spec.params !== null ? spec.params : {}) as Record<string, unknown>
@@ -286,6 +286,9 @@ async function runReachabilityGate(env: StageEnv): Promise<void> {
         onSuccess: specField(spec, 'on_success'),
         onPartial: specField(spec, 'on_partial'),
         onFailure: specField(spec, 'on_failure'),
+        // Empty on guides authored before 2026-07-29, which still carry the plot atom in
+        // on_success - the registry walk reads both.
+        establishes: atomsOf(n.establishes),
         npcIds: atomsOf(params.npc_ids),
         transitions: (Array.isArray(n.transitions) ? n.transitions : []).flatMap((t) => {
           if (typeof t !== 'object' || t === null) return []

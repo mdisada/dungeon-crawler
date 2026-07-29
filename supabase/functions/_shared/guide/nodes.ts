@@ -78,7 +78,24 @@ export interface StoryNodeSpec {
    * Empty strings mean "not authored": the guide still ships and behaves as it did before.
    */
   outcomeSummary: { win: string; loss: string }
-  /** Same shape beats.encounter_spec has always used; outcome maps are the progression writers. */
+  /**
+   * The plot fact this beat MAKES TRUE when it resolves - at ANY tier (2026-07-29).
+   *
+   * DERIVED, never authored: it is the objective's minimal satisfying set, exactly as `onSuccess`
+   * used to be. Only where it is credited has changed.
+   *
+   * Why it moved out of `onSuccess`: measured across 103 nodes in 12 guides, 103 of 103 had an
+   * `onSuccess` atom their objective needed to complete and 103 of 103 credited no plot atom on
+   * failure - so winning the encounter WAS the plot. That contradicts the invariant: the plot is
+   * prewritten and linear, and encounters change narration, rewards, price and ending-steer, never
+   * whether the story advances. Live in 9a5f87a6 a party lost all three routes of objective 0 and
+   * its plot atom was never written, while every setback fired: the price was recorded and the
+   * fact was not.
+   *
+   * The outcome maps below now carry FLAVOUR ONLY. See docs/DECISIONS.md 2026-07-29.
+   */
+  establishes: string[]
+  /** Same shape beats.encounter_spec has always used; the outcome maps are flavour writers. */
   encounter: BeatEncounterSpec
   affordances: NodeAffordance[]
   transitions: NodeTransition[]
@@ -188,6 +205,10 @@ export function parseNodeSpec(raw: unknown, ctx: NodeParseContext): { ok: true; 
     node: {
       key, objectiveKey: ctx.objectiveKey, index, kind, role, label, narrationSeed,
       locationKey: null, outcomeSummary: parseOutcomeSummary(obj.outcome),
+      // Stored rows authored before the decoupling carry their plot atom in `on_success`; this
+      // parser has no objective predicate to derive from, so it reads none. Stage 5 is where
+      // `establishes` is derived, and that is the only path new guides take.
+      establishes: [],
       encounter, affordances, transitions, localAtoms,
     },
   }

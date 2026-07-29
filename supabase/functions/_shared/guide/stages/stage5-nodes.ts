@@ -96,8 +96,12 @@ function nodeLabel(hint: string, fallback: string): string {
 
 /**
  * Materializes the objective's code-authored guaranteed_route as a rescue node - so the
- * director's rung-4 rescue is also just navigation. onSuccess is already the objective's minimal
- * satisfying set (built at stage 3), so a rescue win provably completes it.
+ * director's rung-4 rescue is also just navigation.
+ *
+ * `route.onSuccess` is the objective's minimal satisfying set (built at stage 3). Since 2026-07-29
+ * that set is the node's `establishes` - credited when the rescue RESOLVES, at any tier - rather
+ * than its win prize. A rescue is the floor a spent party is dropped onto; making the plot fact
+ * conditional on winning it is what let objective 0 of run 9a5f87a6 lose its canon on a 0-2 roll.
  */
 export function buildRescueNode(objectiveId: string, route: GuaranteedRoute): StoryNodeSpec {
   const objKey = objectiveKeyOf(objectiveId)
@@ -132,10 +136,12 @@ export function buildRescueNode(objectiveId: string, route: GuaranteedRoute): St
       stakes: route.stakes,
       rationale: 'guaranteed route (rescue)',
       params: { ...((route.params ?? {}) as Record<string, unknown>), guidance: route.guidance } as Json,
-      onSuccess: route.onSuccess,
+      // Flavour only now - the plot fact moved to `establishes` below.
+      onSuccess: [],
       onPartial: route.onPartial,
       onFailure: route.onFailure,
     },
+    establishes: route.onSuccess,
     affordances: [{ key: 'attempt', label: affordanceLabel('skill_challenge', route.label), hint: route.label }],
     transitions: [{ on: 'full', toNodeKey: null, arrivalContext: '' }],
     // Deliberately unplaced. A rescue node is the floor the director drops a spent party onto, and
@@ -252,13 +258,18 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
     if (!objective) continue
     seenObjectives.add(objectiveIndex)
     const objKey = objectiveKeyOf(objective.id)
-    // FLAVOUR, NOT COMPLETION (2026-07-27). These atoms used to BE the completion contract, and an
-    // objective whose stage-3 predicate yielded none had its whole node block rejected - which
-    // then tripped the "no nodes authored for objective N" check below and took the chapter, and
-    // with it the guide, down. Objectives now resolve because a scene resolved, so an empty set
-    // costs nothing: the atoms are still written on a win to colour later narration and feed
-    // ending signals, and their absence is no longer anybody's problem.
-    const onSuccess = (minimalSatisfyingAtoms(objective.completionPredicates) ?? []) as string[]
+    // THE PLOT FACT, CREDITED ON RESOLUTION (2026-07-29). This is the objective's minimal
+    // satisfying set and it is still DERIVED, not authored - only where it pays out has changed.
+    //
+    // It used to be the node's `onSuccess`, i.e. the prize for WINNING. Measured across 103 nodes
+    // in 12 guides, 103 of 103 gated a plot atom behind a win and 103 of 103 credited no plot atom
+    // on a loss - so the encounter WAS the plot, which inverts the invariant. Live in 9a5f87a6 the
+    // party lost all three routes of objective 0 and its fact was never written while every
+    // setback fired: the price recorded, the fact not.
+    //
+    // Now it rides on `establishes` and the runtime credits it at ANY tier. An empty set still
+    // costs nothing - see the 2026-07-27 note this replaces.
+    const establishes = (minimalSatisfyingAtoms(objective.completionPredicates) ?? []) as string[]
     const rawNodes = c.arr(block.nodes, `$.objectives[${bi}].nodes`, MIN_ROUTE_NODES, 5)
     const nodeCount = rawNodes.length
 
@@ -417,12 +428,17 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
         encounter: {
           kind: resolvedKind, label: objective.title, stakes, rationale: '',
           params: {} as Json,
-          onSuccess, // DERIVED - code owns completion.
+          // FLAVOUR ONLY (2026-07-29). The plot fact moved to `establishes`; what remains here is
+          // the price and the colour. Empty on success because nothing yet authors a win-only
+          // reward - when something does, this is where it goes, and it must never contain an
+          // atom the objective's predicate reads.
+          onSuccess: [],
           // Pass or fail (2026-07-27): nothing authors or reads a partial map any more. The field
           // stays on the type so stored rows still parse; it is always empty going forward.
           onPartial: [],
           onFailure: repairedFailure,
         },
+        establishes,
         outcomeSummary,
         affordances,
         transitions,

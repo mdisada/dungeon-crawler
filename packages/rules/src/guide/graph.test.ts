@@ -199,7 +199,7 @@ function withNodes(): StoryGraph {
   const mk = (over: Partial<GraphNode>): GraphNode => ({
     id: over.key ?? 'x', key: 'x', objectiveId: 'o1', kind: 'skill_challenge', role: 'route',
     // Every route node banks a setback: `failure_writes_nothing` makes a free loss an error.
-    onSuccess: [], onPartial: [], onFailure: ['ground_lost'], npcIds: [],
+    onSuccess: [], onPartial: [], onFailure: ['ground_lost'], establishes: [], npcIds: [],
     transitions: [{ on: 'full', toNodeKey: null, arrivalContext: '' }],
     ...over,
   })
@@ -406,7 +406,7 @@ describe('npc_never_staged', () => {
   }
   const node = (npcIds: string[]) => ({
     id: 'n1', key: 'obj:o1#n0', objectiveId: 'o1', kind: 'social' as const, role: 'route' as const,
-    onSuccess: ['a'], onPartial: [], onFailure: ['b'], npcIds,
+    onSuccess: ['a'], onPartial: [], onFailure: ['b'], establishes: [], npcIds,
     transitions: [{ on: 'full' as const, toNodeKey: null, arrivalContext: '' }],
   })
 

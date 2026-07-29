@@ -57,14 +57,17 @@ function rawOutput(over?: unknown): string {
 }
 
 describe('parseStage5Nodes', () => {
-  it('parses two route nodes and DERIVES onSuccess from the objective predicate', () => {
+  it('parses two route nodes and DERIVES establishes from the objective predicate', () => {
     const result = parseStage5Nodes(rawOutput(), ctx)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.data.nodes).toHaveLength(2)
     for (const { node } of result.data.nodes) {
-      expect(node.encounter.onSuccess).toEqual(['ledger_recovered'])
-      expect(atomsSatisfy(ctx.objectives[0].completionPredicates, node.encounter.onSuccess)).toBe(true)
+      // The plot fact rides on `establishes` and is credited when the node RESOLVES, at any
+      // tier - not on `onSuccess`, which would make the fact the prize for winning (2026-07-29).
+      expect(node.establishes).toEqual(['ledger_recovered'])
+      expect(atomsSatisfy(ctx.objectives[0].completionPredicates, node.establishes)).toBe(true)
+      expect(node.encounter.onSuccess).toEqual([])
     }
     // The social node's failure writes its declared setback atom.
     expect(result.data.nodes[0].node.encounter.onFailure).toEqual(['watch_alerted'])
@@ -302,7 +305,7 @@ describe('parseStage5Nodes', () => {
     expect(parseStage5Nodes(rawOutput(doc), ctx).ok).toBe(false)
   })
 
-  it('downgrades a social node that stages nobody, keeping its outcome maps', () => {
+  it('downgrades a social node that stages nobody, keeping what it establishes', () => {
     // Changed 2026-07-26: hard-failing took the whole chapter down. The runtime already performs
     // exactly this downgrade at open time; doing it here means the stillborn node never stores.
     const doc = {
@@ -317,7 +320,7 @@ describe('parseStage5Nodes', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.data.nodes[0].node.kind).toBe('skill_challenge')
-    expect(result.data.nodes[0].node.encounter.onSuccess).toEqual(['ledger_recovered'])
+    expect(result.data.nodes[0].node.establishes).toEqual(['ledger_recovered'])
   })
 
   it('survives content slips that used to fail the whole chapter', () => {
@@ -488,7 +491,10 @@ describe('buildRescueNode', () => {
     const node = buildRescueNode('o1', route!)
     expect(node.role).toBe('rescue')
     expect(node.key).toBe(`${objectiveKeyOf('o1')}#r0`)
-    expect(atomsSatisfy(ctx.objectives[0].completionPredicates, node.encounter.onSuccess)).toBe(true)
+    // A rescue is the floor a spent party is dropped onto, so its plot fact cannot be
+    // conditional on winning it - objective 0 of run 9a5f87a6 lost its canon on a 0-2 roll.
+    expect(atomsSatisfy(ctx.objectives[0].completionPredicates, node.establishes)).toBe(true)
+    expect(node.encounter.onSuccess).toEqual([])
   })
 
   it('never puts designer template guidance in the narration seed', () => {

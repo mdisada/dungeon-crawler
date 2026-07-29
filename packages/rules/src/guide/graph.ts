@@ -80,6 +80,9 @@ export interface GraphNode {
   onSuccess: string[]
   onPartial: string[]
   onFailure: string[]
+  /** The plot fact this node makes true when it RESOLVES, at any tier (2026-07-29). Derived from
+   *  the objective's predicate; the outcome maps above are flavour. See docs/DECISIONS.md. */
+  establishes: string[]
   /** Resolved NPC ids the node stages (social nodes) - checked against the living roster. */
   npcIds: string[]
   transitions: { on: TransitionTier; toNodeKey: string | null; arrivalContext: string }[]
@@ -119,11 +122,14 @@ function awardableAtoms(graph: StoryGraph): Set<string> {
   }
   for (const e of graph.encounters) add(e.outcomeAtoms)
   for (const i of graph.ingredients) add(i.awardsAtoms)
-  // A node's SUCCESS is a route. Its partial/failure atoms are deliberately excluded: those are
-  // authored setbacks (`guards_alerted`, `party_distracted`) whose whole job is to record a cost,
-  // and they are not expected to complete anything - counting them made every authored graph
-  // report a fistful of "orphan awards" (2026-07-26).
-  for (const n of graph.nodes ?? []) add(n.onSuccess)
+  // What a node ESTABLISHES is the route to its objective. Its outcome maps are deliberately
+  // excluded: those are authored setbacks (`guards_alerted`, `party_distracted`) whose whole job
+  // is to record a cost, and they are not expected to complete anything - counting them made
+  // every authored graph report a fistful of "orphan awards" (2026-07-26).
+  //
+  // `onSuccess` is still read for guides authored before 2026-07-29, which carry the plot atom
+  // there. New guides leave it empty and put the fact on `establishes`.
+  for (const n of graph.nodes ?? []) add([...n.establishes, ...n.onSuccess])
   return set
 }
 
@@ -405,7 +411,7 @@ function lintPersonal(graph: StoryGraph): LintFinding[] {
       }
     }
     for (const node of graph.nodes ?? []) {
-      const hit = [...node.onSuccess, ...node.onPartial, ...node.onFailure]
+      const hit = [...node.establishes, ...node.onSuccess, ...node.onPartial, ...node.onFailure]
         .map(canonicalizeAtomSlug).filter((a) => personal.has(a))
       if (hit.length > 0) {
         findings.push({
@@ -507,7 +513,7 @@ function lintNodes(graph: StoryGraph): LintFinding[] {
     // finished guide. Live 2026-07-27, `credits unregistered atom(s): ettel_guidance_won` blocked
     // a guide four attempts running.
     if (registry.size > 0) {
-      const off = [...node.onSuccess, ...node.onPartial, ...node.onFailure]
+      const off = [...node.establishes, ...node.onSuccess, ...node.onPartial, ...node.onFailure]
         .filter((a) => !registry.has(canonicalizeAtomSlug(a)))
       if (off.length > 0) {
         findings.push({ severity: 'warning', code: 'node_outcome_off_registry', target: at,
