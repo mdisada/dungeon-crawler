@@ -108,6 +108,43 @@ async function closeOutgoingNode(
 }
 
 /**
+ * What the last resolved scene left behind, as one sentence the next scene can open against.
+ *
+ * Only a FAILURE TRANSITION carries an authored bridge - the guide's `setback_line`, written for
+ * exactly that edge (navigate.ts:128). Every other way a scene opens passes `arrivalContext: ''`:
+ * a rescue, a director replan, an alternate route, the objective's first node. Measured across
+ * three runs, NOT ONE beat opened through the transition path - every single scene in every run
+ * began with no connection to the one before it.
+ *
+ * `outcome_summary` is what fills that gap. It was added at guide time to record what is TRUE after
+ * a node resolves, win or loss, which is precisely what the next scene needs to open against.
+ * Empty when the guide predates it, which degrades to the previous behaviour.
+ */
+async function bridgeFromLastResolution(
+  service: SupabaseClient,
+  adventureId: string,
+): Promise<string> {
+  const { data: events } = await service
+    .from('event_log')
+    .select('payload')
+    .eq('adventure_id', adventureId)
+    .eq('type', 'encounter_resolved')
+    .order('id', { ascending: false })
+    .limit(1)
+  const payload = ((events ?? [])[0]?.payload ?? null) as { node_key?: string; tier?: string } | null
+  if (!payload?.node_key) return ''
+  const { data: node } = await service
+    .from('story_nodes')
+    .select('outcome_summary')
+    .eq('adventure_id', adventureId)
+    .eq('key', payload.node_key)
+    .maybeSingle()
+  const outcome = (node?.outcome_summary ?? null) as { win?: string; loss?: string } | null
+  const text = payload.tier === 'full' ? outcome?.win : outcome?.loss
+  return typeof text === 'string' ? text.trim() : ''
+}
+
+/**
  * Instantiate an authored node as the live beat: same `beats` row shape the planner produced
  * (so route-health, the lab inspector and openBeatSpec need no changes), plus `node_id` linking
  * back to what authored it.
@@ -218,6 +255,8 @@ export async function openAuthoredNode(
   // player was reading the same three options twice - once as chips, once as DM notes wearing
   // prose. The affordances still travel, because inventing a fourth way was the original bug;
   // they are now framing for the scene's ending rather than the ending itself.
+  // An authored setback line wins; otherwise fall back to what the last scene actually left behind.
+  const bridge = arrivalContext || await bridgeFromLastResolution(service, env.adventureId)
   const ways = node.affordances.map((a) => a.hint || a.label).filter(Boolean)
   const waysLine = ways.length === 0
     ? ''
@@ -255,13 +294,24 @@ export async function openAuthoredNode(
       'open the scene there, and never presume travel or actions they did not take. '
   await narrationBeat(
     service, env, sessionId,
-    `${ctx.narrationContext ? `${ctx.narrationContext} ` : ''}${arrivalContext ? `${arrivalContext} ` : ''}` +
+    `${ctx.narrationContext ? `${ctx.narrationContext} ` : ''}${bridge ? `${bridge} ` : ''}` +
       `${climaxFraming}Open this scene: ${node.narrationSeed} ` +
       standing +
       // The scene-opening cutscene lands with the previous narration still in the context window,
       // and once reproduced it verbatim - closing menu included - so the node's authored seed never
       // reached the page at all (live 2026-07-27).
-      'This OPENS A NEW SCENE: never restate or paraphrase the previous narration.' +
+      //
+      // TOO ABSOLUTE, THOUGH (2026-07-29). "Never restate or paraphrase the previous narration"
+      // reads as "ignore what just happened", and with no bridge line to hold onto (see
+      // bridgeFromLastResolution) the narrator did the only thing left: it started over. Live run
+      // 79cd4ae2, the climax - narration #33 had Saltmarsh Veil RISE out of the harbour; the
+      // director dropped to rung 4, opened the rescue, and #35 wrote "Kestrel wakes on the
+      // splintered planks of Pier Nine... Saltmarsh Veil is gone - not risen, not saved". Two
+      // consecutive wake-ups and the Tide-Ledger changed hands with no event between.
+      //
+      // The rule that was wanted is "do not REPRODUCE it", not "do not CONTINUE from it".
+      'This OPENS A NEW SCENE: do not restate or reproduce the previous narration - but do continue ' +
+      'from it. The party is exactly where that scene left them, holding what it left them holding.' +
       (node.spec
         ? ` Telegraph what lies ahead - "${String(node.spec.label ?? node.label)}"` +
           `${stakes ? ` (at stake: ${stakes})` : ''} - and make the closing ask invite the party into it.`
