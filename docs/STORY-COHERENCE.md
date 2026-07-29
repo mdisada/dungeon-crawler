@@ -149,6 +149,33 @@ node tests/lab/name-provenance.mjs <adv> <Name>     # which pipeline stage first
 `guide-audit` reports prose heuristics, not proofs. Read every finding before believing it - four
 times in one session the instrument was wrong and the code was right.
 
+## Testing strategy: cheap model first, always
+
+Most defects in this system are PLUMBING - a call did not receive what it needed - and a cheap
+model exposes those exactly as well as an expensive one. Of the eight fixed on 2026-07-29, five
+were literally "the prompt was never given X":
+
+  phantom NPCs         the roster was passed as bare names; role and description were discarded
+  ladder contradiction stage 5b was never told its routes are played in sequence
+  offer price drift    pendingOffer.gold was never passed to the press prompt
+  no sense of place    npcs had no location at all, derived or otherwise
+  scene resets         no bridge line was passed into a newly opened scene
+
+So the order is:
+
+1. **Run flattened and cheap** - `pin_models: true`, `model: google/gemini-2.5-flash-lite`. Ask
+   only: did each call RECEIVE the right data, and did the machinery do the right thing? Encounter
+   closed, guard fired, beat opened, state written.
+2. **When output looks wrong, inspect the INPUT first.** Check what the prompt was handed before
+   concluding the model failed. Four times in one session the instrument was wrong and the code was
+   right; the equivalent trap here is blaming the model for missing information it was never given.
+3. **Only then run deployed defaults** to judge PROSE - continuity of voice, whether a scene lands,
+   whether the ending reads. That is the one question a cheap model genuinely cannot answer, and
+   the A/B in model-routing.ts is the evidence for it.
+
+Running expensive models while debugging plumbing costs money and, far worse, twenty minutes per
+iteration. Reserve them for the final pass.
+
 ## Lab configuration that matters
 
 - `pin_models: true` + `model: google/gemini-2.5-flash-lite` flattens every role to the cheap
