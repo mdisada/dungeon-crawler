@@ -518,6 +518,26 @@ Before declaring work complete, verify:
 
 ## Project-Specific Overrides
 
+### Git workflow — solo developer, trunk-based
+
+(overrides the general branch/PR habits assumed elsewhere)
+
+- **This is a one-person project. Commit straight to `main`.** Do not create a branch per change,
+  do not open a PR, and do not ask which branch something should go on. Branch only when there is
+  a concrete reason to — a spike you expect to throw away, or work that must stay unmerged while
+  something else ships — and say why.
+- Push to `main` when the work is committed and the checks below pass. The point of committing is
+  that the change is durable and reviewable in the log, not that a reviewer approves it.
+- **CI still runs on `main`.** `.github/workflows/ci.yml` triggers on push to `main`, so a green
+  `main` is the real gate. Before pushing, run what CI runs: `npm run typecheck` and `npm test` in
+  `packages/rules`, `node scripts/sync-guide-shared.mjs --check`, and `npm run lint`/`test`/`build`
+  in `frontend`. The Docker migrations job cannot run on this machine; check for duplicate
+  migration version prefixes instead, which is the failure it catches.
+- Keep commits small and self-describing for the same reason a PR description would exist: the log
+  is the only reviewer. Commit messages carry the evidence — what was measured, what it showed.
+- Deploying an edge function does not require a merge, but it does mean the deployed code and
+  `main` can drift. Commit first, then deploy, so the two agree.
+
 ### State Management & Data Fetching
 
 (overrides the "State Management Rules" and "Data Fetching Rules" sections above for this project)
