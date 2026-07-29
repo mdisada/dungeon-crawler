@@ -1,7 +1,6 @@
-# Story coherence: three layers, and the rules between them
+# Story coherence: the invariant, the layers, and what is in flight
 
-Written 2026-07-29, after a session that fixed eight defects and found that every one of them was
-the same mistake wearing different clothes.
+Last restructured 2026-07-29. Read "In flight" and "Traps" before touching anything.
 
 ## The invariant
 
@@ -10,8 +9,22 @@ The owner's framing, which everything below serves:
 > The pregenerated plot and the nodes and routes the players have taken are the ground truth and
 > cannot be undone. Player intent adds minor details, it shouldn't be plot breaking.
 
+Expanded 2026-07-29, and this is the sharper statement:
+
+- **The plot is prewritten and linear, except the ending.** This is the Adventurers League model.
+  A published module's Part ends with a Success/Failure box and *both* branches hand off to the
+  next Part.
+- **A `main` objective is a plot point rendered for the player** so they can see where the story is.
+  It is not a challenge with a pass/fail. It becomes true. There is no branch where it doesn't.
+- **A `side` objective is an optional thread.** It can genuinely be lost, and losing it only
+  colours the story.
+- **Encounters - all four kinds, social included - never change the story.** Winning or losing one
+  changes narration, rewards, punishments, and which ending is steered toward. Nothing else.
+- **The guide carries the coherence burden by design.** The plot is pregenerated precisely so live
+  play has less room to drift. That is why guide generation always uses the strong model.
+
 Routes are interchangeable stagings of one plot beat. They differ in flavour, in what a failure
-costs, and (eventually) in which ending they steer toward. They never differ in what becomes true.
+costs, and in which ending they steer toward. **They never differ in what becomes true.**
 
 ## The three layers
 
@@ -26,109 +39,100 @@ Two rules hold the whole system:
 1. **Colour may never write canon.** Prose describes; only structure decides.
 2. **Affordance must always reflect canon.** If the player is offered it, canon must permit it.
 
-Every defect found in this session is a violation of one or the other.
+Rule 1 is largely enforced. Rule 2 is still the open work (see "Open", item 2).
 
-### Rule 1 violations (colour writing canon)
+---
 
-| defect | what happened |
+# In flight: plot facts decouple from encounter outcomes
+
+Decided 2026-07-29 with the owner; see `DECISIONS.md` for the full entry. **This is the next thing
+to build and everything else is lower priority.**
+
+## The defect, measured
+
+103 story nodes across 12 guides:
+
+| | |
 |---|---|
-| phantom NPCs | stage 5b prose staffed scenes with people no row existed for - six across four guides |
-| ladder contradictions | a setback killed the antagonist; the next route's seed had them alive |
-| Rasmund's death | narration killed an NPC; `npcStates` never learned; the ending resurrected him |
-| three NPCs absent | the ledger promoted "she turns away" into a durable `absent`, deleting an objective's whole cast |
+| `onSuccess` carries an atom its objective NEEDS to complete | **103 / 103 (100%)** |
+| `onFailure` carries no plot-satisfying atom | **103 / 103 (100%)** |
+| `onFailure` is entirely empty | 32 / 103 (31%) |
 
-### Rule 2 violations (affordance not reflecting canon)
+So winning the encounter *is* the plot. That contradicts the invariant directly.
 
-| defect | what happened |
-|---|---|
-| chips for a scene elsewhere | `openAuthoredNode` publishes the node's affordances unconditionally (line 186) and computes whether the party is even there fifty lines later (line 237), using it only to shape narration |
-| engaging from the wrong place | the entry mapper opens the encounter wherever the party stands - either teleporting the conversation or killing the beat |
+Live in run 9a5f87a6: the party lost all three routes of objective 0, it was retired `failed`, and
+`marcus_vances_workshop_explored` was never written - while its setbacks (`warden_suspicious`,
+`obvious_clues`) all fired. **The price was recorded and the fact was not.** That asymmetry is the
+whole defect, and it means the cost half already works.
 
-Rule 1 has been the focus and is now largely enforced. **Rule 2 is the open work.**
+`failObjective` credits NO atoms. It flips `reveal_state='completed', outcome='failed'`, activates
+the next objective, and moves on. For a `main` objective that state should be unreachable.
 
-## What node placement changed, and what it did not
+## The build, in dependency order
 
-`1e24291` gave every node a location so the runtime could tell "the party is standing here" from
-"the party has not gone there yet". It taught the NARRATOR that difference - a node elsewhere is
-written as a pull, "what reaches them where they stand".
+1. **`objectives.kind`** (`main` | `side`) - migration, then authored at stage 3, validated on parse.
+2. **`establishes` on a node** - what plot fact this beat makes true, authored at stage 5,
+   SEPARATE from the outcome maps and validated against the objective's atom menu.
+3. **Runtime: credit `establishes` on ANY resolution tier**, in `resolveOpenEncounter`, alongside
+   the tier's outcome map.
+4. **Runtime: `failObjective` never applies to a `main` objective.** Routes spent -> credit the
+   completion atoms, leave the already-fired setbacks standing, narrate it as achieved the hard way.
+5. **Social exits authored at guide time** (see below) - now flavour, not progression.
+6. **Lint: outcome maps must not contain plot-satisfying atoms.**
 
-It did not teach the AFFORDANCE layer. So a scene across town still publishes "Ask Maren about the
-Deep Compact" as a button, and pressing it opens the conversation regardless. The prose says the
-party has not travelled; the chips say they may act as though they had.
+**Existing guides are NOT migrated.** They carry the old coupling and are pre-decision content.
+Testing this needs freshly generated guides, which also invalidates the `guide_ready` reuse pool.
 
-## The missing lifecycle
+## Social encounters can never be won
 
-A beat needs three states, and only the first two exist implicitly today.
+0 of 57 social route nodes across 23 guides have authored `params.exits`. `socialExits` reads a
+field the guide pipeline has NEVER written, and `runSocialExitJudge` returns null before its model
+call when the list is empty - the same dead-judge shape as `runConsistency`. Null exit ->
+`exitTier(null)` -> `failed`. **Every conversation ever played was a guaranteed loss.**
 
-```
-            open node, party elsewhere            travel to node location
-   (none) ─────────────────────────────► PULLED ─────────────────────────► PRESENT
-      │                                     │                                 │
-      │  open node, party already there     │  engage a scene affordance      │
-      └─────────────────────────────────────┴────────────────────────────────►│
-                                                                              ▼
-                                                                          ENGAGED
-                                                              (encounter frame owns the chips)
-```
+Under the old coupling that was plot-breaking. Under the decision above it is a FLAVOUR bug - every
+conversation reads as a defeat - still worth fixing, no longer an emergency.
 
-- **PULLED** - narration writes the pull. Offerable affordance: **travel there, and nothing else.**
-- **PRESENT** - the node's authored affordances are offerable.
-- **ENGAGED** - encounter open; the encounter frame governs, chips cleared (already true today).
+---
 
-The transition that does not exist is `PULLED -> PRESENT`. Travel commits `scene.locationId` and
-nothing notices that an open beat's scene has become reachable, so its real chips never appear.
+# Traps: read before believing an instrument
 
-## Enforcement belongs at the mapper, not the chips
+Four times in one session an instrument was wrong and the code was right. These are the ones that
+have actually cost time.
 
-Chips are presentation. Players also type free text, and the entry mapper maps "I ask Maren about
-the compact" onto the same affordance - so a chip-only fix is bypassable by typing.
-
-- **Chips** express what is offerable. Presentation.
-- **Entry mapper** decides what actually happens. Enforcement.
-
-Both need the rule. Only the mapper is load-bearing.
-
-## What exists, what is missing
-
-Exists:
-- `story_nodes.location_id` - where a scene happens (closed vocabulary, validated)
-- `state.scene.locationId` - where the party is
-- `npcs.itinerary` - where each character is, by objective, derived from node placement
-- the narrator's `CAST ... (at X)` line - the first consumer of the itinerary
-
-Missing:
-- a travel affordance generated for a PULLED beat
-- a `PULLED -> PRESENT` transition that republishes the node's affordances on arrival
-- a guard in the entry mapper: engaging a scene affordance while elsewhere becomes travel, never
-  an encounter open
-- the same question for NPCs: "talk to Pell" is offerable only if Pell is staged here
-
-## Build order
-
-1. **Mapper guard.** Engaging a scene affordance while elsewhere resolves as travel. Smallest, and
-   it closes the destructive path - the one that killed the Maren beat - without touching how chips
-   are published.
-2. **Travel affordance for PULLED beats.** Replaces the scene's chips while the party is away, so
-   the player is never offered an action they cannot take.
-3. **Republish on arrival.** The `PULLED -> PRESENT` transition.
-4. **NPC-presence affordances.** Same rule, applied to who can be spoken to.
+- **The `<9s` narration-pair metric is INVALID on cheap runs.** It assumes a narration takes 9-33s
+  to write (`CONCURRENT_S = 8` in continuity-probe.mjs), so a line published within 8s "was drafted
+  before the previous one existed". On flattened flash-lite a narration takes 1.35s, so two
+  perfectly sequential narrations land 2-8s apart and look identical to concurrent ones. Both
+  "contradictions" the probe reported in 30e840d5 were false positives - one was the party walking
+  through a cellar door. If the probe is to work on cheap runs, derive `CONCURRENT_S` from the
+  run's measured narrator latency instead of hard-coding it.
+- **`usage_log` is keyed by ADVENTURE, not by run.** A reused adventure carries its guide-generation
+  calls from days earlier. Filter by the run window or you will report 46s guide calls as per-turn
+  cost. This produced a completely wrong efficiency finding before being caught.
+- **Pre-placement guides make a whole layer inert.** Node placement landed mid-2026-07-28; guides
+  authored before it have `location_id` NULL on EVERY node, so the travel guard, the "pull" framing
+  and `scene_location_diverged` cannot fire at all. 12 of 23 guides are pre-placement, and every
+  remaining `guide_ready` reuse candidate is. Check placement before trusting a run that exercises
+  that layer.
+- **`guide-audit` reports prose heuristics, not proofs.** Read every finding before believing it.
 
 ## Failure modes this design must not reproduce
 
 Each of these cost a real run or a real guide:
 
 - **Never destroy a beat to enforce a rule.** Refusing to open an encounter is fine; marking the
-  beat stillborn and paying its setback for a scene nobody saw is not. That is the Maren failure.
-- **Never block prose on a heuristic.** `runConsistency` was 14-for-14 false positives;
-  `namesRemovedBy` read "dead set against" as a death and killed a guide after seven retries.
-- **Degrade in the safe direction.** If a rule cannot decide, allow and inform. A missing gate is
-  recoverable; a wrongly-fired one deletes content.
-- **Derive rather than author.** A derived field cannot contradict its source. `npcs.itinerary`
-  cannot disagree with node placement; an authored `npcs.location` would, the first time two stages
-  disagreed.
-- **Read before believing an instrument.** Four times this session the tool was wrong and the code
-  was right - possessives read as unknown names, a Node-26 quirk mistaken for a CI failure, an
-  audit query missing a column, a scanner matching "not dead" as a death.
+  beat stillborn and paying its setback for a scene nobody saw is not.
+- **Never leave a player action unanswered.** The entry-echo guard swallowed 9 of 20 turns
+  including "I turn to face into the black water and shout, 'I offer the phantom ships!'". A blank
+  turn is worse than a duplicated description.
+- **Never block prose on a heuristic.** `runConsistency` was 14-for-14 false positives.
+- **Degrade in the safe direction.** If a rule cannot decide, allow and inform.
+- **Derive rather than author.** A derived field cannot contradict its source.
+- **Watch for gates that exclude their own case.** `sceneLocation`'s `state.encounter` gate looks
+  wrong but is load-bearing: `encounterSpec` is only cleared when a NEW encounter opens, so an
+  ungated lookup would report a node the party has already left. Relaxing it would have fed the
+  narrator worse data than leaving it alone.
 
 ---
 
@@ -136,335 +140,129 @@ Each of these cost a real run or a real guide:
 
 ## Tooling — `tests/lab/`
 
-Run these before spending anything on play. They cost nothing and have found most of the defects
-recorded above.
+Free, and they have found most of the defects on record.
 
 ```
 node tests/lab/guide-audit.mjs <adventure_id>       # prose vs structure: names, ladder, losses, itineraries
 node tests/lab/guide-dump.mjs <adventure_id>        # the whole guide in reading order
 node tests/lab/transcript.mjs <adventure_id>        # a run's story, interleaved with structural events
 node tests/lab/name-provenance.mjs <adv> <Name>     # which pipeline stage first wrote a name
-node tests/lab/entry-audit.mjs <adv> [<adv> ...]    # where cutscene inputs went: fold rate, why, and what shape
+node tests/lab/entry-audit.mjs <adv> [<adv> ...]    # where cutscene inputs went: fold rate, why, what shape
+node tests/lab/narration-audit.mjs                  # deterministic prose stats over every recorded run
+node tests/lab/continuity-probe.mjs [adv]           # location contradictions (see the trap above)
 ```
-
-`guide-audit` reports prose heuristics, not proofs. Read every finding before believing it - four
-times in one session the instrument was wrong and the code was right.
 
 ## Testing strategy: cheap model first, always
 
-Most defects in this system are PLUMBING - a call did not receive what it needed - and a cheap
-model exposes those exactly as well as an expensive one. Of the eight fixed on 2026-07-29, five
-were literally "the prompt was never given X":
+Most defects are PLUMBING - a call did not receive what it needed - and a cheap model exposes those
+exactly as well as an expensive one.
 
-  phantom NPCs         the roster was passed as bare names; role and description were discarded
-  ladder contradiction stage 5b was never told its routes are played in sequence
-  offer price drift    pendingOffer.gold was never passed to the press prompt
-  no sense of place    npcs had no location at all, derived or otherwise
-  scene resets         no bridge line was passed into a newly opened scene
-
-So the order is:
-
-1. **Run flattened and cheap** - `pin_models: true`, `model: google/gemini-2.5-flash-lite`. Ask
-   only: did each call RECEIVE the right data, and did the machinery do the right thing? Encounter
-   closed, guard fired, beat opened, state written.
+1. **Run flattened and cheap** - `pin_models: true`, `model: google/gemini-2.5-flash-lite`. Ask only:
+   did each call RECEIVE the right data, and did the machinery do the right thing?
 2. **When output looks wrong, inspect the INPUT first.** Check what the prompt was handed before
-   concluding the model failed. Four times in one session the instrument was wrong and the code was
-   right; the equivalent trap here is blaming the model for missing information it was never given.
-3. **Only then run deployed defaults** to judge PROSE - continuity of voice, whether a scene lands,
-   whether the ending reads. That is the one question a cheap model genuinely cannot answer, and
-   the A/B in model-routing.ts is the evidence for it.
+   concluding the model failed.
+3. **Only then run deployed defaults** to judge PROSE. That is the one question a cheap model
+   cannot answer.
 
-Running expensive models while debugging plumbing costs money and, far worse, twenty minutes per
-iteration. Reserve them for the final pass.
+**Guide generation is exempt** - it always uses glm-5.2 (`phase: 'guide'`), because the guide is
+authored once and inherited by every session played on it. An explicit `model_map` entry still
+overrides, which is how the lab pins a run.
+
+A 30-turn run costs about **$0.03-$0.08 and 12-14 minutes**. That is cheap enough that "measure it"
+is almost always the right answer.
 
 ## Lab configuration that matters
 
-- `pin_models: true` + `model: google/gemini-2.5-flash-lite` flattens every role to the cheap
-  model. Use it to debug MECHANICS - did the encounter close, did the guard fire. Do not judge
-  prose from a flattened run; the narrator is deliberately glm-5.2 on an A/B (model-routing.ts).
-- `autocomplete_objectives: false` is the only honest setting. With it on, the harness completes
-  objectives on a timer and every progression number flatters you - that is what hid the
-  20-turn social stall for an entire session.
-- Reuse needs an adventure with no live session. `status = guide_ready` is the reliable marker for
-  "never played"; it flips to `active` on first play.
-- A run costs about **$0.08 and 14 minutes** at 30 turns on flattened flash-lite. That is cheap
-  enough that "measure it" is almost always the right answer - several of the open items below
-  have been argued about for longer than it would take to settle them.
-- The queue is SERIAL and, until 2026-07-29, could be wedged forever by a runner killed outright:
-  `status` is only written by `executeRun`'s own try/catch, so a closed terminal left the row
-  `running` and `claimNext` refused everything behind it (one such row blocked the queue for 69
-  hours). `lab-runner.mjs` now reaps a run that is over 30 minutes old AND has written no
-  `lab_run_events` for 10 minutes. Both conditions are needed: age alone cannot tell a dead run
-  from a long one, and the heartbeat alone is what age cannot falsify.
+- `autocomplete_objectives: false` is the only honest setting.
+- Reuse needs an adventure with no live session; `status = guide_ready` marks "never played". But
+  every current reuse candidate is a pre-placement, pre-decoupling guide - generate fresh instead.
+- The queue is SERIAL and used to be wedgeable forever by a killed runner. `lab-runner.mjs` now
+  reaps a run over 30 minutes old that has written no `lab_run_events` for 10 minutes. Both
+  conditions are needed: age alone cannot tell a dead run from a long one, and the heartbeat is
+  what age cannot falsify.
 
-## Fixed and deployed
+## Where a turn's time goes — MEASURED, and the obvious theory was wrong
 
-Guide time: node outcome summaries + ladder-aware authoring; scene sketches reach the node author;
-the roster carries role and description (this is what stopped six phantom NPCs); lore reveal gate
-by last mention; duplicate-loss rejection; derived NPC itineraries; `npc_never_staged` lint. The
-stage-7 repair loop is deleted (838 lines) - it stalled on 8 of 8 guides and never once helped.
-
-Runtime (2026-07-29): a folded question or examination consults the location reveal gate, so asking
-about the world can surface an authored clue placed in the room (`seeksInformation` in
-packages/rules/src/story/asking.ts, wired at the fold branch of entry.ts); the entry mapper is told
-its consecutive-fold streak, not just what it repeated; `entry_mapped` carries `mapper_entry` /
-`had_offer` / `hook_kind`. Listening counts as examining - the first run carrying the predicate
-folded "I listen to the conversations on the harbour steps" and it was refused.
-
-Runtime: the `absent` state can no longer be written from prose; the narrator is told where the
-cast are; a named character is not the narrator's to remove (prompt only, UNMEASURED); acting on a
-scene the party has not reached travels them instead of teleporting the conversation; the offer
-price travels from offer to press to payout; a new scene continues from the last one's outcome
-instead of starting over; a conversation ages by turns and its ceiling is no longer skipped.
-
-## Open, in the order I would take them
-
-1. ~~**`fold_in` dominance.**~~ **Diagnosed and fixed at the source 2026-07-29; UNMEASURED until a
-   run.** It reproduces everywhere - 76% of mapped intents fold (78 of 102 across six runs), not
-   10-of-15 in one - but the cause was not the mapper misfiling and not the `offered && !spec`
-   downgrade, which accounts for only 28 of the 78. **50 folds happened with a live spec on
-   offer**, and reading them says why: 37% are questions about the fiction, 35% are examinations.
-   The mapper is right about every one of them. The taxonomy is what has no bucket for
-   investigation, so the commonest thing players do in a cutscene wrote nothing, and the Progress
-   Director drove the story alone (ac78e517: 16 player intents, 9 director actions, 0 objectives
-   completed - the ladder reaching `replan_beat` and `guaranteed_route` is what hid this, because
-   the story kept moving).
-
-   Fixed: a folded question or examination now consults the location reveal gate exactly as a
-   successful search does (`seeksInformation` + `discoverAtLocation`), so asking can surface an
-   authored clue placed in the room and score `ingredient_revealed` - already spine progress. The
-   gate is unchanged and still refuses clues placed elsewhere. Also: the anti-circling guard only
-   ever caught the same push worded twice, and the real stall shape is eight DIFFERENT questions
-   in a row, so the mapper is now told the fold streak; and `entry_mapped` records `mapper_entry` /
-   `had_offer`, because answering "the model's call or the downgrade?" needed a three-way join
-   across three tables when it should have been one field.
-
-   **Verified live in run e8a51f01** (2026-07-29, 30 turns, $0.081, 14 min): the path fires. Two
-   `ingredient_revealed` events with `source: 'cutscene_inquiry'`, both from folded replies, both
-   correctly placed. 2 of the 6 folded inquiries landed a clue - 33%, exactly the "roughly a third"
-   the historical replay predicted, at n=6, so read that as "not contradicted" rather than
-   confirmed. Fold rate was 58% against the 76% baseline and the longest streak 4 against 8, but at
-   n=12 on a different adventure NEITHER IS EVIDENCE. Three or four more cheap runs settle it for
-   about thirty cents; that is the cheapest real answer on this whole list.
-
-   **Measured across 3 more runs after deploy** (44 intents): fold rate 75%, essentially unchanged
-   from the 76% baseline - but that was never the target. The folds now PAY: **8 `cutscene_inquiry`
-   reveals** where there were 0, from 22 inquiries, a 36% landing rate matching the 33% the
-   historical replay predicted. The open item said folds were "absorbed without advancing
-   anything"; roughly a third of them now advance. Streaks of 8 persist, so the fold-streak prompt
-   line has NOT visibly worked - it is the one part of this still unproven.
-
-   Still open here: 9% of folds are physical actions absorbed as colour - "I shove Rosten Vale
-   aside and grab Selka's pen" during a live combat hook. Suspect the `when unsure between adhoc
-   and fold_in, prefer fold_in` tiebreaker in `ENTRY_SYSTEM`. Untouched, because changing it
-   trades one bias for another and wants the measurement above first.
-2. **Concurrency - DIAGNOSED 2026-07-29, not yet fixed. This is the next thing to build.** See
-   "The concurrency defect" below for the full trace; the short version is that the cause is one
-   line, `if (kickTail(env, sessionId, ctx)) return` at the end of `runStoryProgressHead`, and the
-   fix is to defer the kick to the end of the REQUEST rather than the end of the head.
-3. **The affordance lifecycle, steps 2-4 above.** Chips are still published for scenes elsewhere.
-4. **Node prose built around deleted NPCs.** Stage 6 removes group-NPCs and never touches the node
-   labels and seeds built around them.
-5. **`runConsistency` is dead code** - `canon.restrictions` is always empty, so it returns ok before
-   the model call. Repair it with real propositions or delete it; advertising a fact-check that
-   never runs is worse than either.
-
-## The concurrency defect (diagnosed 2026-07-29)
-
-### What it looks like from outside
-
-20 pairs of narrations across seven runs land less than 9s apart - 7% of all 267 narrations, 2-5
-per run, matching the original complaint. Six of the pairs are under 2s.
-
-Attributing them needed the `prompt` field on `narration_published` (added 2026-07-28; runs before
-that carry an empty prompt and 8 of the 20 are unattributable for that reason alone). Of the 12
-that could be attributed:
-
-| count | shape |
-|---|---|
-| 5 | beat opening <-> a `fold_in` entry narration |
-| 3 | `fold_in` entry narration <-> a DIRECTOR rung |
-| 1 | beat opening <-> beat opening |
-| 3 | assorted, involving the climax/finale prose |
-
-### Why it happens
-
-`evaluateStoryProgress` splits into a deterministic head and an agent-heavy tail, and the tail runs
-in a FRESH worker because `WORKER_RESOURCE_LIMIT` is a per-worker ceiling that was killing ~19% of
-turns. `kickTail` fires that second worker and `runStoryProgressHead` ends with:
-
-```ts
-if (kickTail(env, sessionId, ctx)) return
-```
-
-The head returns - but **the head is not the request.** `evaluateStoryProgress` has 11 call sites,
-and every one of them keeps working after it returns, with the same `env` object now carrying
-`tailKicked = true`. So the caller narrates while the tail worker is already drafting the next
-scene, and neither can see the other.
-
-The 2026-07-28 session anticipated exactly this and instrumented it rather than guessing -
-`publishNarration` logs a `narration_after_tail_kick` incident with the offending prompt, with the
-explicit note that "WHICH call sites publish after the kick is exactly what is not known". That
-question is now answered. 34 incidents across 12 adventures:
-
-| count | offender |
-|---|---|
-| 12 | the DIRECTOR rung |
-| 9 | the climax prose |
-| 6 | encounter close |
-| 3 | the final-confrontation beat |
-| 4 | assorted scene opens |
-
-And the call ordering confirms it. `director.ts:293` calls `evaluateStoryProgress` at rung >= 2,
-then goes on to `resolveOpenEncounter` (313), `promoteOpening` (337), `narrationBeat` (369) and
-`deliverRung` (401) - four narrating paths downstream of a kick that has already happened.
-`encounters.ts:239` does the same thing before `maybeSpawnEncounter`.
-
-### The fix, and why the existing guard is not it
-
-`sceneAlreadyOpened` (entry.ts) already suppresses ONE case: an `offered` entry narration echoing a
-beat opening from the previous turn's tail. It is gated on `entry === 'offered'`, and the largest
-measured collision shape is `beat open <-> fold_in`, which that condition excludes. Do not simply
-widen the condition: for `offered` the two narrations describe the same moment and dropping one is
-right, but a `fold_in` narration is the answer to what the player just typed, and suppressing it
-leaves their turn unanswered. Different problem, different fix.
-
-### What was built (2026-07-29) - and what it does NOT close
-
-Serialize, as the original note said. `runStoryProgressHead` now PARKS its tail (`parkTail` in
-progress.ts) and `index.ts` fires every parked tail from a `finally`, which is the one place that
-knows the request is genuinely done. A queue rather than a slot, because the edge runtime reuses
-isolates and a single slot could be overwritten and silently drop a tail - and a lost tail costs a
-beat re-plan and an ending score. Demo and credential-less paths still run the tail INLINE exactly
-as before, so the $0 suites are untouched.
-
-**Read the next measurement carefully, because this closes one of two races.**
-
-- **Same-request (closed).** Turn N's own narration racing the tail turn N kicked. This was the
-  whole of the 34 `narration_after_tail_kick` incidents, and that counter is the clean metric: it
-  should now sit at ~0, because nothing narrates on an env after its tail is kicked.
-- **Cross-request (open, and possibly slightly worse).** Turn N's tail racing turn N+1's
-  narration. Those are different workers and no `env` connects them, so parking cannot help - and
-  because the tail now STARTS later, it is marginally more likely to still be running when the
-  next turn arrives. If the `<9s` pair count drops but not to zero, this is why.
-
-Closing the cross-request race means holding `typing` across the tail, and that was tried and
-reverted on 2026-07-21: it turned every turn arriving mid-tail into a 409 and lost 6 of 26. Do not
-re-try it without a different idea. `sceneAlreadyOpened` is the existing partial mitigation and is
-gated to `entry === 'offered'`.
-
-### THE `<9s` METRIC IS INVALID ON CHEAP RUNS - read this before measuring concurrency again
-
-Measured after the fix, 3 runs, 114 narrations:
-
-| metric | pre-fix (6 runs) | post-fix (3 runs) |
-|---|---|---|
-| `narration_after_tail_kick` | 17 | **0** |
-| narration pairs <9s apart | 19 / 241 (7.9%) | 11 / 114 (9.6%) |
-
-Only the first row means anything. **The `<9s` rule assumes a narration takes 9-33s to write** -
-continuity-probe.mjs says so in its own header, and that is where `CONCURRENT_S = 8` comes from.
-The premise is that a line published within 8s of the previous one was *drafted before that one
-existed*. On flattened flash-lite a narration takes **1.35s**, so two perfectly sequential,
-causally-ordered narrations land 2-8s apart and are indistinguishable from concurrent ones. The
-post-fix runs are all flash-lite; the pre-fix set is a mix of pinned and unpinned. The comparison
-is confounded, and the apparent "increase" is an artifact.
-
-Verified by reading rather than assumed, which is the only reason it was caught: both
-"contradictions" the probe reported in `30e840d5` are false positives. One is
-`"The old harbourmaster's office groans around you"` -> `"You wrench open the cellar door"`, which
-is the party walking through a door - the probe's own header warns about exactly this and relies on
-`CONCURRENT_S` to exclude it. The other quotes `"before you"` -> `"as you step forward"`, neither of
-which is a location at all; it should have abstained.
-
-So: **the concurrency fix cannot be validated on cheap runs**, and neither can the contradiction
-rate. Either run deployed defaults (where narration is slow again and the 8s premise holds), or
-measure something timing-independent. One already exists and is the row that moved:
-`narration_after_tail_kick` is causal, not temporal, and it went to zero.
-
-If continuity-probe is to keep working on cheap runs, `CONCURRENT_S` must be derived from the
-run's measured narrator latency rather than hard-coded at 8.
-
-Deliberately NOT chosen: a narration lock. It can stall a turn behind a dead worker, which is the
-failure mode `TYPING_STALE_MS` exists to clean up after, and this system has been bitten by locked
-tables twice already.
-
-## Where a turn's time actually goes - MEASURED 2026-07-29, and the obvious theory was wrong
-
-Instrumented (`takeStatePerf` in util.ts, `perf_state_io` events) and run on 9a5f87a6, 40 play
-requests:
+Run 9a5f87a6, 40 play requests:
 
 | | | |
 |---|---|---|
 | request time | 480s | 100% |
 | model latency | 218s | **45%** |
-| **state I/O** | **21s** | **4%** |
+| state I/O | 21s | **4%** |
 | unaccounted | 241s | **50%** |
 
-**The state-blob theory below was wrong and is disproven.** `adventure_state` is read ~16 times and
-written ~6 times per request, but each costs 25ms and 31ms respectively - the blob is 21.8 KB, not
-the 35-48 KB extrapolated from finished adventures, and there were ZERO write conflicts. Moving the
-apply into Postgres would buy back 4% of a turn. Do not build it.
+**The state-blob theory is disproven.** `adventure_state` is read ~16x and written ~6x per request
+but costs 25ms and 31ms each, with ZERO write conflicts, and the blob is 21.8 KB. Moving the apply
+into Postgres would buy back 4% of a turn. **Do not build it** - that is the change the
+instrumentation existed to justify, and it does not.
 
-Half the request is still unexplained. The instrument only counted `adventure_state`, because that
-was the theory being tested; every OTHER query is invisible to it - party characters, locations,
-npcs, event_log reads and writes, story_nodes, beats, ingredients, proposals - plus one or two
-Realtime broadcast POSTs per state write (~360 of them in this run). That is where to look next,
-and the instrument should be widened rather than deleted.
+Half the request is still unexplained. `takeStatePerf` only counts `adventure_state`; every other
+query is invisible to it, as are the ~360 Realtime broadcast POSTs. Widen it rather than delete it.
+`npc_agent` is the most expensive live role at 5.25s mean against the narrator's 1.79s.
 
-Worth keeping in mind before optimising anything: at 45%, model latency is now the single largest
-share, and `npc_agent` is its most expensive role at 5.25s mean against the narrator's 1.79s.
+## Fixed and deployed
 
-## Why a run takes 14 minutes on a "fast" model (superseded by the section above)
+**Guide time:** node outcome summaries + ladder-aware authoring; scene sketches reach the node
+author; the roster carries role and description (this stopped six phantom NPCs); lore reveal gate by
+last mention; duplicate-loss rejection; derived NPC itineraries; `npc_never_staged` lint; node
+placement (`location_id`, mid-2026-07-28). The stage-7 repair loop is deleted (838 lines) - it
+stalled on 8 of 8 guides and never once helped.
 
-From run e8a51f01 (30 turns, flash-lite flattened, 14.0 min, $0.081):
+**Runtime:** the `absent` state can no longer be written from prose; the narrator is told where the
+cast are; acting on a scene the party has not reached travels them instead of teleporting the
+conversation; the offer price travels from offer to press to payout; a new scene continues from the
+last one's outcome; a conversation ages by turns and its ceiling is no longer skipped.
 
-```
-session.player_intent    30 calls   mean 17.1s   max 57.3s   total 514s
-session.roll_pending     10 calls   mean 14.7s   max 31.4s   total 147s
-player_agent.generate    30 calls   mean  0.9s               total  28s
-```
+**2026-07-29:**
 
-The simulated player is not the cost - it answers in under a second. The app's own turn is 17s, and
-79% of the run's wall clock is spent inside `session.player_intent` and `roll_pending`.
+- Asking or examining consults the location reveal gate, so a folded question can surface an
+  authored clue placed in the room (`seeksInformation` + `discoverAtLocation`). Verified: 8 reveals
+  across 3 runs, 36% landing rate. Listening counts as examining.
+- The entry mapper is told its consecutive-fold streak; `entry_mapped` carries `mapper_entry` /
+  `had_offer` / `hook_kind`.
+- **The tail starts when the request stops talking.** `runStoryProgressHead` parks its tail and
+  `index.ts` fires it from a `finally`. Verified: `narration_after_tail_kick` 17 -> 0.
+  The CROSS-request race (turn N's tail vs turn N+1) is still open by design - closing it means
+  holding `typing` across the tail, tried and reverted 2026-07-21 after 409ing 6 of 26 turns.
+- **The entry-echo guard measures from the player's intent, not from `Date.now()`.** It was
+  swallowing 9 of 20 turns. Verified: 0 of 1.
+- **An unplaced node's seed no longer contradicts the placement guard.** The narrator is told the
+  seed may name a room the party is not in and to stage its content where they actually stand.
+- **`stripContextEcho`** removes briefing labels (CAST/PARTY/SOFAR/GOAL) the narrator copies into
+  its own output - 3 of 348 lines did. Shipped but UNEXERCISED in a run; only its unit tests, which
+  carry the real leak verbatim, are evidence.
 
-The reason is chain length, not model speed: **154 model calls over 30 turns, 5.1 per turn**, run
-sequentially, each carrying canon + roster + party profiles + memories + 12 transcript lines, plus
-an embedding call per narration and a great many DB round trips. A faster model shortens each link;
-it cannot shorten the chain.
+## Open, in the order I would take them
 
-Worth a look when this is picked up: `summarizer` is the single most-called role at 1.5 per turn
-(46 calls, more than the narrator's 29), and it is not obvious why a turn needs one and a half
-summaries.
-
-## Plumbing pass, 2026-07-29 - verified on 9a5f87a6
-
-The first verification run ever done on a guide with PLACED nodes (6 of 9, only rescue nodes
-unplaced). Every earlier run this session used a pre-placement guide, so the travel guard, the pull
-framing and the divergence detector were inert in all of them - `guide_ready` reuse candidates are
-now all pre-placement, so testing that layer means generating a fresh guide. Placement runs on
-`beat_planner`, already flash-lite, so pinning costs nothing there.
-
-| check | before | after |
-|---|---|---|
-| echo suppression leaving a turn unanswered | 9 of 20 | **0 of 1** |
-| `narration_after_tail_kick` | 17 | **0** |
-| `engage_before_arrival` (travel guard) | never fired in a verification run | **2** |
-| `scene_location_diverged` | 0 (could not fire) | 0 (nothing diverged) |
-| `context_echo_stripped` | n/a | 0 - no leak occurred, so the guard is UNEXERCISED |
-
-Still true and still unexplained: **0 objectives completed**, in this run and in every run today.
-Beats open (4) and milestones credit (3), but nothing finishes an objective. That is the next thing
-worth chasing, and it is not a narration problem.
-
-Also unresolved and now seen again: "1 of 30 turns were rejected by the API".
+1. **The decoupling build above.** Everything else waits on it.
+2. **The affordance lifecycle, steps 2-4.** Chips are still published for scenes elsewhere; the
+   `PULLED -> PRESENT` transition still does not exist, so arriving never republishes a beat's real
+   affordances; NPC-presence affordances untouched. Step 1 (the mapper guard) shipped and fires
+   correctly - `engage_before_arrival` fired twice in 9a5f87a6.
+3. **`fold_in` physical actions.** 9% of folds are real actions absorbed as colour - "I brace
+   myself and draw my greataxe, stepping further into the cellar" during a live skill-challenge
+   hook. Suspect the `prefer fold_in` tiebreaker in `ENTRY_SYSTEM`. Wants a measured run first.
+4. **The fold-streak prompt line does not work.** Streaks of 8 persist after shipping it.
+5. **Node prose built around deleted NPCs.** Stage 6 removes group-NPCs and never revisits the
+   labels and seeds written around them.
+6. **`runConsistency` is dead code** - `canon.restrictions` is always empty, so it returns ok before
+   the model call. Repair it with real propositions or delete it.
+7. **Widen the perf instrumentation** to all queries; 50% of a request is unexplained.
+8. **31% of nodes have an empty `onFailure`** - no price at all for going badly. A flavour gap once
+   the decoupling lands.
 
 ## Measured vs assumed
 
-Assumed, and worth proving before relying on: the narrator removal rule (prompt only, no detector);
-the `CAST (at X)` line actually improving prose; the travel guard's cost in turns beyond the single
-observed firing; every part of the fold fix above - the reveal-on-inquiry path, the fold-streak
-line, and whether either actually moves the 76%. Re-run `entry-audit.mjs` after the next play; it
-now reads `mapper_entry`/`had_offer` directly instead of reconstructing them.
+Assumed, and worth proving: the narrator removal rule (prompt only, no detector); the `CAST (at X)`
+line improving prose; `stripContextEcho` in a live run; whether the fold fix moves anything beyond
+the reveal count.
 
-Never diagnosed: "N turns were rejected by the API" (1/50, 3/31, 4/20 across runs).
+Never diagnosed: "N turns were rejected by the API" (1/50, 3/31, 4/20, 1/30 across runs).
+
+No instrument catches SINGLE-narrator canon drift - a narrator contradicting what it established
+four paragraphs earlier. Seen live in bc918319 (a forced door re-attributed from an unknown
+intruder to an ally, destroying a clue) and 5a5e6c7f (a hidden compartment found, then "no hidden
+compartments" one turn later). The continuity probe is location-and-concurrency only,
+`runConsistency` is dead, and `scene_location_diverged` is necessarily narrow. This is the largest
+unmeasured coherence risk in the system.
