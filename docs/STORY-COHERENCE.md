@@ -91,6 +91,96 @@ the `guide_ready` reuse pool is useless for testing any of this - generate fresh
 2. Optional belt-and-braces: a lint that outcome maps carry no plot-satisfying atom. Low value now,
    because stage 5 derives `onSuccess` as empty and the model cannot author it.
 
+# Narration structure bugs - the standing catalogue
+
+**Why this list exists.** Narration defects have felt endless because they have been fixed one
+incident at a time. They are not endless; they are a CLASS. Almost every guard we have is on the
+INPUT side - another clause in the prompt - and the narrator is the one component allowed to
+invent. Nothing checks what it invented afterwards. Measured this session, prompt-only rules do
+not hold: the fold-streak line shipped 2026-07-29 changed nothing (streaks of 8 persisted), the
+"never presume travel" clause loses to the node seed sitting above it, and the narrator-removal
+rule has no detector at all.
+
+**So the rule for anything on this list: prefer a STATE COMMIT or a DETECTOR over a prompt clause.**
+The three narration fixes that demonstrably worked this session all did something other than ask
+nicely - `stripContextEcho` (code strips the output), the entry-echo timestamp fix (code compares
+two clocks), the parked tail (code changes when a worker starts).
+
+Each entry: what it is, hardest evidence, and whether it is a state, detector or prompt problem.
+
+## A. Prose writes canon it is not allowed to write
+
+- **A1. Narration relocates the party without committing `scene.locationId`.** STATE.
+  Run bac9f4b9 #2: the player ASKED "what's inside" and the narration answered
+  "You push through the heavy, soot-stained door of the Vetch Foundry and into a cavernous
+  workshop". No `scene_travel`. **18 narrations were published before any travel was committed**,
+  so state said Ashbridge while the fiction had them inside the foundry, down a hidden passage and
+  in an underground chamber. At #17 the travel guard - working correctly off state - put them on a
+  cart "leaving Ashbridge", from underground. Every later positional defect in that run descends
+  from this one. `sceneEffects` already exists to commit travel; the fold/inquiry path never uses
+  it.
+- **A2. Narration re-attributes established canon.** DETECTOR.
+  Run bc918319: #8 established "the lock was forced FROM OUTSIDE. Someone left minutes ago" - a
+  clue. #12-13 re-attributed the forced door to Sella, the party's own ally, deleting the clue.
+- **A3. Narration contradicts a fact it set itself, a few paragraphs later.** DETECTOR.
+  Run bac9f4b9 #2 "Upon opening it, you find... stones and a brittle parchment" (and #3 reads it)
+  vs #5 "the chest remains stubbornly closed, its true contents a mystery".
+  Run 5a5e6c7f #13 "A hidden compartment reveals a more recent, damning entry" vs #14 "find no
+  hidden compartments".
+  **Nothing in the system detects this.** continuity-probe is location-and-concurrency only,
+  `runConsistency` is dead code, `scene_location_diverged` is necessarily narrow. Largest
+  unmeasured coherence risk in the app.
+
+## B. Scenes narrated from the wrong position
+
+- **B1. A beat opens from the story's STARTING position after the party has moved on.** STATE.
+  Run bac9f4b9 #9: the quest-acceptance beat fired while the party stood at a passage deep inside
+  the foundry, narrated Dermot reacting to their acceptance, and closed with "You turn towards the
+  Toll House, where a stout, anxious man gestures you inside."
+- **B2. An unplaced node's seed names a room the party is not in.** FIXED 2026-07-29 (d17f8c0) -
+  the narrator is now told the seed may name a place they are not and to stage its content where
+  they stand. Unverified live.
+- **B3. Two code paths narrate the same arrival.** PROSE/PACING, not data.
+  Run 5a5e6c7f #6/#7: near-identical paragraphs 20s apart. Both calls received correct and
+  DIFFERENT prompts ("the encounter has concluded, the party FAILED it" vs "the persuasion check
+  SUCCEEDS"), and #6 was in #7's context window. One player action emitting two full narrations is
+  the residual smell.
+
+## C. The machine speaking in the fiction's voice
+
+- **C1. The outcome ladder narrates its own bookkeeping.** PROMPT (or strip).
+  "The failure clings to you like the foundry dust" (bac9f4b9 #5); "The first setback already cost
+  you... Now the second settles in" (bc918319 #13).
+- **C2. Prompt scaffolding published as story text.** FIXED 2026-07-29 - `stripContextEcho`.
+  Was 3 of 348 lines showing players `CAST Dorya Salk - female Mirefleet resident...` with PARTY,
+  SOFAR and LAST beneath. The guard fired for real in bac9f4b9 (`context_echo_stripped: 1`).
+
+## D. Delivery
+
+- **D1. A truncated narration is published, then its regeneration is published too.** CODE.
+  Run bac9f4b9 #15 ends mid-sentence ("The secrets") and #16 restates its opening verbatim, 10s
+  later. Both reached the player.
+- **D2. A player action answered with silence.** FIXED 2026-07-29 - the entry-echo guard measured
+  its window from `Date.now()` instead of the player's intent and swallowed 9 of 20 turns.
+- **D3. Concurrent narrations contradicting each other.** SAME-REQUEST FIXED 2026-07-29 (parked
+  tail, `narration_after_tail_kick` 17 -> 0). CROSS-request (turn N's tail vs turn N+1) is open by
+  design - closing it means holding `typing` across the tail, tried and reverted 2026-07-21 after
+  409ing 6 of 26 turns.
+
+## E. Length and repetition
+
+- **E1. Off-contract length.** The brief asks 2-4 sentences; 79% of lines exceeded 400 chars in
+  bc918319, mean 4.4 sentences, worst 15 sentences / 1196 chars.
+- **E2. The premise is re-sold instead of advanced.** 10 of 43 lines in bc918319 restated Sella's
+  stakes; four full re-explanations of the same predicament.
+
+## Suggested order
+
+A1 first - it is a STATE fix, it is small, and it caused every other positional defect in the run
+that exposed it. Then D1 (code, contained). Then A3, which needs a real detector and is the
+largest risk. B1 rides with the affordance lifecycle. C1/E1/E2 are prompt-shaped and should be
+attempted only with a way to measure whether they took.
+
 # Traps: read before believing an instrument
 
 Four times in one session an instrument was wrong and the code was right. These are the ones that
