@@ -110,15 +110,20 @@ Each entry: what it is, hardest evidence, and whether it is a state, detector or
 
 ## A. Prose writes canon it is not allowed to write
 
-- **A1. Narration relocates the party without committing `scene.locationId`.** STATE.
-  Run bac9f4b9 #2: the player ASKED "what's inside" and the narration answered
-  "You push through the heavy, soot-stained door of the Vetch Foundry and into a cavernous
-  workshop". No `scene_travel`. **18 narrations were published before any travel was committed**,
-  so state said Ashbridge while the fiction had them inside the foundry, down a hidden passage and
-  in an underground chamber. At #17 the travel guard - working correctly off state - put them on a
-  cart "leaving Ashbridge", from underground. Every later positional defect in that run descends
-  from this one. `sceneEffects` already exists to commit travel; the fold/inquiry path never uses
-  it.
+- **A1. The fold path hands the narrator RAW player text and orders it made true.** ROOT CAUSE.
+  The prompt that teleported the party in bac9f4b9 #2, verbatim:
+  `"Carry this forward: Kestrel - what's inside. Let it actually happen and MOVE the scene with it
+  - describe what changes as they act."`
+  The player asked a QUESTION and the narrator was told to realise it. So it walked them through
+  the foundry door.
+  The entry mapper already produces a cleaned `interpretation`, and `offered` / `adhoc` both use
+  it - **`fold_in` discards it and passes `${text}`**, on 76% of all turns. State never diverged
+  "silently": we instructed the divergence. (An earlier draft of this entry blamed a missing
+  `sceneEffects` commit. That was the symptom; committing travel would only have made the teleport
+  official.)
+  Downstream of this one: 18 narrations published before any travel was committed, the party
+  carted out of an underground chamber "leaving Ashbridge", and a good share of A3.
+
 - **A2. Narration re-attributes established canon.** DETECTOR.
   Run bc918319: #8 established "the lock was forced FROM OUTSIDE. Someone left minutes ago" - a
   clue. #12-13 re-attributed the forced door to Sella, the party's own ally, deleting the clue.
@@ -174,12 +179,43 @@ Each entry: what it is, hardest evidence, and whether it is a state, detector or
 - **E2. The premise is re-sold instead of advanced.** 10 of 43 lines in bc918319 restated Sella's
   stakes; four full re-explanations of the same predicament.
 
-## Suggested order
+## The plan, in order
 
-A1 first - it is a STATE fix, it is small, and it caused every other positional defect in the run
-that exposed it. Then D1 (code, contained). Then A3, which needs a real detector and is the
-largest risk. B1 rides with the affordance lifecycle. C1/E1/E2 are prompt-shaped and should be
-attempted only with a way to measure whether they took.
+Ordered by (impact x certainty) / cost. The standing principle from this session: **prefer
+AUTHORED DATA and a CLEANED INPUT over runtime detectors and prompt clauses.** The measured reason
+is below under Traps - prompt-only rules did not hold, three times.
+
+1. **Fold path uses the guard's `interpretation`, split by asking vs acting.** (A1. Small, root
+   cause, 76% of turns.) `seeksInformation` already exists - it was built for the clue work today.
+   Inquiry -> "answer from what is established; do NOT move them or change the world". Action ->
+   today's "let it happen", which is correct for actions and only ever was.
+2. **Tighten the guard so an inquiry can never render as movement** - no `sceneEffects` travel from
+   a question, whatever the model proposes.
+3. **Plumb the established record into the narrator's standing context.** (A2/A3. Wiring, no new
+   authoring.) `outcome_summary` exists on every node - authored expressly as "the record every
+   later scene reads instead of guessing" - and reaches only two narrow paths. The standing `DONE`
+   line is de-slugged flag names instead. Send the authored sentences for RESOLVED nodes.
+4. **Author location detail at guide time.** (Biggest lever on the improvisation ratio.) Locations
+   carry ONE sentence (134 chars each, measured). 72% of folded player inputs are questions and
+   examinations about the world, and there is nothing authored for them to read - so the narrator
+   invents, and inventions are not recorded anywhere for the next turn. Author a sensory line plus
+   3-5 examinable features and what each yields. This is the boxed-text-plus-features shape a
+   published module actually uses, and it converts invention into lookup.
+5. **Author arrival/transition text per location.** `transitions.arrivalContext` is authored but
+   only for failure edges; ordinary arrival is improvised.
+6. **Never publish a truncated narration.** (D1. Code, contained.) bac9f4b9 #15 ended mid-sentence
+   and #16 republished its opening - both reached the player.
+7. **Stop the machine narrating its own bookkeeping.** (C1.) "The failure clings to you"; "The
+   first setback already cost you".
+8. **Length and repetition.** (E1/E2.) Attempt only with a way to measure whether it took.
+9. **A self-contradiction detector.** (A3.) Deliberately LAST: if 1-5 land, the narrator should
+   rarely need to invent a fact it can later contradict. Build this only if the class survives.
+
+**The ratio that justifies the order:** in a 30-turn run the narrator wrote **20,040 chars** while
+the entire guide contains **6,933** of authored, player-facing prose - 2.9 to 1, and that is a
+third of a playthrough. The guide is currently a sketch and live play does most of the writing.
+Items 3-5 move that ratio; items 1-2 stop the writing that happens being ordered to change the
+world.
 
 # Traps: read before believing an instrument
 
