@@ -112,6 +112,32 @@ export async function recordSceneLedger(
       for (const change of ledger.npcStates) {
         const npc = npcs.find((n) => n.name.toLowerCase() === change.name.toLowerCase())
         if (!npc) continue
+        // LEAVING A ROOM IS NOT LEAVING THE STORY (2026-07-28).
+        //
+        // `absent` means "has not entered the story yet" - canon renders it as "Not present in the
+        // story yet: X - may be spoken about". It is an AUTHORING state, and nothing that happens
+        // during play can make it true again: you cannot un-enter a story.
+        //
+        // The Archivist was writing it from ordinary scene exits, and the evidence gate below
+        // could not stop it, because the gate proves a quote EXISTS, not what it MEANS. Live run
+        // 97364401, one scene close marked three of the adventure's five NPCs absent on quotes
+        // like "Then she turns away, and the..." - Maren Ost, Edric Salt and Wenna Farrow, the
+        // entire cast of "Learn the truth of the ledger". Both authored routes of that objective
+        // staged those people, so when the party engaged it the social encounter had nobody to
+        // stage, went stillborn, burned the route and paid its setback for a scene no one saw.
+        //
+        // Dropped rather than gated harder. A false `absent` is unrecoverable in play - it removes
+        // an NPC from staging and blocks their dialogue for the rest of the session - while a
+        // missing one costs nothing: the NPC merely stays stageable, and `alive` remains available
+        // and restorative for anyone who genuinely walks back in. Departure that the STORY means
+        // belongs to node transitions, which is the only thing allowed to write plot facts.
+        if (change.state === 'absent') {
+          await logEvent(service, env.adventureId, sessionId, 'incident', {
+            kind: 'npc_absent_from_prose_ignored', npc_id: npc.id, name: npc.name,
+            evidence: change.evidence.slice(0, 200),
+          }).catch(() => {})
+          continue
+        }
         // 'alive' is restorative for someone ABSENT - they walked in, and nothing is lost by
         // believing it. For someone DEAD it is a resurrection: the single strongest claim the
         // Archivist can make, and until now the only transition that committed unchallenged.
