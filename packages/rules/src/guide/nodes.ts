@@ -109,27 +109,6 @@ export function parseOutcomeSummary(raw: unknown): { win: string; loss: string }
   return { win: one(o.win), loss: one(o.loss) }
 }
 
-/**
- * Named characters a line says are gone for good.
- *
- * A setback may cost the party anything except a cast member. The ladder reaches the next route
- * THROUGH this loss, and every later scene was authored against a roster that still has them in
- * it - so a setback that kills someone contradicts the scene it hands the party to, every time it
- * fires. Live 350c0363: "Selka Vane is consumed by the chaos" routed straight into a seed with her
- * alive and mid-ritual.
- *
- * Deliberately a closed verb list against exact names: code judging a narrow question it can
- * actually decide, rather than a model judging a broad one it cannot.
- */
-const REMOVAL_VERBS =
-  /\b(dies|died|dead|killed|kills|slain|slays|perishes|perished|consumed|devoured|drowns|drowned|is gone for good|vanishes forever|never seen again)\b/i
-
-export function namesRemovedBy(text: string, npcNames: readonly string[]): string[] {
-  const s = String(text ?? '')
-  if (!REMOVAL_VERBS.test(s)) return []
-  return npcNames.filter((name) => name && s.includes(name))
-}
-
 export interface NodeParseContext {
   objectiveKey: string
   /** Registry labels (objective spine atoms) the outcome maps may draw from. */

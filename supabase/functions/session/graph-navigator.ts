@@ -241,7 +241,18 @@ export async function openAuthoredNode(
       'and have taken no step toward it. Write only the pull: what reaches them from it where ' +
       'they stand - a sound, a rumour, a messenger, a change in the air. Do NOT place them in ' +
       'the scene, move them, or narrate any part of what happens once they arrive. '
-    : 'Pick up from where the party actually stands - never presume travel or actions they did not take. '
+    // NAME THE PLACE (2026-07-28). This branch used to say only "pick up from where the party
+    // actually stands", which tells the narrator that its location matters without telling it what
+    // the location IS - and an instruction with the datum missing is one the model has to fill in.
+    //
+    // Run 15fc82be is a clean contrast inside a single run. Three beats took the pull branch above,
+    // which names the place ("they are still at Mirefall"), and all three stayed put. Narration #19
+    // took THIS branch - a rescue node, whose location is null by design, so `elsewhere` is false -
+    // and opened with "You come to on the slick stone floor of The Saltworks", moving the party 21
+    // seconds before scene_travel fired. The scene it invented was the one the objective was named
+    // after, which is exactly where a writer with no stated location would put them.
+    : `The party is at ${ctx.partyLocationName || 'where they already are'} and has not moved - ` +
+      'open the scene there, and never presume travel or actions they did not take. '
   await narrationBeat(
     service, env, sessionId,
     `${ctx.narrationContext ? `${ctx.narrationContext} ` : ''}${arrivalContext ? `${arrivalContext} ` : ''}` +

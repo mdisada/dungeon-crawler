@@ -474,31 +474,6 @@ describe('outcome summaries (the ladder contract)', () => {
     expect(result.errors.join(' ')).toContain('SAME loss')
   })
 
-  it('REJECTS a setback that removes a named character - the next route needs them alive', () => {
-    const result = parseStage5Nodes(rawOutput({
-      objectives: [{
-        objective_number: 1,
-        nodes: [
-          {
-            kind: 'social', narration_seed: 'Mara guards the strongbox.', stakes: 's',
-            npc_keys: ['npc:mara'], affordances: [{ key: 'persuade', hint: 'talk' }],
-            setback: { name: 'watch_alerted', kind: 'flag' },
-            setback_line: 'The struggle turns and Harbormaster Mara is killed.',
-            outcome: { win: 'The party holds the ledger.', loss: 'Harbormaster Mara is dead.' },
-          },
-          {
-            kind: 'skill_challenge', narration_seed: 'The hatch is barred.', stakes: 's',
-            affordances: [{ key: 'break_in', hint: 'force it' }],
-            setback: { name: 'hatch_jammed', kind: 'flag' }, setback_line: 'The hatch holds.',
-            outcome: { win: 'They are inside.', loss: 'The cellar stays shut.' },
-          },
-        ],
-      }],
-    }), ctx)
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.errors.join(' ')).toContain('Harbormaster Mara')
-  })
 })
 
 describe('buildRescueNode', () => {

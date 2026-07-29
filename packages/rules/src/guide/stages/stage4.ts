@@ -76,6 +76,14 @@ export const INGREDIENTS_PER_CHAPTER = { min: 4, max: 12, defaultMin: 6, default
 export const PILLAR_TAGS = ['combat', 'social', 'exploration'] as const
 export const INGREDIENT_TYPES = ['clue', 'secret', 'event', 'item', 'rumor'] as const
 
+/**
+ * A `placement.condition` the RUNTIME can actually satisfy. `filterReveals` gates a conditioned
+ * ingredient on a PASSED CHECK and never reads the text, so the text must name one - anything
+ * else locks the clue behind a roll that will never happen. See the repair at the parse site.
+ */
+const CHECK_CONDITION =
+  /\b(dc\s*\d+|check|roll|save|persuasion|deception|intimidation|insight|investigation|perception|athletics|acrobatics|stealth|arcana|history|religion|nature|medicine|survival|performance|sleight)\b/i
+
 /** F04 SS4.1 density guardrail: at most 1 coop-demanding obstacle per 3 objectives. */
 export function maxCoopDemanding(objectiveCount: number): number {
   return Math.floor(objectiveCount / 3)
@@ -112,6 +120,7 @@ Rules:
 - REQUIRED ENTITIES: the chapter's registry (listed below) names what the story already established. Every entry marked [npc] or [location] MUST appear in your response as a row with the EXACT same name (or be reused by existing key). Missing one is a validation failure. Entries marked [lore] are factions, forces and phenomena - they are world context to WRITE ABOUT, and you must NOT create rows for them.
 - AN NPC IS ONE PERSON. Only create an npc row for an INDIVIDUAL the party could talk to or fight: someone with a name, a voice and opinions. Never create an npc for a group ("the city watch", "Valerius's agents", "the lost expedition") or for a force, curse or plague ("the Blight", "the Murkheart"). A group cannot hold a conversation, so giving it an npc row hands it a heartbeat, a mood and a seat in dialogue it can never use - and the game then treats killing a few of its members as the death of a person. Fights against a group are built from creature counts at the encounter stage, and if the party ever needs to TALK to a faction, name ONE representative of it as an individual npc (e.g. "Iron Hand Envoy Sera") and create that person instead.
 - Ingredients are TOYS, not railroads: each one is something players can find, use, ignore, or subvert. Never a mandatory step.
+- placement.condition means ONE thing: this clue needs a PASSED SKILL CHECK to come out. Write it as the check ("successful DC 14 persuasion", "an insight check"), or leave it null. It is NOT a place to describe when the moment is right - "asked about the money", "once they trust her" - because the game reads any condition as a check requirement, and a clue conditioned on a conversation is locked behind a roll that a conversation never makes. If a clue should simply come out when the topic arises, leave condition null and let the NPC judge the moment.
 - ${ingredientMin}-${ingredientMax} ingredients for this chapter, each linked to ONE or TWO objectives by number (objective_numbers holds 1-2 entries, never more) and tagged with the pillars it serves ("combat", "social", "exploration").
 - Every scene's cast and places must exist: create the NPCs and locations the scene sketches imply. Mark the chapter's main villain (if present here) as role "boss".
 - "initial_state" is where the NPC stands when play BEGINS: "alive" (default), "dead", or "absent" (alive but not reachable yet). A murder victim, or anyone the premise says is already dead or missing, MUST NOT be "alive" - the live game will otherwise stage them and have them speak.
@@ -151,10 +160,30 @@ Respond with ONLY a JSON object, no prose, in exactly this shape:
     .map((e) => `- [${e.kind}] ${e.name}: ${e.note}`)
     .join('\n')
 
+  // PUT WHAT IS KNOWN INTO PEOPLE, NOT ONLY ROOMS (2026-07-28).
+  //
+  // The response shape offers `location_key` and `npc_key` and said nothing about the balance, so
+  // the model reached for rooms almost every time: across two measured guides, 10 of 17 clues were
+  // location-placed and only 3 were on an NPC.
+  //
+  // That decides what play FEELS like, because the two are gated by different machinery. A
+  // location clue is found by searching (discovery.ts, on a passed check). An NPC clue is
+  // released by the reveal gate in a conversation. With the evidence in rooms, talking to people
+  // yields nothing an investigation needs - live, 10 social encounters produced zero reveals while
+  // every discovery came from a search.
+  const placementRule =
+    'PLACEMENT DECIDES HOW THE PARTY PLAYS. A clue on a LOCATION is found by searching it; a clue ' +
+    'on an NPC is prised out of them in conversation. Put roughly half of what matters in ' +
+    "people's heads - what someone saw, is hiding, will trade or lets slip - and reserve locations " +
+    'for physical evidence that has to exist somewhere. An adventure whose every clue sits in a ' +
+    'room gives the party no reason to talk to anyone, and its social scenes have nothing to give.'
+
   const user = `Meta loop antagonist: ${ctx.metaLoop.antagonist}
 
 Chapter ${ctx.chapterNumber}: ${ctx.chapter.title}
 Arc summary: ${ctx.chapter.arcSummary}
+
+${placementRule}
 
 REQUIRED entities (every one must become a row, exact names):
 ${required || '(none)'}
@@ -251,6 +280,7 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
   const locationKeys = new Set([...ctx.existingLocations.map((l) => l.key), ...locations.map((l) => l.key)])
   const coopKeys = new Set(coopSets.map((s) => s.key))
 
+  const conditionRepairs: string[] = []
   const ingredients: IngredientDraft[] = c
     .arr(root.ingredients, '$.ingredients', INGREDIENTS_PER_CHAPTER.min, INGREDIENTS_PER_CHAPTER.max)
     .map((raw, i) => {
@@ -270,8 +300,31 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
           c.errors.push(`${path}.placement.npc_key: unknown key "${placement.npcKey}"`)
         }
       }
+      // A CONDITION MEANS "BEHIND A PASSED CHECK", AND NOTHING ELSE (2026-07-28).
+      //
+      // The runtime reads this field as a hard gate: `filterReveals` refuses any conditioned
+      // ingredient unless a check passed, and never looks at the text. Stage 4 was given the field
+      // with no explanation of it and filled it with CONVERSATIONAL triggers - "asked why she
+      // suspects financial irregularities", "confronted with evidence the entries are fabricated".
+      // Those describe a moment in a conversation, and conversations do not roll checks, so every
+      // clue written that way was unreachable for the whole adventure.
+      //
+      // Measured: across three runs, every NPC-placed clue carried such a condition and NPC reveals
+      // totalled ZERO, while the one refusal on record reads "condition not met: asked why she
+      // suspects financial irregularities". The NPC held it and offered it; the gate could not say
+      // yes.
+      //
+      // Dropping a mis-written condition is the safe direction. The clue becomes reachable and the
+      // NPC agent still decides WHEN to offer it - which is what a conversational trigger was
+      // trying to express anyway, and what the agent already does. A clue nobody can ever reach is
+      // strictly worse than one that arrives a beat early.
       if (placementRaw.condition != null) {
-        placement.condition = c.str(placementRaw.condition, `${path}.placement.condition`)
+        const raw = c.str(placementRaw.condition, `${path}.placement.condition`)
+        if (raw && CHECK_CONDITION.test(raw)) {
+          placement.condition = raw
+        } else if (raw) {
+          conditionRepairs.push(raw)
+        }
       }
 
       const pillarTags = c.arr(ing.pillar_tags, `${path}.pillar_tags`, 1, 3).map((t, j) =>
@@ -333,7 +386,19 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
   }
 
   return c.result({
-    npcs, locations, coopSets: repaired.coopSets, ingredients, warnings: repaired.warnings,
+    npcs,
+    locations,
+    coopSets: repaired.coopSets,
+    ingredients,
+    warnings: [
+      ...repaired.warnings,
+      ...(conditionRepairs.length > 0
+        ? [`${conditionRepairs.length} ingredient condition(s) were cleared: they describe a ` +
+           'conversational moment rather than a skill check, and the reveal gate reads ANY ' +
+           'condition as "requires a passed check" - so each would have locked its clue away for ' +
+           `the whole adventure. Cleared: ${conditionRepairs.slice(0, 3).map((r) => `"${r}"`).join('; ')}`]
+        : []),
+    ],
     reclassifyAsLore: coverage.reclassifyAsLore.map((e) => e.name),
   })
 }

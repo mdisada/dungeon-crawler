@@ -16,7 +16,7 @@ import { minimalSatisfyingAtoms } from '../guaranteed-route.ts'
 import type { GuaranteedRoute } from '../guaranteed-route.ts'
 import { ENCOUNTER_KINDS } from '../../story/beats.ts'
 import type { BeatEncounterKind } from '../../story/beats.ts'
-import { affordanceLabel, namesRemovedBy, nodeKeyFor, parseOutcomeSummary, validateNodeGraph } from '../nodes.ts'
+import { affordanceLabel, nodeKeyFor, parseOutcomeSummary, validateNodeGraph } from '../nodes.ts'
 import type { NodeAffordance, NodeTransition, StoryNodeSpec } from '../nodes.ts'
 import { canonicalizeAtomSlug, MAX_LOCAL_ATOMS_PER_BEAT } from '../../story/atoms.ts'
 import type { AtomKind, AtomProposal } from '../../story/atoms.ts'
@@ -402,17 +402,6 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
       // The one rule code can decide, so code decides it. A setback that removes a cast member
       // contradicts the very scene the ladder hands the party next - and it is checked on BOTH
       // lines a failure travels on, because either one reaches the next node's narrator.
-      for (const [field, text] of [['outcome.loss', outcomeSummary.loss], ['setback_line', arrivalContext]] as const) {
-        const removed = namesRemovedBy(text, ctx.npcs.map((p) => p.name))
-        if (removed.length > 0) {
-          c.errors.push(
-            `${path}.${field}: a setback may not remove ${removed.join(', ')} from the story - the ` +
-              'party reaches the next route through this loss and that scene needs them alive and ' +
-              'their goal unfinished. Make the loss cost the party something instead.',
-          )
-        }
-      }
-
       const node: StoryNodeSpec = {
         key: nodeKeyFor(objKey, 'route', ni),
         objectiveKey: objKey,

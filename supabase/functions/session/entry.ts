@@ -75,6 +75,47 @@ export async function openBeatSpec(
   return { beatId: data.id as string, spec, nodeId }
 }
 
+/**
+ * Has the scene the party is entering ALREADY been narrated as it opened? (2026-07-28)
+ *
+ * A beat opening and an entry narration describe the same moment from two sides - "here is the
+ * scene" and "the party commits to it" - and normally they are separated by the player reading and
+ * deciding. They are not when the beat opens in the TAIL of the previous turn, because the tail
+ * runs in its own worker while the next request is already in flight. Both then narrate at once:
+ *
+ *   12:09:15  intent_submitted "Give me the ledger, Vane."
+ *   12:09:15  beat_opened      trigger=objective_completed      (previous turn's tail)
+ *   12:09:30  narration        "The ledger passes from Vane's shaking hands to Kestrel's"
+ *   12:09:33  narration        "Vane's grip tightens - then he thrusts the ledger into her hands"
+ *
+ * The handover twice, three seconds apart. Two of the three duplicate pairs in run 6d9b2aeb are
+ * exactly this; the third comes from a check outcome racing a beat opening and is NOT covered here.
+ *
+ * Deterministic and narrow: the same node, opened moments ago, whose own opening narration has
+ * already introduced the scene. The encounter still opens - only the second description is
+ * dropped, because the first one is better (it carries the authored seed and the stakes).
+ */
+const ENTRY_ECHO_WINDOW_MS = 90_000
+
+async function sceneAlreadyOpened(
+  service: SupabaseClient,
+  adventureId: string,
+  nodeKey: string | undefined,
+): Promise<boolean> {
+  if (!nodeKey) return false
+  const { data } = await service
+    .from('event_log')
+    .select('created_at')
+    .eq('adventure_id', adventureId)
+    .eq('type', 'beat_opened')
+    .eq('payload->>node_key', nodeKey)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  const opened = (data ?? [])[0]?.created_at as string | undefined
+  if (!opened) return false
+  return Date.now() - Date.parse(opened) < ENTRY_ECHO_WINDOW_MS
+}
+
 /** The authored affordances of the open node - the closed menu the mapper matches against and
  *  the chip list the players see. Empty for legacy guides. */
 async function nodeAffordances(
@@ -249,6 +290,23 @@ async function executeEntry(
     if (applied.dayAdvanced !== null) sceneNote += ' Meaningful time passes.'
   }
 
+  // The beat that opened this very scene may have narrated it moments ago in the previous turn's
+  // tail - see sceneAlreadyOpened. When it did, the entry narration is a second description of one
+  // event, and the beat's version is the better one (authored seed, stakes, the ask).
+  const echoesSceneOpening = entry === 'offered' && await sceneAlreadyOpened(service, env.adventureId, spec?.nodeKey)
+  if (echoesSceneOpening) {
+    await logEvent(service, env.adventureId, sessionId, 'narration_suppressed', {
+      reason: 'scene_opening_already_narrated', node_key: spec?.nodeKey ?? null, entry,
+    }).catch(() => {})
+    // AND LOWER THE FLAG. `publishNarration` is the only thing that clears `typing`, so skipping
+    // a narration also skips the unlock - the table is left "the DM is thinking" forever and every
+    // later turn 409s. Live on the very first run carrying this suppression: turns 1-28 played,
+    // the echo fired at turn 29, and turns 29-50 were rejected without exception, 22 in a row.
+    //
+    // Any future early return from a narrating path has the same obligation.
+    await commitDiffs(service, env.adventureId, () => [typingDiff(false)]).catch(() => {})
+  }
+
   if (entry === 'offered') {
     const offered = spec!
     if (offered.kind === 'combat') {
@@ -260,13 +318,15 @@ async function executeEntry(
     }
     if (offered.kind === 'skill_challenge') {
       const encounter = await openSkillChallengeFromSpec(service, env, sessionId, offered)
-      await narrationBeat(
-        service, env, sessionId,
-        `The party commits: ${mapping.interpretation}.${sceneNote} The "${offered.label}" challenge ` +
-          `begins${offered.stakes ? ` - at stake: ${offered.stakes}` : ''}. Make the situation ` +
-          'concrete and end demanding their first move.',
-        'Encounter entered',
-      )
+      if (!echoesSceneOpening) {
+        await narrationBeat(
+          service, env, sessionId,
+          `The party commits: ${mapping.interpretation}.${sceneNote} The "${offered.label}" challenge ` +
+            `begins${offered.stakes ? ` - at stake: ${offered.stakes}` : ''}. Make the situation ` +
+            'concrete and end demanding their first move.',
+          'Encounter entered',
+        )
+      }
       return {
         status: 200,
         body: { ok: true, resolved: 'encounter_entered', encounter_kind: 'skill_challenge', encounter_id: encounter.id },

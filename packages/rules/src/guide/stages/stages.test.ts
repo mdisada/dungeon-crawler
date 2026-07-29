@@ -305,6 +305,29 @@ describe('stage 4 (ingredients + coop sets)', () => {
     if (result.ok) expect(result.data.warnings).toEqual([])
   })
 
+  it('CLEARS a condition that is a conversational trigger, not a check', () => {
+    // `filterReveals` gates any conditioned ingredient on a PASSED CHECK and never reads the text,
+    // so "asked why she suspects irregularities" locks the clue behind a roll a conversation never
+    // makes. Live: every NPC-placed clue across three runs carried such a condition and NPC reveals
+    // totalled zero, the one refusal reading `condition not met: asked why she suspects...`.
+    const doc = JSON.parse(STAGE4_RESPONSE)
+    doc.ingredients[0].placement = { npc_key: 'npc:harbormaster-quill', condition: 'asked about the money' }
+    const result = parseStage4(JSON.stringify(doc), STAGE4_CONTEXT)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.ingredients[0].placement.condition).toBeUndefined()
+    expect(result.data.warnings.some((w) => w.includes('asked about the money'))).toBe(true)
+  })
+
+  it('KEEPS a condition that names a real check', () => {
+    const doc = JSON.parse(STAGE4_RESPONSE)
+    doc.ingredients[0].placement = { npc_key: 'npc:harbormaster-quill', condition: 'successful DC 16 insight' }
+    const result = parseStage4(JSON.stringify(doc), STAGE4_CONTEXT)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.ingredients[0].placement.condition).toBe('successful DC 16 insight')
+  })
+
   it('demotes a nonconforming split_knowledge set instead of failing (repair + warn)', () => {
     // Make the coop member a secret without an affinity - the exact live stage-4 failure mode.
     const broken = JSON.parse(STAGE4_RESPONSE) as {

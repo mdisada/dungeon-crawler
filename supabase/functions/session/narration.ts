@@ -223,7 +223,29 @@ async function rosterLines(
   state: GameState,
 ): Promise<string[]> {
   const npcStates = state.dm?.facts.npcStates ?? {}
-  const staged = new Set(state.dialogue?.speakers?.map((sp) => sp.npcId) ?? [])
+  // PRESENT IS NOT THE SAME QUESTION AS SPEAKING (2026-07-28).
+  //
+  // `dialogue.speakers` is the ROUTING field: whoever is in it takes absolute priority over the
+  // encounter, so entry.ts deliberately refuses to stage speakers when a non-social encounter
+  // opens - otherwise every subsequent input becomes NPC dialogue and starves the challenge (an
+  // NPC staged into a solo search scene, seen live). That guard is right and stays.
+  //
+  // But HERE was reading that same field to answer a different question - who is in this scene -
+  // so a combat or skill challenge with an authored cast told the narrator its cast was
+  // ELSEWHERE. Run 15fc82be had zero social encounters across 26 narrations, so HERE was empty
+  // for every single one and every NPC in the story was described to the narrator as absent,
+  // including the boss the party was fighting.
+  //
+  // The node already records who it stages. Reading presence from there leaves routing untouched.
+  const params = state.dm?.encounterSpec?.params
+  const encounterCast = (typeof params === 'object' && params !== null && !Array.isArray(params) &&
+      Array.isArray((params as Record<string, unknown>).npc_ids)
+    ? ((params as Record<string, unknown>).npc_ids as unknown[]).filter((v): v is string => typeof v === 'string')
+    : [])
+  const staged = new Set([
+    ...(state.dialogue?.speakers?.map((sp) => sp.npcId) ?? []),
+    ...encounterCast,
+  ])
   const { data } = await service
     .from('npcs')
     .select('id, name, initial_state, description, personality')
@@ -253,6 +275,71 @@ async function rosterLines(
       ? `GONE   ${gone.slice(0, 12).map((n) => `${n.name} - ${n.state === 'dead' ? 'dead' : 'not in this scene'}`).join('; ')}`
       : '',
   ].filter(Boolean)
+}
+
+/**
+ * WHERE THIS SCENE IS, which is not always where `state.scene` says (2026-07-28).
+ *
+ * A node carries the place it happens. The runtime narrates a "pull" when the party is elsewhere
+ * and opens the encounter when they engage - but nothing ever moves `scene.locationId` to the
+ * node, because travel is only committed when the intent mapper spots the player SAYING they
+ * travel. So the fiction walks into the room and the state stays outside it.
+ *
+ * Run 6d9b2aeb: the party broke into the harbourmaster's office at narration #8 and every
+ * narration through #21 was still stamped `Marenfleet`, thirteen scenes later. #21 then wrote
+ * "somewhere beyond the quay, the Harbourmaster's office waits empty" while the party, Edric and
+ * Wenna were all standing in it.
+ *
+ * This corrects what the NARRATOR is told, which is the half that reaches the page. It does not
+ * move the party: `scene.locationId` still drives discovery, props and travel, and changing that
+ * needs `setScene` and a creator id that this path does not have. The divergence is logged so the
+ * remaining half is measurable rather than invisible.
+ */
+async function sceneLocation(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  state: GameState,
+): Promise<string> {
+  const stated = state.scene.locationName || ''
+  const nodeKey = state.dm?.encounterSpec?.nodeKey
+  if (!nodeKey || !state.encounter) return stated || 'unknown'
+  const { data } = await service
+    .from('story_nodes')
+    .select('location_id, locations(name)')
+    .eq('adventure_id', env.adventureId)
+    .eq('key', nodeKey)
+    .maybeSingle()
+  const actual = (data as { locations?: { name?: string } | null } | null)?.locations?.name ?? ''
+  if (!actual || actual === stated) return stated || 'unknown'
+  await logEvent(service, env.adventureId, sessionId, 'incident', {
+    kind: 'scene_location_diverged', stated, actual, node_key: nodeKey,
+  }).catch(() => {})
+  return actual
+}
+
+/**
+ * What the party has ALREADY LEARNED, verbatim as authored (2026-07-28).
+ *
+ * `ingredients.discovered` is written by exactly two gates - a passed search in the right room
+ * (discovery.ts) and the reveal gate inside a conversation (npc-dialogue.ts) - so it is a precise
+ * record of what this party has earned, and nothing else. That makes it the one source that can
+ * be handed over whole without leaking: an undiscovered clue is simply not in it.
+ *
+ * It answers the case retrieval handles badly. A player asking "what did that ledger page say?"
+ * two scenes later needs the AUTHORED text, not a semantic neighbour of it - memories are
+ * embeddings of scene summaries and will paraphrase, or miss. This is the exact sentence.
+ */
+async function knownLine(service: SupabaseClient, adventureId: string): Promise<string> {
+  const { data } = await service
+    .from('ingredients')
+    .select('reveals')
+    .eq('adventure_id', adventureId)
+    .eq('discovered', true)
+  const facts = ((data ?? []) as { reveals: string | null }[])
+    .map((r) => (r.reveals ?? '').trim())
+    .filter(Boolean)
+  return facts.length > 0 ? `KNOWN  ${facts.slice(0, 12).join(' // ')}` : ''
 }
 
 /** The thread the party is actually pulling on. Read from state - no query. */
@@ -370,11 +457,20 @@ export async function publishNarration(
   // forces at work, what the party has already achieved, what is on a clock. Withholding it left
   // the fact-checker better informed about the story than its author.
   const canon = await buildCanon(service, env.adventureId, state)
-  const [roster, profiles, memories] = await Promise.all([
+  const [roster, profiles, memories, known, whereWeAre] = await Promise.all([
     rosterLines(service, env.adventureId, state),
     partyProfileLines(service, await loadPartyCharacters(service, env.adventureId)),
-    // Retrieval memory (Slice 7): long-form cutscenes ground on what past sessions established.
-    style === 'exposition' ? retrieveMemories(service, env, prompt) : Promise.resolve([]),
+    // Retrieval memory (Slice 7): ground on what past sessions established.
+    //
+    // UNGATED (2026-07-28). This ran only for `exposition`, so the two styles that answer a player
+    // ASKING about something - "what was that ledger we found?" - got no memory at all. `outcome`
+    // narrates the result of a player's action and `beat` opens on what they can engage with;
+    // those are exactly the moments recall matters, and they were the ones excluded.
+    //
+    // One embedding call per narration. It degrades to no-memories on any failure, by design.
+    retrieveMemories(service, env, prompt),
+    knownLine(service, env.adventureId),
+    sceneLocation(service, env, sessionId, state),
   ])
 
   // LABELLED DATA, NOT PROSE (2026-07-27). This block used to be four paragraphs of English that
@@ -382,11 +478,25 @@ export async function publishNarration(
   // moved into the system prompt and only the facts travel per turn - which paid for the three
   // things that were missing (the goal, who the cast ARE, the story so far) without the prompt
   // getting bigger.
-  const transcript = agentContextSplit(state, 6)
+  // TWELVE LINES, NOT SIX (2026-07-28). `recent` counts LINES - narrations and player utterances
+  // interleaved - so six was roughly the last two or three exchanges. The narrator forgot things
+  // that were still on the same page.
+  //
+  // Run 6d9b2aeb introduced "a woman in a customs officer's grey tunic" at narration #2; by #6,
+  // four narrations and their player turns later, she had aged out of the window and the narrator
+  // wrote "the man you watched hauling a sagging canvas sack". Nothing tracks walk-ons - they have
+  // no row and never will - so the transcript is the only thing that remembers them, and it did
+  // not reach far enough back.
+  //
+  // Twelve is not a guess: it is what an NPC already gets (npc-dialogue.ts passes 12 to
+  // agentContextLines). The narrator, which writes the story, had half the working memory of a
+  // single character in it. The extra cost is a few hundred tokens on a call that already carries
+  // canon, roster, party profiles and memories.
+  const transcript = agentContextSplit(state, 12)
   const grounded = [
     prompt,
     '',
-    `SCENE  ${state.scene.locationName || 'unknown'} | ${state.scene.mode} | day ${state.scene.day}`,
+    `SCENE  ${whereWeAre} | ${state.scene.mode} | day ${state.scene.day}`,
     goalLine(state),
     ...roster,
     canon.story,
@@ -396,6 +506,7 @@ export async function publishNarration(
     // pipe-separated run-on, six phases ago sitting beside one second ago.
     transcript.digests.length > 0 ? `SOFAR  ${transcript.digests.join(' // ')}` : '',
     `LAST   ${transcript.recent.join(' | ')}`,
+    known,
     memories.length > 0 ? `EARLIER ${memories.join(' // ')}` : '',
   ].filter(Boolean).join('\n')
 
@@ -448,15 +559,47 @@ export async function publishNarration(
   //
   // commitDiffs re-loads state for the builder and retries on stale versions, so the builder is
   // the only place in this function that sees the state the write actually lands on.
-  let suppressed = false
+  // THE PARTY MOVED WHILE THIS WAS BEING WRITTEN (2026-07-28). Same shape as the guard above and
+  // the same root cause: this function grounds a draft in state loaded 9-33s before it publishes.
+  //
+  // The tail runs in its own worker with `typing` released - deliberately, because holding it
+  // rejected 6 of 26 turns as 409s - so a request can kick its tail and go on publishing, and two
+  // narrations land out of order. Run 1d405957 published these one second apart:
+  //
+  //   #3  "Rasmund Cawl hunches over his desk... sees you standing in his doorway."
+  //   #4  "the office, twenty paces away, sits slightly ajar... no sound comes from within."
+  //
+  // `scene_travel` fired between them. #4 is the beat-opening pull and its CONTENT IS CORRECT -
+  // the party genuinely had not arrived when it was drafted. It describes a place they had left
+  // by the time it reached the page.
+  //
+  // A NOTE ON THE TRADEOFF, because it reverses an earlier judgement in this file: the concurrent-
+  // narration comment above chose to report rather than block, on the grounds that suppressing a
+  // line "trades a contradiction for a hole in the story". That was right while the offender was
+  // unknown and any guard would have been a guess. It is now known and narrow - only a draft whose
+  // scene MOVED under it is dropped, which cannot happen unless the party is somewhere else. A
+  // missing line reads as pace; a line placing the party twenty paces from a room they are
+  // standing in reads as broken. Both locations are logged, so if this proves to cut real
+  // narration the evidence to reverse it will be in the record rather than in an argument.
+  const draftedAtLocation = state.scene.locationId ?? null
+  let suppressed: string | null = null
   await commitDiffs(service, env.adventureId, (s) => {
-    suppressed = Boolean(s.dm?.story?.endedSessionId) && s.dm?.story?.endedSessionId === sessionId
+    // Reset per attempt: commitDiffs re-runs this builder on a stale-version retry, and a verdict
+    // carried over from a previous attempt would report a line as suppressed that this attempt
+    // just appended.
+    suppressed = null
+    if (s.dm?.story?.endedSessionId && s.dm.story.endedSessionId === sessionId) {
+      suppressed = 'story_ended_during_generation'
+    } else if ((s.scene.locationId ?? null) !== draftedAtLocation) {
+      suppressed = 'scene_moved_during_generation'
+    }
     if (suppressed) return [typingDiff(false)]
     return [appendLinesDiff(s, [newLine(null, null, text)]), typingDiff(false)]
   })
   if (suppressed) {
     await logEvent(service, env.adventureId, sessionId, 'narration_suppressed', {
-      reason: 'story_ended_during_generation', style, prompt: prompt.slice(0, 140),
+      reason: suppressed, style, prompt: prompt.slice(0, 140),
+      drafted_at_location: draftedAtLocation, text: text.slice(0, 200),
     }).catch(() => {})
     return ''
   }
@@ -472,7 +615,21 @@ export async function publishNarration(
   // `style` rides along so length can be judged per style (2026-07-27). Without it the measured
   // 868-char median mixes 2-4-sentence beats with 4-8-sentence cutscenes, and "are beats too long?"
   // has no answer - which is precisely why a length ceiling could not be set responsibly.
-  await logEvent(service, env.adventureId, sessionId, 'narration_published', { text, style })
+  // THE PROMPT RIDES ALONG (2026-07-28). Diagnosing why a narration said what it said meant
+  // reading the code path and inferring the prompt, because only the OUTPUT was recorded - and
+  // that inference is exactly where a day's worth of wrong theories came from. When run 286cf89e
+  // killed an NPC the guide never killed, the question "what was the narrator actually asked?"
+  // could not be answered from the record at all.
+  //
+  // Truncated because the instruction is the actionable part; the surrounding context window is
+  // rebuildable from state, and storing it per narration would dwarf every other payload here.
+  // `location` too: only the INSTRUCTION is stored, not the whole grounded context, so "where did
+  // the runtime think the party was?" was unanswerable from the record - and that was the exact
+  // question behind narration #19 of run 15fc82be inventing a location. One field, and the class
+  // of bug where prose and state disagree about place becomes checkable without a code read.
+  await logEvent(service, env.adventureId, sessionId, 'narration_published', {
+    text, style, prompt: prompt.slice(0, 2000), location: whereWeAre,
+  })
   return text
 }
 
