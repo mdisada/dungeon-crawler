@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildRescueNode, buildStage5NodesPrompt, objectiveKeyOf, parseStage5Nodes } from './stage5-nodes'
+import { buildRescueNode, buildStage5NodesPrompt, objectiveKeyOf, parseSocialExits, parseStage5Nodes } from './stage5-nodes'
 import type { Stage5NodesContext } from './stage5-nodes'
 import { atomsSatisfy, buildGuaranteedRoute } from '../guaranteed-route'
 import { validateNodeGraph } from '../nodes'
@@ -544,5 +544,44 @@ describe('node labels', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.data.nodes[0].node.label).toBe('Recover the ledger')
+  })
+})
+
+describe('parseSocialExits', () => {
+  it('keeps well-formed authored exits', () => {
+    const exits = parseSocialExits([
+      { outcome: 'she_names_the_buyer', description: 'Maren gives up the name.', tier: 'success' },
+      { outcome: 'she_wants_paying', description: 'She talks, for coin.', tier: 'partial' },
+      { outcome: 'she_closes_ranks', description: 'The door shuts.', tier: 'failure' },
+    ], 'Find the buyer')
+    expect(exits.map((e) => e.tier)).toEqual(['success', 'partial', 'failure'])
+    expect(exits[0].outcome).toBe('she_names_the_buyer')
+  })
+
+  it('ALWAYS leaves a way out that is not a loss', () => {
+    // 0 of 57 social nodes across 23 guides had exits at all, so every conversation ever played
+    // resolved `failed` whatever the player said. A failure-only set is the same bug.
+    const failureOnly = parseSocialExits([
+      { outcome: 'she_closes_ranks', description: 'The door shuts.', tier: 'failure' },
+    ], 'Find the buyer')
+    expect(failureOnly.some((e) => e.tier !== 'failure')).toBe(true)
+    // and the authored failure survives beside the synthesized way out
+    expect(failureOnly.some((e) => e.outcome === 'she_closes_ranks')).toBe(true)
+  })
+
+  it('synthesizes a usable pair when nothing is authored', () => {
+    const exits = parseSocialExits(undefined, 'Find the buyer')
+    expect(exits.length).toBeGreaterThanOrEqual(2)
+    expect(exits.some((e) => e.tier === 'success')).toBe(true)
+    expect(exits.some((e) => e.tier === 'failure')).toBe(true)
+    for (const e of exits) expect(e.outcome).toMatch(/^[a-z0-9_]+$/)
+  })
+
+  it('drops malformed entries rather than the chapter', () => {
+    const exits = parseSocialExits(
+      [null, 42, { description: 'no outcome' }, { outcome: 'she_talks', tier: 'success' }],
+      'Find the buyer',
+    )
+    expect(exits.some((e) => e.outcome === 'she_talks')).toBe(true)
   })
 })

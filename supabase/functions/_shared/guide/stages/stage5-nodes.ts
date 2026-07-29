@@ -103,6 +103,57 @@ function nodeLabel(hint: string, fallback: string): string {
  * than its win prize. A rescue is the floor a spent party is dropped onto; making the plot fact
  * conditional on winning it is what let objective 0 of run 9a5f87a6 lose its canon on a 0-2 roll.
  */
+/** One authored way a conversation can end. Mirrors what socialExits reads at runtime. */
+export interface SocialExitSpec {
+  outcome: string
+  description: string
+  tier: 'success' | 'partial' | 'failure'
+}
+
+/**
+ * Authored conversation endings, repaired rather than rejected.
+ *
+ * Keeps at most 4 well-formed entries and GUARANTEES at least one non-failure tier: a social node
+ * whose only exits are failures is one the party cannot talk their way out of, which is the exact
+ * shape that made all 57 social nodes across 23 guides unwinnable. Absent or unusable input yields
+ * a deterministic default pair rather than taking the chapter down.
+ */
+export function parseSocialExits(raw: unknown, objectiveTitle: string): SocialExitSpec[] {
+  const parsed = (Array.isArray(raw) ? raw : []).flatMap((e): SocialExitSpec[] => {
+    if (typeof e !== 'object' || e === null || Array.isArray(e)) return []
+    const o = e as Record<string, unknown>
+    const outcome = canonicalizeAtomSlug(typeof o.outcome === 'string' ? o.outcome : '')
+    if (!outcome) return []
+    const tier = o.tier === 'partial' || o.tier === 'failure' ? o.tier : 'success'
+    return [{
+      outcome,
+      description: typeof o.description === 'string' ? o.description.trim() : '',
+      tier: tier as SocialExitSpec['tier'],
+    }]
+  }).slice(0, 4)
+
+  const winnable = parsed.some((e) => e.tier !== 'failure')
+  if (parsed.length > 0 && winnable) return parsed
+
+  // Deterministic floor. Named from the objective so the judge has something concrete to match the
+  // conversation against, and always paired so there is a real decision to make.
+  const goal = objectiveTitle.trim() || 'what they came for'
+  const fallback: SocialExitSpec[] = [
+    {
+      outcome: canonicalizeAtomSlug(`${goal} given up`) || 'they_give_it_up',
+      description: `They give the party ${goal.toLowerCase()}.`,
+      tier: 'success',
+    },
+    {
+      outcome: canonicalizeAtomSlug(`${goal} withheld`) || 'they_close_ranks',
+      description: 'They close ranks and the party leaves with nothing from this conversation.',
+      tier: 'failure',
+    },
+  ]
+  // An authored failure exit is still the author's, so keep it beside the synthesized way out.
+  return [...fallback, ...parsed.filter((e) => e.tier === 'failure')].slice(0, 4)
+}
+
 export function buildRescueNode(objectiveId: string, route: GuaranteedRoute): StoryNodeSpec {
   const objKey = objectiveKeyOf(objectiveId)
   return {
@@ -170,6 +221,7 @@ Rules:
 - EVERY LOSS IS DIFFERENT. Two routes may not cost the same thing - the loss is where a route's identity lives. Never reuse a loss sentence between routes of the same objective.
 - Each node has ONE kind: "skill_challenge", "social", "puzzle", or "combat". Vary them - do not make every route a skill_challenge. At least one combat somewhere in the adventure.
 - A "social" node MUST name at least one living NPC by key from the list.
+- A "social" node MUST also author "exits": 2-4 ways the conversation can END, each { "outcome": short_snake_case_name, "description": one line, "tier": "success" | "partial" | "failure" }. At least one must be "success" or "partial", or the scene is one nobody can talk their way out of. These are FLAVOUR, not progression - the story advances either way - so make them read as genuinely different endings to the same conversation ("she_names_the_buyer" / "she_talks_but_wants_paying" / "she_closes_ranks"), never as degrees of the same one.
 - CAST ONLY FROM THE ROSTER. The people below are everyone this chapter has. If a scene needs a harbourmaster, a warden, a fence, look for who already holds that role and use them - do NOT write a new named person into narration_seed, label, setback_line or outcome. A name you invent has no row behind it: nobody can talk to them, they hold no disposition, they cannot be staged, and they vanish when the scene ends. Unnamed background figures (a clerk, two dockhands, the crowd) are fine.
 - You do NOT author outcomes, edges, or what a success awards. The engine derives every one of those. You write the FICTION and pick from the menus.
 - narration_seed: 1-2 sentences the narrator opens the scene on, ending on a hook. stakes: one line - what is at risk.
@@ -185,6 +237,8 @@ Respond with ONLY a JSON object:
     { "objective_number": 1, "nodes": [
       { "kind": "social", "narration_seed": "...", "stakes": "...",
         "npc_keys": ["npc:..."], "location_key": "loc:...",
+        "exits": [ { "outcome": "she_names_the_buyer", "description": "Maren gives up the name.", "tier": "success" },
+                   { "outcome": "she_closes_ranks", "description": "She shuts the door on them.", "tier": "failure" } ],
         "outcome": { "win": "The party holds the warden's own account of the forged entries.",
                      "loss": "The warden has shut the party out and word of their interest is spreading." },
         "affordances": [ { "key": "press", "hint": "press her on the ledger" } ],
@@ -413,6 +467,20 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
       // The one rule code can decide, so code decides it. A setback that removes a cast member
       // contradicts the very scene the ladder hands the party next - and it is checked on BOTH
       // lines a failure travels on, because either one reaches the next node's narrator.
+      // EVERY CONVERSATION MUST HAVE A WAY OUT THAT IS NOT A LOSS (2026-07-29).
+      //
+      // `socialExits` reads `params.exits`, and the guide pipeline had NEVER written that field -
+      // so `runSocialExitJudge` returned null before its model call, the ceiling fallback found no
+      // partial, and `exitTier(null)` resolved `failed`. 0 of 57 social route nodes across 23
+      // guides had exits: every conversation ever played was a guaranteed loss, whatever the
+      // player said.
+      //
+      // Synthesized when absent rather than rejected, exactly as the setback above is. An omitted
+      // field is not worth failing a paid generation over, and shipping a social node with no way
+      // out is the specific bug this exists to end - so the fallback is deterministic and always
+      // leaves a non-failure exit.
+      const socialExits = resolvedKind === 'social' ? parseSocialExits(n.exits, objective.title) : []
+
       const node: StoryNodeSpec = {
         key: nodeKeyFor(objKey, 'route', ni),
         objectiveKey: objKey,
@@ -427,7 +495,9 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
         locationKey,
         encounter: {
           kind: resolvedKind, label: objective.title, stakes, rationale: '',
-          params: {} as Json,
+          // npc_ids are merged in at storage time (stages-content.ts storedSpec), which spreads
+          // whatever is already here - so authored exits ride along untouched.
+          params: (socialExits.length > 0 ? { exits: socialExits } : {}) as Json,
           // FLAVOUR ONLY (2026-07-29). The plot fact moved to `establishes`; what remains here is
           // the price and the colour. Empty on success because nothing yet authors a win-only
           // reward - when something does, this is where it goes, and it must never contain an
