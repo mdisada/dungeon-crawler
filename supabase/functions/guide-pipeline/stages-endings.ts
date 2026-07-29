@@ -13,6 +13,7 @@ import {
 } from '../_shared/guide/stages/stage8.ts'
 import { hasBlockingErrors, lintStoryGraph } from '../_shared/guide/graph.ts'
 import { deriveLoreReveals } from '../_shared/guide/lore-reveals.ts'
+import { deriveNpcItineraries } from '../_shared/guide/npc-itinerary.ts'
 import { proveGraph } from '../_shared/guide/prove.ts'
 import type { StoryGraph } from '../_shared/guide/graph.ts'
 import type { StageEnv } from './stage-env.ts'
@@ -59,6 +60,34 @@ export async function runStage8(env: StageEnv): Promise<void> {
     const { error } = await env.db.from('objectives').update({ reveals_lore: names }).eq('id', objectiveId)
     assertOk(error, 'lore reveal write failed')
   }
+  // WHERE EVERYONE IS, AND WHEN (2026-07-28). Derived here for the same reason the lore gate is:
+  // this is the first whole-guide stage that can see every objective and every node at once, and a
+  // stored answer can be inspected before play rather than recomputed mid-story.
+  const objectiveIndexById = new Map(sortedObjectives.map((o, i) => [o.id as string, i]))
+  const { data: nodeRows } = await env.db
+    .from('story_nodes')
+    .select('objective_id, location_id, encounter_spec')
+    .eq('adventure_id', env.adventure.id)
+  const itineraries = deriveNpcItineraries(
+    ((nodeRows ?? []) as { objective_id: string; location_id: string | null; encounter_spec: Record<string, unknown> | null }[])
+      .map((n) => ({
+        objectiveId: n.objective_id,
+        locationId: n.location_id,
+        // npc_ids live inside encounter_spec.params - see stages-content.ts storedSpec.
+        npcIds: (((n.encounter_spec?.params as Record<string, unknown> | undefined)?.npc_ids ?? []) as unknown[])
+          .filter((v): v is string => typeof v === 'string'),
+      })),
+    objectiveIndexById,
+  )
+  for (const [npcId, stops] of itineraries) {
+    const { error } = await env.db.from('npcs').update({ itinerary: stops }).eq('id', npcId)
+    assertOk(error, 'npc itinerary write failed')
+  }
+  await logPipelineEvent(env.db, env.adventure.id, 'npc_itineraries_derived', {
+    placed: itineraries.size,
+    travelling: [...itineraries.values()].filter((s) => s.length > 1).length,
+  })
+
   await logPipelineEvent(env.db, env.adventure.id, 'lore_reveals_derived', {
     lore: loreNames.length,
     resolved: [...revealsByObjective.values()].flat().length,

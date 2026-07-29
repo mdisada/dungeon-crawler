@@ -535,6 +535,25 @@ function lintNodes(graph: StoryGraph): LintFinding[] {
     }
   }
 
+  // A PERSON NOBODY CAN MEET (2026-07-28). An NPC who is alive and present but whom no node ever
+  // stages is content the party can never reach: they have a row, a description and a voice, and
+  // no scene brings them on. Stage 7 catches some of these in prose ("purely textural"), but only
+  // when the checker happens to notice - this is decidable, so it is decided here.
+  //
+  // Live on guide 97364401: `Bram Cleve` [alive], staged by none of its 8 route nodes. A warning
+  // rather than an error, because a roster carrying one unused face is untidy, not broken - and
+  // this codebase has repeatedly paid for turning "untidy" into a blocked generation.
+  const stagedIds = new Set(nodes.flatMap((n) => n.npcIds))
+  const unmeetable = graph.npcs.filter((n) =>
+    n.initialState !== 'dead' && n.initialState !== 'absent' && !stagedIds.has(n.id))
+  if (nodes.length > 0 && unmeetable.length > 0) {
+    findings.push({
+      severity: 'warning', code: 'npc_never_staged',
+      message: `No scene stages ${unmeetable.map((n) => n.name).join(', ')} - the party can never ` +
+        'meet them. Either give them a scene or drop them from the roster.',
+    })
+  }
+
   // Combat pacing across the whole adventure (route nodes only; the rescue is never combat).
   const combatNodes = nodes.filter((n) => n.role === 'route' && n.kind === 'combat').length
   if (combatNodes < COMBAT_FLOOR) {

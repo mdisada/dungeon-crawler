@@ -397,3 +397,43 @@ describe('phantom completion (2026-07-23)', () => {
     expect(findings.some((f) => f.code === 'objective_satisfied_at_start')).toBe(false)
   })
 })
+
+describe('npc_never_staged', () => {
+  // Guide 97364401 shipped `Bram Cleve` [alive], staged by none of its 8 route nodes.
+  const base = {
+    chapters: [{ id: 'c1', index: 0, title: 'One' }],
+    objectives: [], encounters: [], ingredients: [], endings: [],
+  }
+  const node = (npcIds: string[]) => ({
+    id: 'n1', key: 'obj:o1#n0', objectiveId: 'o1', kind: 'social' as const, role: 'route' as const,
+    onSuccess: ['a'], onPartial: [], onFailure: ['b'], npcIds,
+    transitions: [{ on: 'full' as const, toNodeKey: null, arrivalContext: '' }],
+  })
+
+  it('flags a living NPC no scene ever stages', () => {
+    const findings = lintStoryGraph({
+      ...base,
+      npcs: [{ id: 'x', name: 'Bram Cleve', chapterId: 'c1', initialState: 'alive' }],
+      nodes: [node([])],
+    })
+    expect(findings.find((f) => f.code === 'npc_never_staged')?.message).toContain('Bram Cleve')
+  })
+
+  it('does not flag someone a scene stages', () => {
+    const findings = lintStoryGraph({
+      ...base,
+      npcs: [{ id: 'x', name: 'Bram Cleve', chapterId: 'c1', initialState: 'alive' }],
+      nodes: [node(['x'])],
+    })
+    expect(findings.some((f) => f.code === 'npc_never_staged')).toBe(false)
+  })
+
+  it('does not flag an absent NPC - not yet in the story is the authoring meaning', () => {
+    const findings = lintStoryGraph({
+      ...base,
+      npcs: [{ id: 'x', name: 'Corvin Dane', chapterId: 'c1', initialState: 'absent' }],
+      nodes: [node([])],
+    })
+    expect(findings.some((f) => f.code === 'npc_never_staged')).toBe(false)
+  })
+})

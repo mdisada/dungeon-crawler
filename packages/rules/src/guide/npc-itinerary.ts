@@ -1,0 +1,81 @@
+// Where is a character, and when? (2026-07-28)
+//
+// `npcs` has no location column and never has. An NPC's whereabouts existed only implicitly - in
+// which nodes stage them - and nothing read it, so the narrator was never told where anyone is and
+// the runtime could not tell "they are not here" from "they are gone".
+//
+// It does not need authoring. Objectives are ordered, nodes belong to objectives, and since
+// 1e24291 nodes carry a location - so node placement already encodes both WHERE a character
+// appears and WHEN. Derived from that, an itinerary cannot contradict node placement; an authored
+// `npc.location` field could, and would the first time two stages disagreed.
+//
+// Real output, guide 350c0363:
+//
+//   Rosten Vale   obj1 the Spillstone             -> obj2 the Harbourmaster's Office
+//   Selka Vane    obj2 the Harbourmaster's Office -> obj3 the Spillstone
+//   Mira Coth     obj0 Marenref                   -> obj1 Jeth Floats
+//
+// Selka moving to the Spillstone for the climax ritual is the story beat itself, recovered for
+// free from data the guide already had.
+
+/** One stop: from the objective at `objectiveIndex` onward, this is where they are staged. */
+export interface ItineraryStop {
+  objectiveIndex: number
+  locationId: string
+}
+
+export interface ItineraryNode {
+  objectiveId: string
+  /** Null for rescue nodes and legacy guides - "wherever the party is", so it places nobody. */
+  locationId: string | null
+  npcIds: readonly string[]
+}
+
+/**
+ * NPC id -> ordered stops, collapsing repeats so consecutive nodes in one place read as one stop.
+ *
+ * DELIBERATELY NOT a check that an NPC is in one place per objective. An objective's routes are
+ * ALTERNATIVES - only one ever plays - so the same character being staged at the office by one
+ * route and the Spillstone by another is correct authoring, not a contradiction. The first stop
+ * for a given objective wins, which is the route the party meets first.
+ */
+export function deriveNpcItineraries(
+  nodes: readonly ItineraryNode[],
+  objectiveIndexById: ReadonlyMap<string, number>,
+): Map<string, ItineraryStop[]> {
+  const byNpc = new Map<string, ItineraryStop[]>()
+  const placed = nodes
+    .flatMap((n) => {
+      const objectiveIndex = objectiveIndexById.get(n.objectiveId)
+      if (objectiveIndex === undefined || !n.locationId) return []
+      return n.npcIds.map((npcId) => ({ npcId, objectiveIndex, locationId: n.locationId as string }))
+    })
+    .sort((a, b) => a.objectiveIndex - b.objectiveIndex)
+
+  for (const { npcId, objectiveIndex, locationId } of placed) {
+    const stops = byNpc.get(npcId) ?? []
+    const last = stops[stops.length - 1]
+    // Same place as the previous stop, or a second route of the same objective: not a new stop.
+    if (last && (last.locationId === locationId || last.objectiveIndex === objectiveIndex)) continue
+    stops.push({ objectiveIndex, locationId })
+    byNpc.set(npcId, stops)
+  }
+  return byNpc
+}
+
+/**
+ * Where a character is expected to be once the story has reached `objectiveIndex` - the latest
+ * stop at or before it.
+ *
+ * Null BEFORE their first stop, on purpose. Selka's itinerary begins at objective 2; where she is
+ * during objectives 0-1 is genuinely unconstrained, and inventing a location for her is exactly
+ * the kind of confident wrong answer that makes a derived field worse than no field.
+ */
+export function npcLocationAt(stops: readonly ItineraryStop[], objectiveIndex: number): string | null {
+  let current: string | null = null
+  for (const stop of stops) {
+    if (stop.objectiveIndex > objectiveIndex) break
+    current = stop.locationId
+  }
+  return current
+}
