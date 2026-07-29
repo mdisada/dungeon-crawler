@@ -363,16 +363,34 @@ async function executeEntry(
   // routing priority over it - every subsequent input would become NPC dialogue and starve
   // the challenge (seen live: an NPC staged into a solo search scene). Travel and time still
   // apply; only the staging is dropped.
+  // ASKING IS NOT ACTING (2026-07-29). Computed here rather than at the fold branch because the
+  // scene effects below are applied FIRST, and travel is exactly what a question must not cause.
+  const isInquiry = entry === 'fold_in' && seeksInformation(text)
+
   let sceneNote = ''
-  if (mapping.sceneEffects) {
+  const proposed = mapping.sceneEffects
+  if (proposed) {
+    // A QUESTION MAY NOT MOVE THE PARTY. The mapper can propose `travel_location` on any reply,
+    // and on an inquiry that is the same defect as the narration prompt below - the party asked
+    // where something was and got taken there. Staging an NPC into the conversation is fine;
+    // walking somewhere and letting the day advance are not.
+    if (isInquiry && (proposed.travelLocation || proposed.advanceDay)) {
+      await logEvent(service, env.adventureId, sessionId, 'scene_effect_rejected', {
+        effect: 'travel_on_inquiry',
+        proposed: proposed.travelLocation ?? null,
+        reason: 'the player asked a question - asking is not acting',
+      }).catch(() => {})
+      proposed.travelLocation = null
+      proposed.advanceDay = false
+    }
     const opensNonSocial = entry === 'adhoc' ||
       (entry === 'offered' && spec !== null && ['combat', 'skill_challenge', 'puzzle'].includes(spec.kind))
-    const effects = opensNonSocial && mapping.sceneEffects.stageNpcs.length > 0
-      ? { ...mapping.sceneEffects, stageNpcs: [] }
-      : mapping.sceneEffects
-    if (effects !== mapping.sceneEffects) {
+    const effects = opensNonSocial && proposed.stageNpcs.length > 0
+      ? { ...proposed, stageNpcs: [] }
+      : proposed
+    if (effects !== proposed) {
       await logEvent(service, env.adventureId, sessionId, 'scene_effect_rejected', {
-        effect: 'stage_npcs', proposed: mapping.sceneEffects.stageNpcs, reason: 'non-social encounter opening',
+        effect: 'stage_npcs', proposed: proposed.stageNpcs, reason: 'non-social encounter opening',
       })
     }
     const applied = await applySceneEffects(service, env, sessionId, effects, {
@@ -583,7 +601,7 @@ async function executeEntry(
   //
   // Best-effort throughout: a clue that fails to surface must never cost the player their turn.
   let discoveryFragment = ''
-  if (seeksInformation(text)) {
+  if (isInquiry) {
     try {
       const { state: now } = await loadState(service, env.adventureId)
       const reveals = await discoverAtLocation(
@@ -597,22 +615,57 @@ async function executeEntry(
     }
   }
 
-  // fold_in: the action happens and CARRIES the party forward - a folded reply must never
-  // read as the story circling back to a question already answered (playtest 2026-07-20).
+  // WE TOLD IT TO MOVE THEM (2026-07-29). The single most damaging line in the app, until now:
+  //
+  //   `Carry this forward: ${name} - ${text}. Let it actually happen and MOVE the scene with it`
+  //
+  // with `text` being the player's RAW words. Live in run bac9f4b9 a player typed "what's inside"
+  // - a QUESTION - and the narrator, told to make it actually happen, walked the party through the
+  // foundry door. Eighteen narrations then published before any travel was committed, state still
+  // reading Ashbridge, until the travel guard "corrected" them by carting them out of an
+  // underground chamber they had never officially entered.
+  //
+  // Nothing diverged silently. We instructed the divergence, and on 76% of all turns: `offered`
+  // and `adhoc` both narrate from the mapper's CLEANED `interpretation`, and only this branch
+  // threw it away and used the raw text.
+  //
+  // Two corrections, and they are separate:
+  //
+  // 1. NARRATE FROM THE INTERPRETATION, not the raw words - the same discipline the other two
+  //    branches already follow. The mapper is the guard; using its output is the point of having
+  //    one. Raw text stays available to the model only as the quoted line in the transcript.
+  // 2. ASKING IS NOT ACTING. "Let it actually happen and MOVE the scene" is right for an endeavour
+  //    and catastrophic for a question. An inquiry is answered from what is already established;
+  //    it may not move the party, introduce a place, or advance the clock.
+  const said = mapping.interpretation?.trim() || text
   await narrationBeat(
     service, env, sessionId,
-    `Carry this forward: ${character.name} - ${text}. Let it actually happen and MOVE the ` +
-      `scene with it - describe what changes as they act.${sceneNote}${discoveryFragment} Never re-ask a question ` +
-      'the party already answered and never re-offer directions they already chose; if the ' +
-      'fiction has one way onward, take them along it and give the in-fiction reason it is ' +
-      'the way.' +
-      (spec
-        ? ` Their momentum should land them at the threshold of "${spec.label}"` +
-          `${spec.stakes ? ` (at stake: ${spec.stakes})` : ''} - end there, demanding engagement ` +
-          'with it, not another choice of direction.'
-        : ' End at the next concrete thing demanding their response - never a menu of paths.'),
+    isInquiry
+      // Answer, do not enact. No "carry forward", no "move the scene" - those are what turned a
+      // question into travel. The party stays exactly where they are.
+      ? `${character.name} wants to know: ${said}. ANSWER them from what is already established - ` +
+        'what they can see, hear, remember or reasonably infer from where they are standing right ' +
+        'now.' + `${sceneNote}${discoveryFragment} They are ASKING, not acting: do NOT move them, ` +
+        'do not take them through a door or to another place, do not introduce a new location or a ' +
+        'new named person, and do not let time pass. If the answer is not established, say plainly ' +
+        'what they cannot tell from here - an honest "you cannot see from this angle" is better ' +
+        'than an invented detail nothing else will remember.' +
+        (spec
+          ? ` Close on what still waits: "${spec.label}".`
+          : ' Close on what is in front of them.')
+      // An endeavour: unchanged behaviour, which was only ever correct for this half.
+      : `Carry this forward: ${character.name} - ${said}. Let it actually happen and MOVE the ` +
+        `scene with it - describe what changes as they act.${sceneNote}${discoveryFragment} Never re-ask a question ` +
+        'the party already answered and never re-offer directions they already chose; if the ' +
+        'fiction has one way onward, take them along it and give the in-fiction reason it is ' +
+        'the way.' +
+        (spec
+          ? ` Their momentum should land them at the threshold of "${spec.label}"` +
+            `${spec.stakes ? ` (at stake: ${spec.stakes})` : ''} - end there, demanding engagement ` +
+            'with it, not another choice of direction.'
+          : ' End at the next concrete thing demanding their response - never a menu of paths.'),
     'Cutscene',
     'outcome',
   )
-  return { status: 200, body: { ok: true, resolved: 'folded_in' } }
+  return { status: 200, body: { ok: true, resolved: 'folded_in', inquiry: isInquiry } }
 }

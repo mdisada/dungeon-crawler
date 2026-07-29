@@ -1,0 +1,41 @@
+// A narration cut off mid-thought must never reach the player (2026-07-29).
+//
+// `llm.ts` already retries once when the provider reports `finish_reason === 'length'` - and its
+// own comment records that this provider "does not reliably report" it when the budget went to
+// reasoning tokens instead of content. So a truncated reply can pass every upstream check.
+//
+// Live in run bac9f4b9, narration #15 reached the player ending on the words "The secrets", and
+// #16 then republished its opening paragraph. Both were shown. Across 22 recorded runs the
+// deterministic narration audit counts 12 lines cut off mid-thought.
+//
+// Shape, not meaning - the same discipline as stripContextEcho, and the reason it is here rather
+// than in a prompt: a model cannot be asked to notice it was cut off.
+
+/** Sentence-ending punctuation, allowing a closing quote or bracket after it. */
+const ENDS_COMPLETE = /[.!?…](["'’”)\]]*)\s*$/
+/** The last sentence boundary we can safely cut back to. */
+const LAST_BOUNDARY = /[.!?…](["'’”)\]]*)(?=\s|$)(?![\s\S]*[.!?…](["'’”)\]]*)(?=\s|$))/
+
+/**
+ * Keep a narration short of a shipping a half-sentence, without ever emptying it.
+ *
+ * Returns the text unchanged when it already ends cleanly. Otherwise cuts back to the last
+ * complete sentence. If that would leave nothing usable the ORIGINAL is returned instead: a
+ * ragged ending is bad, a blank turn is worse, and blank turns have already cost this codebase
+ * nine swallowed player actions.
+ */
+export function trimToCompleteSentence(text: string): { text: string; trimmed: boolean } {
+  const original = text ?? ''
+  const body = original.trim()
+  if (body.length === 0) return { text: original, trimmed: false }
+  if (ENDS_COMPLETE.test(body)) return { text: original, trimmed: false }
+
+  const match = LAST_BOUNDARY.exec(body)
+  if (!match) return { text: original, trimmed: false }
+  const cut = body.slice(0, match.index + match[0].length).trim()
+
+  // Half of what we were given is the floor. Below that the cut is doing more damage than the
+  // ragged tail it removes - a paragraph reduced to one clause reads as its own kind of broken.
+  if (cut.length < Math.max(40, body.length * 0.5)) return { text: original, trimmed: false }
+  return { text: cut, trimmed: true }
+}

@@ -70,6 +70,59 @@ export interface Canon {
   story: string
 }
 
+
+/**
+ * THE STORY SO FAR, IN THE WORDS THE GUIDE WROTE FOR IT (2026-07-29).
+ *
+ * Every story node carries an `outcome_summary` - one present-tense sentence per tier, authored
+ * expressly as "the record every later scene reads instead of guessing". Until now it reached
+ * exactly two places: the resolution narration itself, and the arrival bridge into the next node.
+ * The STANDING context a narrator gets on every other turn had only de-slugged flag names
+ * ("foundry operations exposed"), which is a fragment, not a fact.
+ *
+ * That is the gap behind the contradiction class. Run bac9f4b9: the party opened a chest and read
+ * the parchment inside at narration #2, and at #5 the same chest "remains stubbornly closed, its
+ * true contents a mystery". Nothing in the prompt said otherwise, because what happened was only
+ * ever in the transcript window, and the window had moved on.
+ *
+ * Newest last, so the most recent state of the world reads closest to the instruction. Capped:
+ * this grows with every scene played and a long session should not spend its whole budget here.
+ */
+const MAX_ESTABLISHED = 8
+
+async function establishedSoFar(service: SupabaseClient, adventureId: string): Promise<string[]> {
+  const { data: events } = await service
+    .from('event_log')
+    .select('payload')
+    .eq('adventure_id', adventureId)
+    .eq('type', 'encounter_resolved')
+    .order('id', { ascending: true })
+  const resolved = ((events ?? []) as { payload: { node_key?: string; tier?: string } }[])
+    .flatMap((e) => (e.payload?.node_key ? [{ key: e.payload.node_key, tier: e.payload.tier }] : []))
+  if (resolved.length === 0) return []
+
+  const { data: nodes } = await service
+    .from('story_nodes')
+    .select('key, outcome_summary')
+    .eq('adventure_id', adventureId)
+    .in('key', [...new Set(resolved.map((r) => r.key))])
+  const byKey = new Map(
+    ((nodes ?? []) as { key: string; outcome_summary: { win?: string; loss?: string } | null }[])
+      .map((n) => [n.key, n.outcome_summary]),
+  )
+
+  const lines: string[] = []
+  for (const r of resolved) {
+    const summary = byKey.get(r.key)
+    // The tier that actually happened - a scene the party LOST establishes its loss sentence.
+    const text = r.tier === 'full' ? summary?.win : summary?.loss
+    const trimmed = typeof text === 'string' ? text.trim() : ''
+    // Same scene resolving twice (re-opens happen) must not say the same thing twice.
+    if (trimmed && !lines.includes(trimmed)) lines.push(trimmed)
+  }
+  return lines.slice(-MAX_ESTABLISHED)
+}
+
 /**
  * Durable world facts only. Deliberately EXCLUDES: recent dialogue lines, the generating
  * prompt, retrieved memories (prose summaries, not verified state), and anything an agent
@@ -233,7 +286,11 @@ export async function buildCanon(
   // The writer's half, one labelled line per category and no instructional prose - the standing
   // rules that used to travel with this text now live in the narrator's system prompt, where they
   // are sent once instead of re-explained on every call.
+  const established = await establishedSoFar(service, adventureId)
   const story = [
+    // The authored record of what has already happened, ahead of the flag list below: a sentence
+    // the guide wrote beats a de-slugged fragment every time.
+    established.length > 0 ? `STORY  ${established.join(' ')}` : '',
     // WHAT A FORCE IS, not just its name (2026-07-28). The fact-checker above is told that these
     // "are not people and never speak"; the narrator was handed the bare list and left to work it
     // out. It did not, and could not reasonably be expected to.

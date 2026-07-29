@@ -10,7 +10,7 @@ import { foreignCharacters, stripForeign } from '../_shared/guide/charset.ts'
 import { npcLocationAt } from '../_shared/guide/npc-itinerary.ts'
 import type { ItineraryStop } from '../_shared/guide/npc-itinerary.ts'
 import { dialogueGateActive, dmSettings } from '../_shared/play/index.ts'
-import { stripContextEcho } from '../_shared/story/index.ts'
+import { stripContextEcho, trimToCompleteSentence } from '../_shared/story/index.ts'
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
 import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions, runOutcomeClaimCheck } from './agents.ts'
 import type { AgentEnv, NarrationStyle } from './agents.ts'
@@ -549,6 +549,17 @@ export async function publishNarration(
       text = echo.text
       await logEvent(service, env.adventureId, sessionId, 'incident', {
         kind: 'context_echo_stripped', labels: echo.stripped, style,
+      }).catch(() => {})
+    }
+    // A HALF-SENTENCE MUST NOT REACH THE PLAYER (2026-07-29). llm.ts retries when the provider
+    // reports finish_reason 'length', and its own comment records that this provider does not
+    // report it reliably - so run bac9f4b9 published a narration ending on the words "The
+    // secrets". Shape-based, because a model cannot be asked to notice it was cut off.
+    const whole = trimToCompleteSentence(text)
+    if (whole.trimmed) {
+      text = whole.text
+      await logEvent(service, env.adventureId, sessionId, 'incident', {
+        kind: 'narration_truncated_trimmed', style,
       }).catch(() => {})
     }
     text = await claimGuard(service, env, sessionId, text, canon, (constraint) =>

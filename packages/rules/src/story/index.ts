@@ -35,6 +35,7 @@ export type {
 } from './pacing.ts'
 export { seeksInformation } from './asking.ts'
 export { stripContextEcho } from './context-echo.ts'
+export { trimToCompleteSentence } from './truncation.ts'
 export type { ContextEchoResult } from './context-echo.ts'
 export { pickReveal } from './reveals.ts'
 export { isSpineProgress, progressedSince as spineProgressed } from './progress-signal.ts'
