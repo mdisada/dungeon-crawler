@@ -275,6 +275,10 @@ export async function openAuthoredNode(
   // shape entirely: this is a pull toward somewhere, not a scene being entered.
   const elsewhere = Boolean(node.locationId) && Boolean(ctx.partyLocationId) &&
     node.locationId !== ctx.partyLocationId
+  // A node with no place at all: either a rescue node (unplaced by design - it happens wherever
+  // the party stands) or a guide authored before placement existed. See the seed note below.
+  const nodeIsUnplaced = !node.locationId
+  const isRescueNode = /#r\d+$/.test(node.key)
   const standing = elsewhere
     ? `The party is NOT there - they are still at ${ctx.partyLocationName || 'where they were'}, ` +
       'and have taken no step toward it. Write only the pull: what reaches them from it where ' +
@@ -291,7 +295,29 @@ export async function openAuthoredNode(
     // seconds before scene_travel fired. The scene it invented was the one the objective was named
     // after, which is exactly where a writer with no stated location would put them.
     : `The party is at ${ctx.partyLocationName || 'where they already are'} and has not moved - ` +
-      'open the scene there, and never presume travel or actions they did not take. '
+      'open the scene there, and never presume travel or actions they did not take. ' +
+      // THE SEED MAY DISAGREE, AND IT WINS UNLESS TOLD OTHERWISE (2026-07-29).
+      //
+      // `elsewhere` keys on `node.locationId`, so a node with NO location takes this branch and is
+      // told "the scene happens here" - while its authored seed may open on a named room the party
+      // has never entered. The prompt then carries two contradictory instructions, and the seed
+      // wins every time because it is concrete and vivid and comes first.
+      //
+      // Live run 5a5e6c7f, narration #8: the prompt said "Open this scene: Brenn Coale's cramped
+      // tenement is a chaotic archive..." followed by "The party is at Harbourmaster's Office and
+      // has not moved". The narrator reproduced the tenement verbatim, teleporting the party to a
+      // room that is not even in the locations table.
+      //
+      // Guides authored before node placement (1e24291, mid-2026-07-28) have location_id NULL on
+      // EVERY node - 0 of 12 on that adventure - so this is the whole of a legacy guide, not an
+      // edge case. Rescue nodes are unplaced by design and their seeds are written generically, so
+      // they neither need this nor are harmed by it.
+      (nodeIsUnplaced && !isRescueNode
+        ? 'The scene description above may name a room or building the party is NOT in - it was ' +
+          'written without a place attached. Take its CONTENT (who is there, what is happening, ' +
+          'what matters) and stage it where the party actually stands. Never reproduce its setting ' +
+          'as though they had walked into it. '
+        : '')
   await narrationBeat(
     service, env, sessionId,
     `${ctx.narrationContext ? `${ctx.narrationContext} ` : ''}${bridge ? `${bridge} ` : ''}` +

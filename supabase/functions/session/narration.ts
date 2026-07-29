@@ -10,6 +10,7 @@ import { foreignCharacters, stripForeign } from '../_shared/guide/charset.ts'
 import { npcLocationAt } from '../_shared/guide/npc-itinerary.ts'
 import type { ItineraryStop } from '../_shared/guide/npc-itinerary.ts'
 import { dialogueGateActive, dmSettings } from '../_shared/play/index.ts'
+import { stripContextEcho } from '../_shared/story/index.ts'
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
 import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions, runOutcomeClaimCheck } from './agents.ts'
 import type { AgentEnv, NarrationStyle } from './agents.ts'
@@ -538,6 +539,18 @@ export async function publishNarration(
   let text: string
   try {
     text = await runNarrator(env, grounded, undefined, style)
+    // THE BRIEFING IS NOT THE STORY (2026-07-29). The labelled block above is what we pay to send;
+    // a weak model can treat it as a document to continue and copy it back. Measured at 3 of 348
+    // published lines - one player was shown `CAST Dorya Salk - female Mirefleet resident...`
+    // followed by PARTY, SOFAR and LAST. Deterministic and shape-based; see the module header for
+    // why it never strips a lone `LAST` and never returns an empty narration.
+    const echo = stripContextEcho(text)
+    if (echo.stripped.length > 0) {
+      text = echo.text
+      await logEvent(service, env.adventureId, sessionId, 'incident', {
+        kind: 'context_echo_stripped', labels: echo.stripped, style,
+      }).catch(() => {})
+    }
     text = await claimGuard(service, env, sessionId, text, canon, (constraint) =>
       runNarrator(env, grounded, constraint, style))
     text = await outcomeGuard(service, env, sessionId, text, state, (constraint) =>

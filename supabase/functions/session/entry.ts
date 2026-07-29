@@ -96,13 +96,35 @@ export async function openBeatSpec(
  * Deterministic and narrow: the same node, opened moments ago, whose own opening narration has
  * already introduced the scene. The encounter still opens - only the second description is
  * dropped, because the first one is better (it carries the authored seed and the stakes).
+ *
+ * MEASURED FROM THE PLAYER'S INTENT, NOT FROM NOW (2026-07-29).
+ *
+ * This asked `Date.now() - opened < 90s`, which catches every beat opened in the last minute and a
+ * half - including one the player has already READ and is now responding to. That is the opposite
+ * of an echo: it is an answer to their action, and dropping it leaves them staring at silence.
+ *
+ * Measured across nine runs: the guard fired 20 times and in 9 of those the player got no text at
+ * all for their turn. Every single firing was on a beat that opened 4.3s to 86.2s BEFORE the
+ * player acted - not one was the concurrent case this exists for. The actions swallowed include
+ * "I grab the ledger", "I draw my axe and charge the nearest spectral figure", "we head down into
+ * the cellar", and - worst - "I turn to face into the black water and shout, 'I offer the phantom
+ * ships!'", a climactic declaration answered with nothing.
+ *
+ * The real discriminator was always in the original evidence and was simply not used: in run
+ * 6d9b2aeb the `intent_submitted` and the `beat_opened` share a timestamp. The player could not
+ * have read it, because it did not exist when they hit send. So ask exactly that.
  */
-const ENTRY_ECHO_WINDOW_MS = 90_000
+/** How far before the intent a beat may open and still count as concurrent with it (clock skew,
+ *  and the tail landing while the player was already typing). Deliberately tight: the cost of
+ *  being too generous is a silent turn, and the cost of being too strict is one duplicated
+ *  description - which is the safe direction. */
+const ENTRY_ECHO_GRACE_MS = 2_000
 
 async function sceneAlreadyOpened(
   service: SupabaseClient,
   adventureId: string,
   nodeKey: string | undefined,
+  intentAt: number,
 ): Promise<boolean> {
   if (!nodeKey) return false
   const { data } = await service
@@ -115,7 +137,9 @@ async function sceneAlreadyOpened(
     .limit(1)
   const opened = (data ?? [])[0]?.created_at as string | undefined
   if (!opened) return false
-  return Date.now() - Date.parse(opened) < ENTRY_ECHO_WINDOW_MS
+  const openedAt = Date.parse(opened)
+  if (!Number.isFinite(openedAt)) return false
+  return openedAt >= intentAt - ENTRY_ECHO_GRACE_MS
 }
 
 /** The authored affordances of the open node - the closed menu the mapper matches against and
@@ -176,6 +200,10 @@ export async function handleCutsceneIntent(
   kind: string,
   opts?: { lineAlreadyStaged?: boolean; affordanceKey?: string | null },
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+  // As close as the server gets to "when the player hit send" - captured before any work, so a
+  // slow turn cannot push it past a beat that opened while the turn was running. See
+  // sceneAlreadyOpened: this is the reference point the echo test needs.
+  const intentAt = Date.now()
   if (!opts?.lineAlreadyStaged) {
     await commitDiffs(service, env.adventureId, (s) => [
       appendLinesDiff(s, [newLine(character.name, null, text)], { typing: true }),
@@ -210,7 +238,7 @@ export async function handleCutsceneIntent(
     try {
       return await executeEntry(
         service, env, sessionId, character, text, 'offered',
-        { interpretation: `chose: ${bypassKey}`, sceneEffects: null }, spec, beatId, party,
+        { interpretation: `chose: ${bypassKey}`, sceneEffects: null }, spec, beatId, party, intentAt,
         { alreadyLogged: true },
       )
     } catch (err) {
@@ -271,7 +299,7 @@ export async function handleCutsceneIntent(
   }
   const entry = mapping.entry === 'offered' && !spec ? 'fold_in' : mapping.entry
   try {
-    return await executeEntry(service, env, sessionId, character, text, entry, mapping, spec, beatId, party)
+    return await executeEntry(service, env, sessionId, character, text, entry, mapping, spec, beatId, party, intentAt)
   } catch (err) {
     // Never leave the table wedged on typing:true - the machine's cutscene handler is the
     // hot path for every full-AI input.
@@ -297,6 +325,8 @@ async function executeEntry(
   spec: StoredBeatSpec | null,
   beatId: string | null,
   party: CharacterRow[],
+  /** When the player hit send - the reference point for the echo test. */
+  intentAt: number,
   opts?: { alreadyLogged?: boolean },
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   // The mapper audit trail: the player's RAW text beside the key it was filed under. Misfiled
@@ -357,7 +387,8 @@ async function executeEntry(
   // The beat that opened this very scene may have narrated it moments ago in the previous turn's
   // tail - see sceneAlreadyOpened. When it did, the entry narration is a second description of one
   // event, and the beat's version is the better one (authored seed, stakes, the ask).
-  const echoesSceneOpening = entry === 'offered' && await sceneAlreadyOpened(service, env.adventureId, spec?.nodeKey)
+  const echoesSceneOpening = entry === 'offered' &&
+    await sceneAlreadyOpened(service, env.adventureId, spec?.nodeKey, intentAt)
   if (echoesSceneOpening) {
     await logEvent(service, env.adventureId, sessionId, 'narration_suppressed', {
       reason: 'scene_opening_already_narrated', node_key: spec?.nodeKey ?? null, entry,
