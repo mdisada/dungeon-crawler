@@ -18,11 +18,17 @@
  * - `objective_judge` - the recognition judge, which demands a verbatim evidence quote about the
  *   objective's intent. Deliberately kept: it is the path for progress won in fiction, and it is
  *   a different act from noticing a verb.
+ * - `node_established` - an authored node RESOLVED, at any tier (2026-07-29). This is the most
+ *   literal deed of the three: the party played the scene the guide wrote for this objective. It
+ *   is what makes the plot prewritten and linear - the fact becomes true because the beat was
+ *   played, and winning or losing changes the price and the flavour, never whether the story
+ *   advances. See docs/DECISIONS.md 2026-07-29.
  *
  * Everything else (`scene_ledger`, `adjudicator_mark_event`, `adjudicator`) stays useful for BEAT
- * atoms and colour - it simply may not finish the spine.
+ * atoms and colour - it simply may not finish the spine. That distinction is the whole point of
+ * this gate and it is unchanged: what is being added is a deed, not an observation.
  */
-export const OBJECTIVE_CREDIT_SOURCES = ['encounter_outcome', 'objective_judge'] as const
+export const OBJECTIVE_CREDIT_SOURCES = ['encounter_outcome', 'objective_judge', 'node_established'] as const
 export type ObjectiveCreditSource = (typeof OBJECTIVE_CREDIT_SOURCES)[number]
 
 export function isObjectiveCreditSource(source: string): boolean {

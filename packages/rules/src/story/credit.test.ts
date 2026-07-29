@@ -46,8 +46,14 @@ describe('objective credit gate', () => {
     expect(credit('some_future_agent').apply).toBe(false)
   })
 
-  it('exposes exactly the two deed sources', () => {
-    expect([...OBJECTIVE_CREDIT_SOURCES]).toEqual(['encounter_outcome', 'objective_judge'])
+  it('exposes exactly the deed sources - and nothing observational', () => {
+    // Three since 2026-07-29: `node_established` joined when the plot stopped being the prize for
+    // winning an encounter and became what a RESOLVED authored node makes true. The list is
+    // asserted whole on purpose - it is the single gate between a real deed and a free objective,
+    // and it should not grow by accident.
+    expect([...OBJECTIVE_CREDIT_SOURCES]).toEqual([
+      'encounter_outcome', 'objective_judge', 'node_established',
+    ])
     expect(isObjectiveCreditSource('scene_ledger')).toBe(false)
   })
 })
@@ -91,5 +97,22 @@ describe('reveal placement', () => {
     const rows = [clue('first', 'mine'), clue('second', 'mine')]
     expect(pickReveal(rows, 'mine')).toBe('first')
     expect(pickReveal(rows, 'mine')).toBe(pickReveal(rows, 'mine'))
+  })
+})
+
+describe('node_established (2026-07-29)', () => {
+  // Live in run aa8a4fe3 the whole decoupling was silently inert: every node carried its
+  // `establishes` atom, the runtime looked it up correctly, and the spine gate then blocked it -
+  // 10 `objective_credit_blocked` events, 3 of them this source. The guide was right, the runtime
+  // was right, and one allow-list stood between them.
+  it('may complete an objective - a resolved authored node is a deed', () => {
+    expect(decideCredit({ source: 'node_established', isObjectiveAtom: true, enforced: true }))
+      .toEqual({ apply: true })
+  })
+
+  it('does not weaken the gate for observation sources', () => {
+    for (const source of ['scene_ledger', 'adjudicator', 'adjudicator_mark_event']) {
+      expect(decideCredit({ source, isObjectiveAtom: true, enforced: true }).apply).toBe(false)
+    }
   })
 })
