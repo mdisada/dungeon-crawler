@@ -7,6 +7,8 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { foreignCharacters, stripForeign } from '../_shared/guide/charset.ts'
+import { npcLocationAt } from '../_shared/guide/npc-itinerary.ts'
+import type { ItineraryStop } from '../_shared/guide/npc-itinerary.ts'
 import { dialogueGateActive, dmSettings } from '../_shared/play/index.ts'
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
 import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions, runOutcomeClaimCheck } from './agents.ts'
@@ -248,10 +250,28 @@ async function rosterLines(
   ])
   const { data } = await service
     .from('npcs')
-    .select('id, name, initial_state, description, personality')
+    .select('id, name, initial_state, description, personality, itinerary')
     .eq('adventure_id', adventureId)
+  // WHERE THE CAST ARE (2026-07-28). `CAST` listed bare names, so the narrator knew who existed
+  // and never where any of them were - it could not say "Pell is over at the Drowned Quarter"
+  // because nothing told it. npcs.itinerary is derived at guide time from the nodes that stage
+  // each character, so this is a lookup, not a judgement.
+  const { data: objectiveRows } = await service
+    .from('objectives')
+    .select('id, index')
+    .eq('adventure_id', adventureId)
+  const objectiveIndex = ((objectiveRows ?? []) as { id: string; index: number }[])
+    .find((o) => o.id === state.objectives?.currentId)?.index ?? -1
+  const { data: locationRows } = await service
+    .from('locations')
+    .select('id, name')
+    .eq('adventure_id', adventureId)
+  const locationName = new Map(((locationRows ?? []) as { id: string; name: string }[])
+    .map((l) => [l.id, l.name]))
+
   const rows = ((data ?? []) as {
     id: string; name: string; initial_state: string; description: string; personality: unknown
+    itinerary: ItineraryStop[] | null
   }[])
     .filter((n) => n.name)
     .map((n) => ({
@@ -259,6 +279,9 @@ async function rosterLines(
       name: n.name,
       identity: identityClause(n.description ?? '', n.personality),
       state: npcStates[n.id] ?? n.initial_state ?? 'alive',
+      // Null before their first stop, and left null rather than guessed - see npc-itinerary.ts.
+      // The narrator is told where someone is only when the guide actually placed them.
+      where: locationName.get(npcLocationAt(n.itinerary ?? [], objectiveIndex) ?? '') ?? '',
     }))
 
   const living = rows.filter((n) => n.state === 'alive')
@@ -270,7 +293,9 @@ async function rosterLines(
     here.length > 0
       ? `HERE   ${here.map((n) => (n.identity ? `${n.name} - ${n.identity}` : n.name)).join('; ')}`
       : '',
-    elsewhere.length > 0 ? `CAST   ${elsewhere.slice(0, 20).map((n) => n.name).join(', ')}` : '',
+    elsewhere.length > 0
+      ? `CAST   ${elsewhere.slice(0, 20).map((n) => (n.where ? `${n.name} (at ${n.where})` : n.name)).join(', ')}`
+      : '',
     gone.length > 0
       ? `GONE   ${gone.slice(0, 12).map((n) => `${n.name} - ${n.state === 'dead' ? 'dead' : 'not in this scene'}`).join('; ')}`
       : '',
