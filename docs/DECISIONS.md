@@ -1495,3 +1495,49 @@ none of them resets the counter — the escape hatches at 2, 4 and 6 cannot end 
 
 **Docs updated:** `STORY-COHERENCE.md` open item 0 (the lock marked fixed, the counter left open with
 the gate named as the next thing to read), this file.
+
+---
+
+## 2026-07-30 — The epilogue reads how each objective resolved, not just that it resolved; and a finished story stops taking input
+
+**What:** two changes on the ending path (`supabase/functions/session/progress.ts`,
+`supabase/functions/session/intent.ts`) plus one lab correction (`tests/lab/run-playthrough.mjs`).
+
+1. The ladder lines handed to `runClimaxAuthor` now say HOW each objective resolved. Objectives that
+   completed only because a main objective cannot fail are marked as such, using the
+   `main_objective_routes_spent` incident the force-credit already logs — no new record is written.
+2. `intent.ts` refuses a turn with `409 { resolved: 'story_ended' }` when
+   `state.dm.story.endedSessionId` matches the current session, the same comparison
+   `publishNarration` already makes.
+3. The lab breaks on that 409 and logs `run.ending_reached` instead of counting it as a rejected turn.
+
+**Why:** run `92f0fff5`, the first ending this project has produced. Its epilogue contradicted itself
+inside a single paragraph — *"When you pulled it free and laid it open before Captain Marek Solan..."*
+against *"...Kestrel never held Del's hidden record in her own hands"*.
+
+The party played and **lost** every scene of both "Find the counter-ledger" and "Face Hessik before
+the audit" (four of six resolutions were `trigger=played, tier=failed`), and
+`main_objective_routes_spent` credited both as completed. **That is the invariant working and it
+stays**: a main objective is a plot point, not a challenge, and the plot advances on either branch.
+
+The defect is that the two halves of one epilogue were fed from two different truths. The main text is
+written from the ladder outcomes; `personalOutcomes` is computed from what the PCs actually achieved.
+So the prose claimed the deed and the coda denied it, in the payoff of a 65-turn adventure. The fix
+closes the gap at the source of the prose rather than by softening the coda — the party must not be
+written performing something they failed at, and the plot must still have advanced.
+
+For (2): `92f0fff5` logged `narration_published (epilogue)` → `intent_submitted` → `adventure_ended` →
+`entry_mapped` → `narration_suppressed`. A player typed "what are those ledgers" into a finished story,
+spent a turn, and got silence. `publishNarration`'s refusal is correct — it is what stops an epilogue
+being followed by another scene — but the turn was still being accepted, so the game read as broken
+rather than over.
+
+**What this run also established, and what was deliberately NOT changed:** the ending committed via the
+all-objectives-terminal force hatch, not via `commitmentReady` — the winning margin was **2** against
+`COMMIT_MIN_MARGIN = 3`. That hatch is load-bearing on the only complete run we have.
+`COMMIT_MIN_EVENTS = 30` is inert (runs log 313–541 events). A 2-point margin also means
+archivist-nudged dials chose the ending. All three are recorded as open questions rather than tuned:
+n=1 is not a distribution, and the climax veto — the piece that matters most — worked.
+
+**Docs updated:** `STORY-COHERENCE.md` (new "The ending system" section; the "rejected by the API"
+line in "Measured vs assumed" now names the one cause that is known), this file.

@@ -597,6 +597,90 @@ not aliased by the caller's builder. Not worth it on a path this central.
 6. `staging_elsewhere_dropped` and an actual arrival spawn - neither has fired on glm.
 7. `narration_perf` marks: which of canon/roster/memories actually costs anything.
 
+# The ending system - read run 92f0fff5 before changing any of it
+
+Run 92f0fff5 (2026-07-30) is **the first ending this project has ever produced**: 65 turns, mixed
+player types, glm-5.2 throughout, ending "The Ledger Speaks" published as an epilogue. Everything
+below is from that run's log, not from reading the code alone. Treat it as the only live evidence
+the ending path has.
+
+## How an ending is chosen (`packages/rules/src/story/endings.ts`)
+
+Three tiers, applied in order, and the order is the whole design:
+
+1. **Climax veto.** An ending whose climax requirements are refuted is removed from contention
+   however well it scores. This is Rule 2 at the largest possible scale - an ending is an affordance,
+   and canon must permit it. **It worked in this run** and is the piece I would touch last.
+2. **Fewest refuted objectives.** Among survivors, prefer the ending that contradicts least of what
+   actually happened.
+3. **Weighted dial score**, then **array index** as the final tie-break.
+
+Commitment is separately gated: `commitmentReady` needs `COMMIT_MIN_MARGIN` (3) between first and
+second place, `COMMIT_MIN_EVENTS` (30), and `signalHolds` over consecutive scorings;
+`ladderReady`/`SHORT_LADDER_MAX` (4) is the short-adventure path.
+
+## What the run actually showed
+
+- **The commit gate did not fire. The force hatch did.** The winning margin was **2**, under
+  `COMMIT_MIN_MARGIN = 3`, so `commitmentReady` never returned true. The ending committed via the
+  all-objectives-terminal fallback (`ending_forced`). **That hatch is load-bearing, not a
+  safety net** - on the only complete run we have, it is the entire reason an ending happened.
+  Before tuning `COMMIT_MIN_MARGIN`, know that lowering it to 2 would have let this run commit
+  early, and raising it changes nothing because the gate is already inert.
+- **`COMMIT_MIN_EVENTS = 30` is not a gate.** Runs log 313-541 events. It is satisfied within the
+  first few turns of any real adventure and has never excluded anything. Harmless; also meaningless.
+  Do not cite it as protection.
+- **A 2-point margin means dials decided the ending.** Dial values are moved by archivist nudges -
+  `applyDialNudge` - which is *colour* driving the choice of ending. This does not break Rule 1
+  (colour still writes no canon; the dials are their own channel), but it does mean the ending of a
+  65-turn story turned on a margin two nudges wide. Whether that is desirable is an owner call, and
+  it should be made deliberately rather than discovered.
+- **Tie-break by array index is arbitrary and reachable.** With margins this small, `endings[0]`
+  winning a tie is a real outcome, not a theoretical one.
+
+## Fixed 2026-07-30 (commit b2a3bb9, deployed)
+
+**The epilogue contradicted itself inside one paragraph.** 92f0fff5's ending contained both:
+
+> "When you pulled it free and laid it open before Captain Marek Solan..."
+> "...Kestrel never held Del's hidden record in her own hands"
+
+The party played and **lost** every scene of "Find the counter-ledger" and "Face Hessik before the
+audit" - four of six resolutions were `trigger=played, tier=failed` - and
+`main_objective_routes_spent` then credited both as completed. **That is the invariant working.** A
+main objective cannot fail; the plot advances on either branch. The plot advancing was never the
+problem.
+
+The problem was that the two halves of one epilogue read from two different truths: the main text is
+written from the ladder lines (`"Find the counter-ledger: completed"`) while `personalOutcomes` is
+computed from what the PCs actually achieved. So the prose claimed the deed and the coda denied it.
+The ladder lines now carry HOW each objective resolved, built from the force-credit incident that was
+already being logged - no new record, no new write:
+
+```
+Find the counter-ledger: completed - but the party never pulled this off; every scene of it was
+  played and lost, and the story moved past them. NEVER write them performing this.
+```
+
+**A turn was accepted after the story ended.** The log reads `narration_published (epilogue)` ->
+`intent_submitted` -> `adventure_ended` -> `entry_mapped` -> `narration_suppressed`. A player typed
+"what are those ledgers" into a finished story, spent a turn, and got silence. `publishNarration`'s
+refusal to publish past the ending is correct and stays; `intent.ts` now refuses the turn with a 409
+`story_ended` (compared against THIS session's id, the same comparison `publishNarration` makes, so a
+new session on the same adventure is a new story). The lab breaks on that 409 and logs
+`run.ending_reached` - previously it was counted as a rejected turn, which is why a *successful*
+ending run reported "1/65 turns were rejected by the API".
+
+## Open on the ending path
+
+- `COMMIT_MIN_MARGIN = 3` vs a real observed margin of 2. Needs a second complete run before tuning;
+  n=1 is not a distribution.
+- Dial influence over a near-tie (above). Owner decision, not a bug.
+- Index tie-break.
+- No epilogue-level canon check exists. The contradiction above was found by *reading* the epilogue.
+  Nothing would have caught it, and the same blind spot as item 13 below applies with more force here
+  because the epilogue is the payoff.
+
 # Traps: read before believing an instrument
 
 Four times in one session an instrument was wrong and the code was right. These are the ones that
@@ -915,7 +999,12 @@ Assumed, and worth proving: the narrator removal rule (prompt only, no detector)
 line improving prose; `stripContextEcho` in a live run; whether the fold fix moves anything beyond
 the reveal count.
 
-Never diagnosed: "N turns were rejected by the API" (1/50, 3/31, 4/20, 1/30 across runs).
+Mostly still undiagnosed: "N turns were rejected by the API" (1/50, 3/31, 4/20, 1/30 across runs).
+**One cause is now known and removed:** on a run that reaches an ending, the last turn is submitted
+after the epilogue and refused, because `adventure_ended` is logged during the turn that publishes it
+and the loop's pre-submit check cannot see it yet. That accounted for 92f0fff5's 1/65 and is now
+reported as `run.ending_reached`. It does NOT explain the four counts above - none of those runs
+ended.
 
 No instrument catches SINGLE-narrator canon drift - a narrator contradicting what it established
 four paragraphs earlier. Seen live in bc918319 (a forced door re-attributed from an unknown
