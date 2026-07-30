@@ -479,13 +479,69 @@ last one's outcome; a conversation ages by turns and its ceiling is no longer sk
    investigate, which is the system working.
 6. **Node prose built around deleted NPCs.** Stage 6 removes group-NPCs and never revisits the
    labels and seeds written around them.
-7. **`runConsistency` is dead code** - `canon.restrictions` is always empty, so it returns ok before
-   the model call. Repair it with real propositions or delete it.
-8. **Widen the perf instrumentation** to all queries; 50% of a request is unexplained.
-9. **31% of nodes have an empty `onFailure`** - no price at all for going badly. This matters MORE
+7. **`runConsistency` is dead - DELIBERATELY. Delete the call site; do not revive it.**
+   Investigated 2026-07-30. `restrictions.push` appears **nowhere** in the codebase: the array is
+   built empty and stays empty, so `runConsistency` hits its `restrictions defined && empty ->
+   {ok:true}` early return on every narration and never reaches a model call.
+   That is not rot. Committed world flags WERE restrictions and were demoted on evidence: across
+   three paid runs it blocked 14 times and **all 14 were false**, 12 of them a draft *agreeing* with
+   the flag it was accused of contradicting ("The Iron Hand scouts you felled lie unmoving amidst
+   overturned crates" vs `observed iron hand scout`). The deterministic gates cannot catch that - the
+   model cites a real id and does quote the draft; the bad judgement is inside them.
+   So the narration path has **no canon check at all, by design**, and item 10 below is the standing
+   cost of that retreat rather than an oversight. Repairing it means rebuilding the thing with the
+   0-for-14 record. The answer that has actually worked is upstream: give the narrator the facts so
+   it does not invent (2026-07-30 CAST identity fix). **Re-scoped from "repair or delete" to
+   "delete".**
+
+8. **THE REVEAL GATE IS THE NEXT REAL BUG - 62% of authored clues sit behind it.**
+   Investigated 2026-07-30, and it is the root cause the deflection fix only guards against.
+   - **339 of 544 ingredients across all adventures are condition-gated** (62%). In the e87b3506
+     adventure: 7 clues, 3 gated, **0 of the 3 ever discovered**, 1 of 7 discovered in 30 turns.
+   - **The condition text is never parsed.** `revealVerdict` is `candidate.condition &&
+     !ctx.checkPassed` - nothing reads "successful DC 12 persuasion". The authored skill and DC are
+     decorative: ANY passing check of ANY kind on the same utterance unlocks it, and no check on the
+     utterance blocks it however apt the question.
+   - `checkPassed` is `checkResult?.success ?? false` - the check attached to THIS utterance. So
+     unlocking an authored clue needs a three-way coincidence on one turn: the player says something
+     that triggers a check, passes it, AND the model asks for that specific ingredient.
+   - This is what starves the progress counter. `ingredient_revealed` is in `SPINE_TYPES`, so a
+     landed reveal resets the stall clock - and the main channel for authored information is mostly
+     shut. Two blocked reveals in e87b3506 against one that landed.
+   - Decide the direction before coding: either honour the authored condition (parse skill+DC, which
+     makes it *harder* but meaningful), or drop condition-gating for clues the current objective
+     needs (which makes the authored string honest by removing it). The status quo - an unparsed
+     string that gates 62% of the content on an unrelated dice roll - is the one option that is
+     defensible on neither reading.
+
+9. **The offer-acceptance narration teleports the party to the quest giver.**
+   Investigated 2026-07-30. `finishNegotiation` seeds the beat with a hardcoded
+   `narrate ${giver}'s reaction first`, regardless of whether the giver is in the scene. In
+   e87b3506 the party accepted on turn 6 from the chapel in morning light, with an utterance aimed
+   at something else entirely ("I'll go up the tower and ring the bell"); Wendel Tannwright is at
+   The Greyflow, so the narration dutifully rebuilt the river at dusk around him and the sequence
+   became chapel(morning) -> river(dusk) -> tower with no travel. It is also the ONE narration in
+   the run that published before its own turn's intent was accepted (1 of 30, measured).
+   Small fix: condition that clause on the giver actually being staged.
+
+10. **Multi-narration turns are the parked tail's bill, and the nudge-at-1 is NOT a bug.**
+   Investigated 2026-07-30. 5 of 30 turns published more than one narration; turn 27 published
+   three. Traced: turn 26 completed an objective and met a beat exit but did not open the next
+   beat - that happened at the start of turn 27's request, and the beat's OPENING narration
+   published ahead of the answer to turn 27's actual input ("I look at the gap in the wall" was
+   answered second, after an unrelated boy arriving). A director nudge added the third.
+   The nudge firing at "1 turns without progress" against a threshold of 2 looked like an off-by-one
+   and is not: `thresholdFor` applies seeded jitter, `Math.max(1, base + jitter)`.
+   This is the cost of the 2026-07-29 parked-tail fix, which was right - it took
+   `narration_after_tail_kick` from 17 to 0. Deferred work has to land somewhere, and it lands at
+   the head of the next request. Worth recording before anyone "fixes" the ordering and reopens the
+   same-request concurrency it closed.
+
+11. **Widen the perf instrumentation** to all queries; 50% of a request is unexplained.
+12. **31% of nodes have an empty `onFailure`** - no price at all for going badly. This matters MORE
    now: since the plot advances either way, the outcome map is the only thing that distinguishes
    winning from losing, so a node with an empty failure map is a scene where losing is free.
-10. **Nothing detects single-narrator canon drift** - a narrator contradicting what it established
+13. **Nothing detects single-narrator canon drift** - a narrator contradicting what it established
    four paragraphs earlier. Seen live in bc918319 (a forced door re-attributed from an unknown
    intruder to an ally, destroying a clue) and 5a5e6c7f (a hidden compartment found, then "no
    hidden compartments" one turn later). The continuity probe is location-and-concurrency only,
