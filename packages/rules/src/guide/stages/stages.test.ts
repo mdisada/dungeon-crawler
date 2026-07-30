@@ -353,6 +353,27 @@ describe('stage 4 (ingredients + coop sets)', () => {
     expect(result.data.ingredients[0].objectiveIndexes).toEqual([0])
   })
 
+  it('trims an over-generous ingredient pool instead of failing the chapter', () => {
+    // Live 2026-07-31: glm-5.2 answered an ask of 4-6 with 14 ingredients - complete, well-formed,
+    // right cast - and the chapter was thrown away twice at 84s a call.
+    const doc = JSON.parse(STAGE4_RESPONSE)
+    const spare = { ...doc.ingredients[0], coop_set_key: null }
+    doc.ingredients = [...doc.ingredients, ...Array.from({ length: 8 }, () => ({ ...spare }))]
+    const result = parseStage4(JSON.stringify(doc), STAGE4_CONTEXT)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.ingredients).toHaveLength(12)
+    expect(result.data.warnings.some((w) => w.includes('the last 2 were dropped'))).toBe(true)
+  })
+
+  it('still fails a chapter with too few ingredients to play', () => {
+    const doc = JSON.parse(STAGE4_RESPONSE)
+    doc.ingredients = doc.ingredients.slice(0, 2)
+    const result = parseStage4(JSON.stringify(doc), STAGE4_CONTEXT)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.some((e) => e.includes('$.ingredients'))).toBe(true)
+  })
+
   it('rejects unknown placement / coop keys', () => {
     const broken = STAGE4_RESPONSE.replace('"npc_key":"npc:tam"', '"npc_key":"npc:nobody"')
     const result = parseStage4(broken, STAGE4_CONTEXT)

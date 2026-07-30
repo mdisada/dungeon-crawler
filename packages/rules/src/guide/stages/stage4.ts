@@ -121,7 +121,7 @@ Rules:
 - AN NPC IS ONE PERSON. Only create an npc row for an INDIVIDUAL the party could talk to or fight: someone with a name, a voice and opinions. Never create an npc for a group ("the city watch", "Valerius's agents", "the lost expedition") or for a force, curse or plague ("the Blight", "the Murkheart"). A group cannot hold a conversation, so giving it an npc row hands it a heartbeat, a mood and a seat in dialogue it can never use - and the game then treats killing a few of its members as the death of a person. Fights against a group are built from creature counts at the encounter stage, and if the party ever needs to TALK to a faction, name ONE representative of it as an individual npc (e.g. "Iron Hand Envoy Sera") and create that person instead.
 - Ingredients are TOYS, not railroads: each one is something players can find, use, ignore, or subvert. Never a mandatory step.
 - placement.condition means ONE thing: this clue needs a PASSED SKILL CHECK to come out. Write it as the check ("successful DC 14 persuasion", "an insight check"), or leave it null. It is NOT a place to describe when the moment is right - "asked about the money", "once they trust her" - because the game reads any condition as a check requirement, and a clue conditioned on a conversation is locked behind a roll that a conversation never makes. If a clue should simply come out when the topic arises, leave condition null and let the NPC judge the moment.
-- ${ingredientMin}-${ingredientMax} ingredients for this chapter, each linked to ONE or TWO objectives by number (objective_numbers holds 1-2 entries, never more) and tagged with the pillars it serves ("combat", "social", "exploration").
+- ${ingredientMin}-${ingredientMax} ingredients for this chapter. ${ingredientMax} is a CAP, not a target to beat, and anything past ${INGREDIENTS_PER_CHAPTER.max} is discarded before the DM ever sees it - a chapter is made rich by what its clues connect, not by how many there are. Each is linked to ONE or TWO objectives by number (objective_numbers holds 1-2 entries, never more) and tagged with the pillars it serves ("combat", "social", "exploration").
 - Every scene's cast and places must exist: create the NPCs and locations the scene sketches imply. Mark the chapter's main villain (if present here) as role "boss".
 - "pronouns" is REQUIRED on every NPC: exactly one of "he/him", "she/her", "they/them", or "it/its" for a construct or creature. Write the pair and nothing else - not "male", not a sentence. The live narrator uses this and nothing else to refer to them, so a name that reads one way and pronouns that read another is a contradiction the players will see; pick deliberately and make the description agree with it.
 - "initial_state" is where the NPC stands when play BEGINS: "alive" (default), "dead", or "absent" (alive but not reachable yet). A murder victim, or anyone the premise says is already dead or missing, MUST NOT be "alive" - the live game will otherwise stage them and have them speak.
@@ -306,8 +306,22 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
   const coopKeys = new Set(coopSets.map((s) => s.key))
 
   const conditionRepairs: string[] = []
-  const ingredients: IngredientDraft[] = c
-    .arr(root.ingredients, '$.ingredients', INGREDIENTS_PER_CHAPTER.min, INGREDIENTS_PER_CHAPTER.max)
+  // TOO MANY TOYS IS NOT A BROKEN CHAPTER (2026-07-31).
+  //
+  // The count was fatal at BOTH ends, so a chapter that came back with 14 ingredients against an
+  // ask of 4-6 failed the whole stage - 84s a call, twice, and the queue paused on
+  // "$.ingredients: expected an array of length 4-12" (live, glm-5.2, "By Dawn's Light").
+  // Nothing in that response was broken: the JSON parsed, the shape matched the template exactly,
+  // the cast and the coop sets were right. The model was generous with the one field that is a
+  // POOL rather than a contract - and a pool can be trimmed, which is what every other
+  // overshoot in this parser already does (coop demotion, cleared conditions, thin features).
+  //
+  // The floor stays fatal. A chapter with two clues in it is genuinely thin and worth re-rolling,
+  // and no code can invent the missing ones.
+  const rawIngredients = c.arr(root.ingredients, '$.ingredients', INGREDIENTS_PER_CHAPTER.min)
+  const dropped = Math.max(0, rawIngredients.length - INGREDIENTS_PER_CHAPTER.max)
+  const ingredients: IngredientDraft[] = rawIngredients
+    .slice(0, INGREDIENTS_PER_CHAPTER.max)
     .map((raw, i) => {
       const path = `$.ingredients[${i}]`
       const ing = c.obj(raw, path)
@@ -417,6 +431,12 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
     ingredients,
     warnings: [
       ...repaired.warnings,
+      // Trimming from the end can strip a coop set's member clues; repairCoopConformance above
+      // then demotes that set with its own warning, which is the right outcome and already covered.
+      ...(dropped > 0
+        ? [`stage 4 returned ${rawIngredients.length} ingredients for a chapter capped at ` +
+           `${INGREDIENTS_PER_CHAPTER.max}; the last ${dropped} were dropped.`]
+        : []),
       ...(conditionRepairs.length > 0
         ? [`${conditionRepairs.length} ingredient condition(s) were cleared: they describe a ` +
            'conversational moment rather than a skill check, and the reveal gate reads ANY ' +
