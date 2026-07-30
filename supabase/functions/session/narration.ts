@@ -279,6 +279,8 @@ async function rosterLines(
       id: n.id,
       name: n.name,
       identity: identityClause(n.description ?? '', n.personality),
+      // GONE needs the WHOLE authored sentence, not the first clause - see below.
+      description: (n.description ?? '').trim(),
       state: npcStates[n.id] ?? n.initial_state ?? 'alive',
       // Null before their first stop, and left null rather than guessed - see npc-itinerary.ts.
       // The narrator is told where someone is only when the guide actually placed them.
@@ -307,8 +309,23 @@ async function rosterLines(
         return n.identity ? `${n.name} - ${n.identity}${where}` : `${n.name}${where}`
       }).join('; ')}`
       : '',
+    // WHO THEY WERE, not just that they are gone (2026-07-30). This rendered "Aldous Creedy - dead"
+    // and dropped the description, and in a murder mystery the victim is ALWAYS in GONE - so the one
+    // roster line where the authored sentence matters most was the one line that discarded it.
+    // Creedy's row reads "The dead tallyman who kept a hidden ledger of Harrow's fraud; drowned in
+    // the lock and found the next morning"; the narration invented two other deaths for him.
     gone.length > 0
-      ? `GONE   ${gone.slice(0, 12).map((n) => `${n.name} - ${n.state === 'dead' ? 'dead' : 'not in this scene'}`).join('; ')}`
+      ? `GONE   ${gone.slice(0, 12).map((n) => {
+        const what = n.state === 'dead' ? 'dead' : 'not in this scene'
+        // The FULL description, not identityClause. That helper stops at the first `.` or `;`, and
+        // Creedy's row is "The dead tallyman who kept a hidden ledger of Harrow's fraud; drowned in
+        // the lock and found the next morning" - so the clause version delivers everything EXCEPT
+        // the death, which is the one fact this line exists to carry.
+        const full = n.description.length > 150
+          ? `${n.description.slice(0, 148).replace(/[,;:.\s]+$/, '')}...`
+          : n.description
+        return full ? `${n.name} (${what}) - ${full}` : `${n.name} - ${what}`
+      }).join(' // ')}`
       : '',
   ].filter(Boolean)
 }

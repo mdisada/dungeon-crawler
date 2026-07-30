@@ -124,6 +124,32 @@ export async function establishedSoFar(service: SupabaseClient, adventureId: str
 }
 
 
+/**
+ * WHAT THIS STORY IS, in the sentence the whole adventure was generated from (2026-07-30).
+ *
+ * `adventures.plot_idea` had ZERO references anywhere in supabase/functions/session/. The narrator
+ * received fragments - a node's outcome, a room's features, an arrival line - and never the
+ * one-sentence statement of what it was narrating.
+ *
+ * For run 13b7c386 that sentence was "a tidal saltworks pays its workers in tokens no shop will
+ * honour, and the tallyman who kept the accounts drowned in a lock that was empty at the time" -
+ * which is the exact answer to the question the narration got wrong three separate ways, putting
+ * Creedy in a holding pond (#1, #7) and then in the Tally Room "face-up with his ledger open" (#40),
+ * the last of which removes the drowning the mystery is built on.
+ *
+ * This is the cheapest line on the page: one column, every narration, and it is the top of the
+ * canon hierarchy - nothing the narrator writes may contradict it.
+ */
+export async function premiseLine(service: SupabaseClient, adventureId: string): Promise<string> {
+  const { data } = await service
+    .from('adventures')
+    .select('plot_idea')
+    .eq('id', adventureId)
+    .maybeSingle()
+  const idea = typeof data?.plot_idea === 'string' ? data.plot_idea.trim() : ''
+  return idea.length > 300 ? `${idea.slice(0, 298).replace(/[,;:.\s]+$/, '')}...` : idea
+}
+
 /** The authored identity of an NPC, trimmed to one clause - who they are, in a handful of words. */
 export function identityClause(description: string, personality: unknown): string {
   const source = description.trim() ||
@@ -219,11 +245,14 @@ export async function placeLines(
   currentLocationId: string | null,
 ): Promise<string> {
   const [locResult, travelResult] = await Promise.all([
-    service.from('locations').select('id, name, arrival_line').eq('adventure_id', adventureId),
+    // `description` joins `arrival_line` (2026-07-30). A location carries both and this read only
+    // ever took the arrival line, so a place the party had already been to travelled as a bare name.
+    service.from('locations').select('id, name, arrival_line, description').eq('adventure_id', adventureId),
     service.from('event_log').select('id:payload->>location_id')
       .eq('adventure_id', adventureId).eq('type', 'scene_travel'),
   ])
-  const rows = (locResult.data ?? []) as { id: string; name: string; arrival_line: string | null }[]
+  const rows = (locResult.data ?? []) as
+    { id: string; name: string; arrival_line: string | null; description: string | null }[]
   if (rows.length === 0) return ''
   const visited = new Set(
     ((travelResult.data ?? []) as { id: string | null }[]).map((e) => e.id ?? ''),
@@ -236,9 +265,15 @@ export async function placeLines(
   const parts = rows.slice(0, 8).map((l) => {
     const name = (l.name ?? '').trim()
     if (!name) return ''
-    if (visited.has(l.id)) return `${name} (been there)`
-    const line = (l.arrival_line ?? '').trim()
-    return line ? `${name} (not reached) - ${clip(line)}` : `${name} (not reached)`
+    // VISITED IS NOT "FORGET WHAT IT IS" (2026-07-30). This rendered a visited place as a bare
+    // "(been there)", so the narrator kept discussing a room it had been told nothing about - and in
+    // run 13b7c386 it moved The Tally Room, authored as a stone outbuilding north of the drying
+    // sheds and already visited, to behind the Company Store's padlocked yard. The last third of the
+    // run was then a locked-door sequence to reach a room the party had already stood in.
+    const detail = clip(((visited.has(l.id) ? l.description : l.arrival_line) ?? '').trim() ||
+      (l.description ?? '').trim())
+    const mark = visited.has(l.id) ? 'been there' : 'not reached'
+    return detail ? `${name} (${mark}) - ${detail}` : `${name} (${mark})`
   }).filter(Boolean)
   return parts.length > 0 ? parts.join('; ') : ''
 }
@@ -555,7 +590,10 @@ export async function buildCanon(
   const established = await establishedSoFar(service, adventureId)
   const features = await hereFeatures(service, adventureId, state.scene.locationId ?? null)
   const places = await placeLines(service, adventureId, state.scene.locationId ?? null)
+  const premise = await premiseLine(service, adventureId)
   const story = [
+    // FIRST, because everything else is a detail of it and nothing may contradict it.
+    premise ? `PREMISE ${premise} - the story's own premise; never write against it.` : '',
     // The authored contents of the room the party is standing in. Ahead of everything else because
     // it is what a player is most likely to ask about next.
     features ? `HERE   ${features} - authored detail: use it when they look, and do NOT invent ` +

@@ -1082,7 +1082,9 @@ export async function runReplyGists(env: AgentEnv, ctx: NpcContext, rejected?: s
  * missing: same prompt size, three gaps closed.
  */
 const NARRATOR_CONTEXT_KEY =
-  ' Labelled facts follow. PULL: the unresolved situation - what the scene is about; write toward ' +
+  ' Labelled facts follow. PREMISE: what this whole story is - the highest authority here, and ' +
+  'nothing you write may contradict it. PULL: the unresolved situation - what the scene is ' +
+  'about; write toward ' +
   'it, and never close a passage on it. GOAL: the same thing as a bare task title - orientation ' +
   'ONLY, never stated, echoed, or used as a closing line. HERE: who is in this scene and who they ' +
   'ARE - hold every detail true, their role and their gender included. CAST: exist, but elsewhere. ' +
