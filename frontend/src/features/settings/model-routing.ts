@@ -68,6 +68,69 @@ export const CURATED_TEXT_MODELS = [
   'z-ai/glm-5.2',
 ] as const
 
+/**
+ * The two seats, named. `CURATED_TEXT_MODELS` is the picker's menu; these say which seat each
+ * entry occupies, so the tier of a role can be DERIVED from the default map rather than tracked
+ * in a second list that would drift the first time a role changed tier.
+ */
+export const PRIMARY_MODEL = 'z-ai/glm-5.2'
+export const SECONDARY_MODEL = 'google/gemini-2.5-flash-lite'
+
+export type ModelTier = 'primary' | 'secondary'
+
+/**
+ * Which seat a role sits in, read off its system default. Primary is "nothing downstream can fix
+ * this" (open-ended output a person reads, or that everything inherits); secondary is "code
+ * validates this". That split is the architecture - see the tiering note above - so the settings
+ * UI offers two choices rather than fourteen.
+ */
+export function tierOfRole(role: AgentRole): ModelTier {
+  return SYSTEM_DEFAULT_MODEL_MAP[role] === PRIMARY_MODEL ? 'primary' : 'secondary'
+}
+
+export const ROLES_BY_TIER: Record<ModelTier, AgentRole[]> = {
+  primary: (Object.keys(SYSTEM_DEFAULT_MODEL_MAP) as AgentRole[]).filter((r) => tierOfRole(r) === 'primary'),
+  secondary: (Object.keys(SYSTEM_DEFAULT_MODEL_MAP) as AgentRole[]).filter((r) => tierOfRole(r) === 'secondary'),
+}
+
+/**
+ * Two choices -> the full per-role map that gets stored.
+ *
+ * Expanding here rather than teaching the resolver about tiers is deliberate: `resolveModel` and
+ * every stored `user_settings.model_map` keep working untouched, so this is a UI change with no
+ * backend or migration behind it.
+ */
+export function expandTiers(primary: string, secondary: string): Record<string, string> {
+  const map: Record<string, string> = {}
+  for (const role of Object.keys(SYSTEM_DEFAULT_MODEL_MAP) as AgentRole[]) {
+    map[role] = tierOfRole(role) === 'primary' ? primary : secondary
+  }
+  return map
+}
+
+/**
+ * Read two choices back out of a stored map.
+ *
+ * `custom` is true when the map cannot be expressed as two seats - a per-role override from the
+ * old fourteen-row UI, or a hand-edited row. The caller must SAY so before overwriting, because
+ * collapsing a setting into a simpler one silently discards whatever it could express and the
+ * user cannot get it back.
+ */
+export function tiersFromMap(
+  modelMap: Record<string, string>,
+): { primary: string; secondary: string; custom: boolean } {
+  const roles = Object.keys(SYSTEM_DEFAULT_MODEL_MAP) as AgentRole[]
+  const used = (tier: ModelTier) =>
+    new Set(roles.filter((r) => tierOfRole(r) === tier).map((r) => resolveModel(r, modelMap)))
+  const primaryUsed = used('primary')
+  const secondaryUsed = used('secondary')
+  return {
+    primary: primaryUsed.size === 1 ? [...primaryUsed][0] : PRIMARY_MODEL,
+    secondary: secondaryUsed.size === 1 ? [...secondaryUsed][0] : SECONDARY_MODEL,
+    custom: primaryUsed.size > 1 || secondaryUsed.size > 1,
+  }
+}
+
 export function isAgentRole(value: string): value is AgentRole {
   return value in SYSTEM_DEFAULT_MODEL_MAP
 }
