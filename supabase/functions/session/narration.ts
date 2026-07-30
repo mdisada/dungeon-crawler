@@ -135,6 +135,28 @@ export const OUTCOME_CLAIM_CHECK: 'off' | 'shadow' | 'enforce' = 'enforce'
 
 
 /**
+ * Rollout switches for the two prose-SHAPE guards below (2026-07-29).
+ *
+ * Both start at 'shadow', deliberately, and for the reason claimGuard's own comment gives: "the
+ * last thing to block prose was wrong 14 times out of 14, so this one earned its authority with
+ * data first". I shipped these straight at 'enforce' and that was the wrong call - a word blocklist
+ * that regenerates prose IS blocking prose on a heuristic, which is the one thing this codebase's
+ * failure-modes list says never to do.
+ *
+ * And enforcing destroys the evidence needed to judge the guard: when the suspect draft never
+ * ships, a true catch and a false one look identical in the log. That is exactly how runConsistency
+ * hid a 0-for-14 record. In 'shadow' the original reaches the player and the finding is recorded
+ * beside it, so the hit rate becomes a number instead of a hope.
+ *
+ * Flip to 'enforce' only on read evidence: pull the incidents after a run and check whether the
+ * hits are real leaks or innocent prose ("a chance encounter", "the fog rolled in"). If they are
+ * mostly innocent, narrow the list or delete the guard - it was never proven necessary on the model
+ * we actually ship, and every leak it was built for came from a flattened flash-lite run.
+ */
+export const MECHANICS_CHECK: 'off' | 'shadow' | 'enforce' = 'shadow'
+export const TRAILING_LABEL_CHECK: 'off' | 'shadow' | 'enforce' = 'shadow'
+
+/**
  * THE MACHINE MUST NOT SPEAK IN THE FICTION'S VOICE (2026-07-29).
  *
  * NARRATOR_BASE has said "Never mention dice, rolls, checks, or game mechanics" since it was
@@ -164,11 +186,15 @@ async function mechanicsGuard(
   // Moved to packages/rules/src/story/mechanical-vocab.ts and narrowed (2026-07-29). The inline
   // version lost its word boundaries in transit, so `roll` matched "the fog rolled in" - it would
   // have fired a regeneration on innocent prose constantly.
+  if (MECHANICS_CHECK === 'off') return draft
   const hit = mechanicalVocab(draft)
   if (!hit) return draft
   await logEvent(service, env.adventureId, sessionId, 'incident', {
-    kind: 'mechanical_vocab_in_prose', term: hit, draft: draft.slice(0, 200),
+    kind: 'mechanical_vocab_in_prose', term: hit, enforced: MECHANICS_CHECK === 'enforce',
+    draft: draft.slice(0, 200),
   }).catch(() => {})
+  // Shadow: the finding is on record, the player reads the draft as written.
+  if (MECHANICS_CHECK !== 'enforce') return draft
   const second = await regenerate(
     `NEVER use the words "${hit}" or any other game-machinery vocabulary - no failure, setback, ` +
     'check, roll, dice, encounter, objective, tier, milestone, hit points or DC. The player is ' +
@@ -642,15 +668,14 @@ export async function publishNarration(
     // two machine-facing titles a narration can paste on.
     const labels = [state.encounter?.label ?? '', goalTitle(state)]
       .filter((l): l is string => typeof l === 'string' && l.trim().length > 0)
-    const pasted = trailingLabel(text, labels)
+    const pasted = TRAILING_LABEL_CHECK === 'off' ? null : trailingLabel(text, labels)
     if (pasted) {
       const cut = text.trim().slice(0, text.trim().toLowerCase().lastIndexOf(pasted.toLowerCase().slice(0, 8))).trim()
-      if (cut.length >= 40) {
-        text = cut
-        await logEvent(service, env.adventureId, sessionId, 'incident', {
-          kind: 'trailing_label_stripped', label: pasted, style,
-        }).catch(() => {})
-      }
+      await logEvent(service, env.adventureId, sessionId, 'incident', {
+        kind: 'trailing_label_stripped', label: pasted, style,
+        enforced: TRAILING_LABEL_CHECK === 'enforce' && cut.length >= 40,
+      }).catch(() => {})
+      if (TRAILING_LABEL_CHECK === 'enforce' && cut.length >= 40) text = cut
     }
     const whole = trimToCompleteSentence(text)
     if (whole.trimmed) {

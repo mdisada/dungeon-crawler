@@ -26,7 +26,8 @@ import { buildCanon, establishedSoFar, hereFeatures } from './canon.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { challengeCheckResolved } from './encounters.ts'
 import {
-  directedNarrationPrompt, narrationBeat, PROSE_CLAIM_CHECK, publishNarration, stageNarrationReview,
+  directedNarrationPrompt, MECHANICS_CHECK, narrationBeat, PROSE_CLAIM_CHECK, publishNarration,
+  stageNarrationReview,
 } from './narration.ts'
 import {
   agentContextLines, appendLinesDiff, loadPartyCharacters, newLine, partyProfileLines,
@@ -213,12 +214,13 @@ export async function npcReply(
   // the second is no cleaner. A guaranteed-bad canned line is worse than an odd phrase.
   const spokenLabels = [state.encounter?.label ?? ''].filter((l) => l.trim().length > 0)
   const dirty = (line: string) => mechanicalVocab(line) ?? trailingLabel(line, spokenLabels)
-  const offence = dirty(output.dialogue)
+  const offence = MECHANICS_CHECK === 'off' ? null : dirty(output.dialogue)
   if (offence) {
     await logEvent(service, env.adventureId, sessionId, 'incident', {
-      kind: 'mechanical_vocab_in_dialogue', term: offence, draft: output.dialogue.slice(0, 200),
+      kind: 'mechanical_vocab_in_dialogue', term: offence,
+      enforced: MECHANICS_CHECK === 'enforce', draft: output.dialogue.slice(0, 200),
     }).catch(() => {})
-    const retry = await runNpcAgent(env, buildContext(
+    const retry = MECHANICS_CHECK !== 'enforce' ? output : await runNpcAgent(env, buildContext(
       `NEVER say "${offence}" or any other game-machinery phrasing - no failure, setback, check, ` +
       'dice, DC, hit points, and never name the goal of the scene as if it were a thing you want. You ' +
       'are a person in a place, speaking about what is in front of you.',
