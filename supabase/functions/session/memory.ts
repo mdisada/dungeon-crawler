@@ -13,7 +13,14 @@ import { loadState } from './util.ts'
 
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? ''
 
-export type MemoryKind = 'encounter' | 'scene_summary'
+/**
+ * `encounter` / `scene_summary` are the authored spine's own record, written when a phase closes.
+ * `flavour` is detail the NARRATOR introduced (2026-07-29) - recorded so the world stays consistent
+ * and labelled so nothing downstream mistakes it for plot. Neither tier can reach state:
+ * memory_fragments is retrieved as prose into prompts, and applyMilestones is the only writer of
+ * flags and facts.
+ */
+export type MemoryKind = 'encounter' | 'scene_summary' | 'flavour'
 
 export async function writeMemoryFragment(
   service: SupabaseClient,
@@ -48,6 +55,15 @@ export async function retrieveMemories(
   env: AgentEnv,
   queryText: string,
   k = 4,
+  /**
+   * Which tier to draw from (2026-07-29). Defaults to the SPINE record only.
+   *
+   * Flavour is written per narration rather than per closed phase - roughly ten times as often - so
+   * a shared top-K would let colour crowd out the memories this slot exists for. The tiers are
+   * fetched separately and labelled separately, so the narrator can tell "this happened" from "you
+   * mentioned this once".
+   */
+  kinds: MemoryKind[] = ['encounter', 'scene_summary'],
 ): Promise<string[]> {
   if (env.demo || !queryText.trim()) return []
   try {
@@ -58,9 +74,10 @@ export async function retrieveMemories(
       adventureId: env.adventureId,
       input: queryText,
     })
-    const { data, error } = await service.rpc('match_memory_fragments', {
+    const { data, error } = await service.rpc('match_memory_fragments_kind', {
       p_adventure_id: env.adventureId,
       p_query: JSON.stringify(vector),
+      p_kinds: kinds,
       p_k: k,
     })
     if (error) {

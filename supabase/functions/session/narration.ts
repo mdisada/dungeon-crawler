@@ -10,12 +10,12 @@ import { foreignCharacters, stripForeign } from '../_shared/guide/charset.ts'
 import { npcLocationAt } from '../_shared/guide/npc-itinerary.ts'
 import type { ItineraryStop } from '../_shared/guide/npc-itinerary.ts'
 import { dialogueGateActive, dmSettings } from '../_shared/play/index.ts'
-import { stripContextEcho, trimToCompleteSentence } from '../_shared/story/index.ts'
+import { stripContextEcho, takeIntroduced, trimToCompleteSentence } from '../_shared/story/index.ts'
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
 import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions, runOutcomeClaimCheck } from './agents.ts'
 import type { AgentEnv, NarrationStyle } from './agents.ts'
 import { buildCanon } from './canon.ts'
-import { retrieveMemories } from './memory.ts'
+import { retrieveMemories, writeMemoryFragment } from './memory.ts'
 import {
   agentContextLines, agentContextSplit, appendLinesDiff, loadPartyCharacters, newLine,
   partyProfileLines, typingDiff,
@@ -525,7 +525,7 @@ export async function publishNarration(
   // forces at work, what the party has already achieved, what is on a clock. Withholding it left
   // the fact-checker better informed about the story than its author.
   const canon = await buildCanon(service, env.adventureId, state)
-  const [roster, profiles, memories, known, whereWeAre] = await Promise.all([
+  const [roster, profiles, memories, flavour, known, whereWeAre] = await Promise.all([
     rosterLines(service, env.adventureId, state),
     partyProfileLines(service, await loadPartyCharacters(service, env.adventureId)),
     // Retrieval memory (Slice 7): ground on what past sessions established.
@@ -537,6 +537,8 @@ export async function publishNarration(
     //
     // One embedding call per narration. It degrades to no-memories on any failure, by design.
     retrieveMemories(service, env, prompt),
+    // The flavour tier, on its own small budget - see retrieveMemories' `kinds`.
+    retrieveMemories(service, env, prompt, 3, ['flavour']),
     knownLine(service, env.adventureId),
     sceneLocation(service, env, sessionId, state),
   ])
@@ -576,6 +578,13 @@ export async function publishNarration(
     `LAST   ${transcript.recent.join(' | ')}`,
     known,
     memories.length > 0 ? `EARLIER ${memories.join(' // ')}` : '',
+    // Labelled as colour ON PURPOSE. These are details the narration invented, not authored plot,
+    // and the whole point of the tier is that nothing downstream mistakes one for the other. Keep
+    // them consistent when they come up; never build the story on them.
+    flavour.length > 0
+      ? `COLOUR ${flavour.join(' // ')} - detail from earlier play. Stay consistent with it if it ` +
+        'comes up, and never treat it as plot or let it drive what happens next.'
+      : '',
   ].filter(Boolean).join('\n')
 
   let text: string
@@ -586,6 +595,21 @@ export async function publishNarration(
     // published lines - one player was shown `CAST Dorya Salk - female Mirefleet resident...`
     // followed by PARTY, SOFAR and LAST. Deterministic and shape-based; see the module header for
     // why it never strips a lone `LAST` and never returns an empty narration.
+    // WHAT IT INVENTED, taken before anything else touches the text (2026-07-29). Stripping first
+    // means every guard below sees clean prose, and `NEW` is also one of stripContextEcho's hard
+    // labels as a second line of defence.
+    const invented = takeIntroduced(text)
+    text = invented.text
+    if (invented.introduced.length > 0) {
+      // FLAVOUR canon: remembered so the world stays consistent, structurally unable to reach state
+      // (memory_fragments is retrieved as prose; applyMilestones is the only writer of flags and
+      // facts). Fire-and-forget - the player never waits on bookkeeping, and a lost fragment costs
+      // consistency, never the turn.
+      void writeMemoryFragment(service, env, 'flavour', invented.introduced.join('; '))
+      await logEvent(service, env.adventureId, sessionId, 'flavour_recorded', {
+        introduced: invented.introduced, style,
+      }).catch(() => {})
+    }
     const echo = stripContextEcho(text)
     if (echo.stripped.length > 0) {
       text = echo.text

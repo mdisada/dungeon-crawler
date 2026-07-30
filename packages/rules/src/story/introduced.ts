@@ -1,0 +1,52 @@
+// What the narrator INVENTED this turn, taken from its own output (2026-07-29).
+//
+// Items shipped earlier today give the narrator the authored record to read - node outcome
+// summaries, location features. Nothing captured what it makes up itself. Run bac9f4b9 introduced
+// an alleyway, an obsidian shard in Dermot's pouch and a magistrate's notice on a gate; none exist
+// in the guide, none were recorded, so two turns later they were dropped or re-described
+// differently. That is the residual contradiction engine.
+//
+// WHY THE NARRATOR REPORTS ITS OWN INVENTIONS rather than a second pass extracting them: an
+// extraction pass is a per-turn model call doing exactly the job that failed as a detector this
+// session (13 findings, ~0 real). The writer already knows what it introduced, and asking for it
+// costs no extra call. Output-side capture is the only shape that has held here.
+//
+// WHY A TRAILING LABELLED LINE rather than JSON: narration is prose, and prose written inside a
+// JSON string field is worse prose. The line is stripped deterministically before publication, the
+// same way stripContextEcho removes briefing labels - so a model that forgets to add it costs
+// nothing, and a strip that somehow failed would be caught by that guard too.
+
+/** The label the narrator is asked to append. Anchored to line start, allowing surrounding blanks. */
+const INTRODUCED_LINE = /^[ \t]*NEW:[ \t]*(.+)$/im
+
+export interface IntroducedResult {
+  /** The narration with the reporting line removed - what the player sees. */
+  text: string
+  /** Short phrases naming what this narration introduced. Empty when it introduced nothing. */
+  introduced: string[]
+}
+
+/**
+ * Split a narration into the prose and the things it reports having invented.
+ *
+ * Never returns empty prose: if the line is somehow the whole output, the original is kept and
+ * nothing is captured. A blank turn is the failure mode that already cost nine swallowed player
+ * actions, and no amount of bookkeeping is worth one.
+ */
+export function takeIntroduced(text: string): IntroducedResult {
+  const original = text ?? ''
+  const match = INTRODUCED_LINE.exec(original)
+  if (!match) return { text: original, introduced: [] }
+
+  const stripped = original.replace(INTRODUCED_LINE, '').replace(/\n{3,}/g, '\n\n').trim()
+  if (stripped.length === 0) return { text: original, introduced: [] }
+
+  const introduced = match[1]
+    .split(/[;|]/)
+    .map((s) => s.trim().replace(/^[-*]\s*/, ''))
+    // "none" is the answer we asked for when it invented nothing - it is not a thing in the world.
+    .filter((s) => s.length > 2 && !/^none\b/i.test(s))
+    .slice(0, 4)
+
+  return { text: stripped, introduced }
+}

@@ -1051,7 +1051,16 @@ const NARRATOR_BASE =
   'party\'s motivation or feelings; motivation belongs to the players. When a party member\'s ' +
   'described traits or quirks bear on the moment (a dwarf\'s Darkvision in the dark, a ' +
   'sailor\'s eye for rigging), let the narration notice it - personal, never generic. ' +
-  'Output only narration text.' + NARRATOR_CONTEXT_KEY
+  // REPORT WHAT YOU INVENTED (2026-07-29). The narrator is the only component allowed to make
+  // things up, and until now nothing recorded what it made up - so an obsidian shard introduced
+  // on one turn was gone, or different, two turns later. This line is stripped from the prose
+  // before publication (takeIntroduced) and stored as FLAVOUR canon: remembered so the world
+  // stays consistent, and structurally unable to touch the plot.
+  'After your prose, on its own final line, write "NEW:" followed by any object, place, person or ' +
+  'detail you INVENTED here that was not given to you - semicolon separated, a few words each, at ' +
+  'most four. Write "NEW: none" when you invented nothing, which is the usual case when the ' +
+  'context already gave you what you needed. That line is never shown to the player. ' +
+  'Output only narration text and that final line.' + NARRATOR_CONTEXT_KEY
 
 /**
  * 'beat' opens situations and must end on a choice; 'outcome' resolves and may settle;

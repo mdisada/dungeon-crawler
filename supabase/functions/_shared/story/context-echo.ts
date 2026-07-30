@@ -29,12 +29,15 @@
 // matching on alignment would have missed the very case this exists for. Match the token instead.
 
 /** Labels that are never how a narrator opens a line of prose. */
-const HARD_LABELS = ['SCENE', 'GOAL', 'CAST', 'PARTY', 'SOFAR', 'KNOWN']
+// NEW is the narrator's own invention-reporting line (see introduced.ts). takeIntroduced
+// removes it first; this is the second line of defence, so a missed strip still cannot reach a
+// player.
+const HARD_LABELS = ['SCENE', 'GOAL', 'CAST', 'PARTY', 'SOFAR', 'KNOWN', 'NEW']
 /** Labels that are also ordinary words - only stripped as part of a run. */
 const SOFT_LABELS = ['LAST', 'EARLIER']
 
 const labelOf = (line: string): string | null => {
-  const match = /^\s*([A-Z]{4,7})\s+\S/.exec(line)
+  const match = /^\s*([A-Z]{3,7})\s*:?\s+\S/.exec(line)
   if (!match) return null
   const token = match[1]
   return HARD_LABELS.includes(token) || SOFT_LABELS.includes(token) ? token : null
