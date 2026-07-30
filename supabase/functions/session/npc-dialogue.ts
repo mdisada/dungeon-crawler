@@ -21,7 +21,8 @@ import {
   activeLoop, addressedNpcId, deflectDirective, deflectLevel, resolveAddressed,
 } from '../_shared/story/index.ts'
 import { loadLoops } from './beats.ts'
-import { buildCanon } from './canon.ts'
+import { mechanicalVocab, trailingLabel } from '../_shared/story/index.ts'
+import { buildCanon, establishedSoFar, hereFeatures } from './canon.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { challengeCheckResolved } from './encounters.ts'
 import {
@@ -133,6 +134,10 @@ async function loadNpcBundle(
     })),
   ]
 
+  const [established, features] = await Promise.all([
+    establishedSoFar(service, env.adventureId).catch(() => [] as string[]),
+    hereFeatures(service, env.adventureId, state.scene.locationId ?? null).catch(() => ''),
+  ])
   const lineCounts = pcLineCounts(state)
   // Personalization (2026-07-20): the NPC reacts to who each PC is, not just their name.
   const profiles = await partyProfileLines(service, await loadPartyCharacters(service, env.adventureId))
@@ -145,6 +150,10 @@ async function loadNpcBundle(
     dispositionByPc: dispositions,
     memory: [...(memoryRows ?? []).map((m) => JSON.stringify(m.summary)), ...retrieved.map((m) => `Established earlier: ${m}`)],
     knowledge: knowledge.map((k) => ({ id: k.candidate.id, reveals: k.reveals, condition: k.candidate.condition })),
+    // The story so far and the room, same definitions the narrator uses (canon.ts). This agent is
+    // roughly half of what a player reads and was the last one without them.
+    established,
+    hereFeatures: features,
     conversation: {
       topicStack: state.dm?.conversation.topicStack ?? [],
       revealedThisScene: state.dm?.conversation.revealedThisScene ?? [],
@@ -193,6 +202,30 @@ export async function npcReply(
   )
 
   let output = await runNpcAgent(env, buildContext(undefined, direction))
+
+  // THE MACHINE MUST NOT SPEAK THROUGH THE NPC EITHER (2026-07-29). mechanicsGuard was wired into
+  // publishNarration and not here - and here is where it got through. Live in run abd318e1 the
+  // social encounter was labelled "Earn Netta Vasch's trust" and Netta said "We need to earn your
+  // trust", inverted, with the machine's own goal in her mouth. Roughly half of what a player reads
+  // comes from this agent.
+  //
+  // Same trade as claimGuard on this path: one constrained regeneration, and keep the first reply if
+  // the second is no cleaner. A guaranteed-bad canned line is worse than an odd phrase.
+  const spokenLabels = [state.encounter?.label ?? ''].filter((l) => l.trim().length > 0)
+  const dirty = (line: string) => mechanicalVocab(line) ?? trailingLabel(line, spokenLabels)
+  const offence = dirty(output.dialogue)
+  if (offence) {
+    await logEvent(service, env.adventureId, sessionId, 'incident', {
+      kind: 'mechanical_vocab_in_dialogue', term: offence, draft: output.dialogue.slice(0, 200),
+    }).catch(() => {})
+    const retry = await runNpcAgent(env, buildContext(
+      `NEVER say "${offence}" or any other game-machinery phrasing - no failure, setback, check, ` +
+      'dice, DC, hit points, and never name the goal of the scene as if it were a thing you want. You ' +
+      'are a person in a place, speaking about what is in front of you.',
+      direction,
+    )).catch(() => output)
+    if (!dirty(retry.dialogue)) output = retry
+  }
 
   const npcs = [{ id: npc.id, name: npc.name }]
   const npcStates = state.dm?.facts.npcStates ?? {}

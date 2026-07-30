@@ -10,7 +10,9 @@ import { foreignCharacters, stripForeign } from '../_shared/guide/charset.ts'
 import { npcLocationAt } from '../_shared/guide/npc-itinerary.ts'
 import type { ItineraryStop } from '../_shared/guide/npc-itinerary.ts'
 import { dialogueGateActive, dmSettings } from '../_shared/play/index.ts'
-import { stripContextEcho, takeIntroduced, trimToCompleteSentence } from '../_shared/story/index.ts'
+import {
+  mechanicalVocab, stripContextEcho, takeIntroduced, trailingLabel, trimToCompleteSentence,
+} from '../_shared/story/index.ts'
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
 import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions, runOutcomeClaimCheck } from './agents.ts'
 import type { AgentEnv, NarrationStyle } from './agents.ts'
@@ -159,18 +161,21 @@ async function mechanicsGuard(
   draft: string,
   regenerate: (constraint: string) => Promise<string>,
 ): Promise<string> {
-  const hit = MECHANICAL_VOCAB.exec(draft)
+  // Moved to packages/rules/src/story/mechanical-vocab.ts and narrowed (2026-07-29). The inline
+  // version lost its word boundaries in transit, so `roll` matched "the fog rolled in" - it would
+  // have fired a regeneration on innocent prose constantly.
+  const hit = mechanicalVocab(draft)
   if (!hit) return draft
   await logEvent(service, env.adventureId, sessionId, 'incident', {
-    kind: 'mechanical_vocab_in_prose', term: hit[0], draft: draft.slice(0, 200),
+    kind: 'mechanical_vocab_in_prose', term: hit, draft: draft.slice(0, 200),
   }).catch(() => {})
   const second = await regenerate(
-    `NEVER use the words "${hit[0]}" or any other game-machinery vocabulary - no failure, setback, ` +
+    `NEVER use the words "${hit}" or any other game-machinery vocabulary - no failure, setback, ` +
     'check, roll, dice, encounter, objective, tier, milestone, hit points or DC. The player is ' +
     'reading a story, not a record of a game. Say what happened in the fiction instead.',
   ).catch(() => draft)
   // Keep whichever is clean; a second offence keeps the prose rather than a mechanical fallback.
-  return MECHANICAL_VOCAB.test(second) ? draft : second
+  return mechanicalVocab(second) ? draft : second
 }
 
 /**
@@ -412,8 +417,15 @@ async function knownLine(service: SupabaseClient, adventureId: string): Promise<
 
 /** The thread the party is actually pulling on. Read from state - no query. */
 function goalLine(state: GameState): string {
+  const title = goalTitle(state)
+  return title ? `GOAL   ${title}` : ''
+}
+
+/** The active objective's title on its own - also one of the labels the trailing-label guard
+ *  refuses to let the narrator paste on as a closing sentence. */
+function goalTitle(state: GameState): string {
   const active = state.objectives?.list?.find((o) => o.id === state.objectives?.currentId)
-  return active?.title ? `GOAL   ${active.title}` : ''
+  return typeof active?.title === 'string' ? active.title : ''
 }
 
 /** "Dead before the story began" is scene-setting, not a contradiction - spell that out. */
@@ -621,6 +633,25 @@ export async function publishNarration(
     // reports finish_reason 'length', and its own comment records that this provider does not
     // report it reliably - so run bac9f4b9 published a narration ending on the words "The
     // secrets". Shape-based, because a model cannot be asked to notice it was cut off.
+    // A MACHINE LABEL IS NOT A CLOSING SENTENCE (2026-07-29). stripContextEcho catches fixed tokens
+    // (CAST, PARTY, SOFAR) and cannot catch these, because an encounter label is a different string
+    // every adventure. Three narrations in run abd318e1 ended with the literal sentence "Earn Netta
+    // Vasch's trust." We know the strings at call time, so the check is free - and it only fires on
+    // a label standing as the passage's own final sentence, never one described mid-prose.
+    // `encounterSpec` carries no label of its own - the open encounter and the objective are the
+    // two machine-facing titles a narration can paste on.
+    const labels = [state.encounter?.label ?? '', goalTitle(state)]
+      .filter((l): l is string => typeof l === 'string' && l.trim().length > 0)
+    const pasted = trailingLabel(text, labels)
+    if (pasted) {
+      const cut = text.trim().slice(0, text.trim().toLowerCase().lastIndexOf(pasted.toLowerCase().slice(0, 8))).trim()
+      if (cut.length >= 40) {
+        text = cut
+        await logEvent(service, env.adventureId, sessionId, 'incident', {
+          kind: 'trailing_label_stripped', label: pasted, style,
+        }).catch(() => {})
+      }
+    }
     const whole = trimToCompleteSentence(text)
     if (whole.trimmed) {
       text = whole.text

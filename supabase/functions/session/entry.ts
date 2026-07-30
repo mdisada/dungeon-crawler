@@ -301,7 +301,24 @@ export async function handleCutsceneIntent(
     await commitDiffs(service, env.adventureId, () => [typingDiff(false)])
     throw err
   }
-  const entry = mapping.entry === 'offered' && !spec ? 'fold_in' : mapping.entry
+  let entry = mapping.entry === 'offered' && !spec ? 'fold_in' : mapping.entry
+
+  // A QUESTION IS NOT A COMMITMENT (2026-07-29). Structural belt, because the prompt clause above
+  // it is the thing that failed: the fold-streak nudge pushed "What was in the slips of paper?"
+  // into `offered` in run abd318e1, which opened a social encounter and skipped every
+  // asking-vs-acting protection - those all live inside the `fold_in` branch.
+  //
+  // Scoped as narrowly as it can be. It only fires on an unambiguous question that matched NO
+  // authored affordance, because the menu IS ground truth: if the scene was built to handle "ask
+  // her about Pol" then asking it is genuine engagement, and a player CLICKING that chip never
+  // reaches here at all (the bypass returns above). So this catches free-text questions the mapper
+  // over-read, and nothing else.
+  if (entry === 'offered' && !mapping.affordanceKey && seeksInformation(text)) {
+    await logEvent(service, env.adventureId, sessionId, 'entry_downgraded', {
+      from: 'offered', to: 'fold_in', reason: 'asking is not acting', text: text.slice(0, 120),
+    }).catch(() => {})
+    entry = 'fold_in'
+  }
   try {
     return await executeEntry(service, env, sessionId, character, text, entry, mapping, spec, beatId, party, intentAt)
   } catch (err) {

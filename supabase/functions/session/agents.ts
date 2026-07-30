@@ -652,6 +652,25 @@ export interface NpcContext {
   dispositionByPc: Record<string, number>
   memory: string[]
   knowledge: { id: string; reveals: string; condition: string | null }[]
+  /**
+   * THE STORY SO FAR, and THIS ROOM (2026-07-29).
+   *
+   * This agent knew what IT knows - its own authored clues with their reveal conditions, which is
+   * well plumbed - and nothing about what the story had established. So it could not answer a
+   * question about a fact the NARRATION had set, and it had no idea which of its own subjects were
+   * already resolved.
+   *
+   * Live in run abd318e1: asked "What was in the slips of paper?" - slips the narration had already
+   * described - Netta Vasch talked about her husband being meticulous. Asked about the creditor
+   * three times, she returned the identical sentence three times. Roughly half of what a player
+   * reads comes from this agent, and it was the last live agent still missing the record the
+   * narrator got.
+   *
+   * `established` is the same list the narrator's STORY line carries; `hereFeatures` the same room
+   * detail. One definition of each, exported from canon.ts.
+   */
+  established: string[]
+  hereFeatures: string
   conversation: { topicStack: string[]; revealedThisScene: string[] }
   /** The scene's transcript so far - without it the NPC forgets what happened two lines ago
    *  (the orb handed over and immediately denied, playtest 2026-07-20). */
@@ -802,6 +821,16 @@ export async function runNpcAgent(env: AgentEnv, ctx: NpcContext): Promise<NpcAg
     `NPC: ${ctx.npc.name} (${ctx.npc.faction}). Personality: ${ctx.npc.personality}. ${ctx.npc.description}`,
     `Disposition to each PC (-10..10): ${JSON.stringify(ctx.dispositionByPc)}`,
     `Interaction memory: ${ctx.memory.join(' | ') || 'first meeting'}`,
+    // What the STORY has established, not just what this NPC privately knows. Without it she
+    // could not answer a question about a fact the narration had already set, and had no idea
+    // which of her own subjects were already resolved.
+    ctx.established.length > 0
+      ? `Already true in this story - you know these happened, refer to them naturally and never `  +
+        `contradict them: ${ctx.established.join(' // ')}`
+      : '',
+    ctx.hereFeatures
+      ? `In this room, as authored - you can see these and speak about them: ${ctx.hereFeatures}`
+      : '',
     `Knowledge (id: what it reveals [condition]): ${ctx.knowledge.map((k) => `${k.id}: ${k.reveals}${k.condition ? ` [requires: ${k.condition}]` : ''}`).join(' | ') || 'none'}`,
     `Already revealed this scene: ${ctx.conversation.revealedThisScene.join(', ') || 'nothing'}`,
     `PCs present (id, name, lines spoken this scene): ${ctx.pcs.map((p) => `${p.characterId} "${p.name}" ${p.linesThisScene}`).join('; ')}`,
@@ -939,9 +968,24 @@ export async function runEntryMapper(env: AgentEnv, ctx: EntryContext): Promise<
     // Said as a fact about the table, not as an instruction to force engagement: the party may be
     // legitimately investigating, and railroading them out of that is the failure mode on the
     // other side. It is the model's call - it simply now knows how long this has been going on.
+    // NARROWED 2026-07-29, because the first version caused the bug it was meant to prevent.
+    //
+    // It read "if this one reaches for anything at all, it is engagement", and a QUESTION reaches
+    // for something. Live in run abd318e1 the mapper had folded seven replies in a row - the party
+    // were investigating a room we had just given five authored features to investigate, which is
+    // the system working - and this line then pushed "What was in the slips of paper?" into
+    // `offered` (mapper_entry=offered, no affordance match). That opened a social encounter, so the
+    // NPC played her authored beat instead of answering, and every asking-vs-acting protection
+    // built into the fold branch was skipped. One turn earlier the near-identical "What do the
+    // slips of paper in the leather case say?" folded correctly.
+    //
+    // Investigating is not stalling. What this line is for is a party who keep RESTATING intent
+    // without committing, so it now says exactly that and leaves questions alone.
     ctx.foldStreak >= 3
       ? `The last ${ctx.foldStreak} replies in a row were folded in as colour and moved nothing. ` +
-        'If this one reaches for anything at all, it is engagement - fold it only if it genuinely is not.'
+        'If this one is an ACTION that reaches for something, treat it as engagement. A question is ' +
+        'still a question no matter how many have come before it - asking is not acting, and a party ' +
+        'examining a scene is playing it, not stalling.'
       : '',
     // The closed menu. Matching an authored way in is a far narrower question than judging
     // engagement in the abstract, and every option here is one the scene was BUILT to handle.
