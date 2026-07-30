@@ -187,6 +187,9 @@ export async function generateParsed<T>(
       system: prompt.system,
       user,
       maxTokens,
+      // This runner budgets its own wall clock (FEEDBACK_RETRY_BUDGET_MS) and owns the truncation
+      // retry below, so llm.ts must not spend a silent doubled call on top of it.
+      lengthRetry: false,
       // Every guide-time call goes to the strong model (owner direction, 2026-07-29). The guide is
       // authored once and inherited by every session played on it, so its quality compounds in a
       // way a per-turn call's never does. See GUIDE_MODEL in _shared/model-routing.ts.
@@ -264,7 +267,10 @@ ${truncated
 Respond again with ONLY the corrected JSON object.`
   // Bounded, not doubled: these budgets are sized against the 150s edge-invocation kill, so an
   // unbounded raise would trade a parse failure for a killed invocation - the worse of the two.
-  const second = await call(feedback, truncated ? Math.min(prompt.maxTokens * 2, 6000) : prompt.maxTokens)
+  // Never BELOW the first call's cap either: a stage whose own budget already exceeds this ceiling
+  // (stage 4 asks 7000) would otherwise be told to fix a truncation with less room than it had.
+  const retryCap = Math.max(prompt.maxTokens, Math.min(prompt.maxTokens * 2, 8000))
+  const second = await call(feedback, truncated ? retryCap : prompt.maxTokens)
   const reparsed = checkCharset(second.text, parse(second.text))
   if (reparsed.ok) return reparsed.data
   throw new AgentCallError(`stage output failed validation after retry: ${reparsed.errors.slice(0, 8).join('; ')}`)

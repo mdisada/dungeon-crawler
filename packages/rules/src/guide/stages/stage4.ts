@@ -201,9 +201,17 @@ Objectives:
 ${objectiveList}
 ${existing ? `\n${existing}` : ''}`
 
-  // Capped so a stage-4 response stays well inside one edge invocation's wall clock (the free
-  // tier kills at 150s; a 6k-token deepseek response alone ran ~120s in the live smoke test).
-  return { system, user, maxTokens: 4000 }
+  // SIZED TO WHAT THIS STAGE ACTUALLY WRITES, NOT TO A ROUND NUMBER (2026-07-31).
+  //
+  // 4000 was set to keep the reply "well inside one edge invocation's wall clock". Measured, it
+  // did the opposite. Stage 4 needs ~5600 tokens on glm-5.2, so every attempt bought a truncated
+  // call at the cap (46-72s) AND the doubled retry that follows one (134-147s) - 180-220s against
+  // a 150s kill, three attempts running, the last killed mid-call (live 2026-07-30, "By Dawn's
+  // Light"). Replaying the same prompt with room to finish: one call, 84s, 5558 tokens, complete.
+  //
+  // A cap is a ceiling, not a spend: flash-lite writes this stage in ~3300 tokens and pays nothing
+  // for the headroom. What the low cap bought was a guaranteed second call.
+  return { system, user, maxTokens: 7000 }
 }
 
 /**

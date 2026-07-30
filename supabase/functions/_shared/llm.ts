@@ -89,6 +89,15 @@ export interface AgentTextCall {
    * _shared/play and _shared/story are what catch that.
    */
   schema?: { name: string; schema: Record<string, unknown> }
+  /**
+   * Retry once at DOUBLE the cap when the reply is cut off at `maxTokens`. Default true.
+   *
+   * The guide pipeline turns this off. It owns a wall clock (150s per edge invocation) and its own
+   * truncation retry, and this silent second call is what pushed stage 4 over the edge: 72s
+   * truncated at the cap, then a 134s doubled call, three attempts running, the last killed
+   * mid-call (live 2026-07-30). A caller that budgets its own time has to be the one that decides.
+   */
+  lengthRetry?: boolean
 }
 
 /** Thrown when the caller's settings route this request somewhere we can't serve (local mode). */
@@ -237,7 +246,7 @@ export async function callAgentTextWithMeta(call: AgentTextCall): Promise<AgentT
   // A dead call cannot be fixed with more tokens, so retry at the SAME cap - the conclusion
   // session/agents.ts reached for the play path on 2026-07-23, applied here so every caller gets it.
   const providerFailed = json.choices?.[0]?.finish_reason === 'error'
-  if (!content || truncated || providerFailed) {
+  if (!content || (truncated && call.lengthRetry !== false) || providerFailed) {
     // Empty completion (seen live with mimo-v2.5 on structured-output calls): the model spent
     // the whole budget on reasoning tokens despite reasoning-off. Retry once with double the
     // budget so the actual content fits; only then give up.
