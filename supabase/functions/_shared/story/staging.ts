@@ -195,3 +195,32 @@ export function stagedElsewhere(
   if (!authoredLocationId || !partyLocationId) return false
   return authoredLocationId !== partyLocationId
 }
+
+/**
+ * Do two written place names mean the same place? (2026-07-30)
+ *
+ * The player's destination arrives as free text the mapper echoed back ("the tally room"); the
+ * node's location is a stored row ("The Tally Room"). Comparing them literally answers "different"
+ * for the same room, which on this path would mean silently ignoring the player.
+ *
+ * Case, surrounding punctuation and a leading article are all noise here. Nothing cleverer:
+ * fuzzy matching two place names risks calling "The Drained Lock" and "the lock chambers" the same
+ * place, and the cost of a wrong "same" is the exact bug this is used to prevent.
+ */
+export function namesSamePlace(a: string, b: string): boolean {
+  // Order matters, and the first version got it wrong twice: the article strip has to run AFTER
+  // whitespace is normalised, or a leading space stops `^the` from matching at all. `\b` so a bare
+  // "the" reduces to nothing, which the emptiness guard below turns into `false` instead of letting
+  // two articles match each other.
+  const norm = (s: string) => (s ?? '')
+    .toLowerCase()
+    .replace(/[.,;:!?"'()]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^the\b\s*/, '')
+    .trim()
+  const left = norm(a)
+  const right = norm(b)
+  if (left.length === 0 || right.length === 0) return false
+  return left === right
+}

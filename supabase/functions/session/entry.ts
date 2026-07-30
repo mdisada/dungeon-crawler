@@ -10,7 +10,7 @@ import type { Json } from '../_shared/state/index.ts'
 import { runEntryMapper } from './agents.ts'
 import type { AgentEnv, EntryKind, SceneEffects } from './agents.ts'
 import { loadLoops, planAndOpenBeat } from './beats.ts'
-import { activeLoop, seeksInformation } from '../_shared/story/index.ts'
+import { activeLoop, namesSamePlace, seeksInformation } from '../_shared/story/index.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import {
   handleChallengeIntent, openSkillChallengeFromSpec, parseStoredBeatSpec, runCombatPlaceholderEncounter,
@@ -318,6 +318,36 @@ export async function handleCutsceneIntent(
       from: 'offered', to: 'fold_in', reason: 'asking is not acting', text: text.slice(0, 120),
     }).catch(() => {})
     entry = 'fold_in'
+  }
+
+  // GOING SOMEWHERE ELSE IS NOT ENGAGING THIS SCENE (2026-07-30).
+  //
+  // `engage_before_arrival` resolves an offered scene the party has not reached by travelling them
+  // to it, on the reasoning that "engaging a scene IS the decision to go to it". That reasoning
+  // holds for "I press Maren on the ledger". It fails completely when the player names a DIFFERENT
+  // destination in the same breath, and then the guard moves them somewhere they just declined.
+  //
+  // Run 13b7c386, turns 4 and 5, identical traces:
+  //     player   "I head towards the tally room."
+  //     mapper   entry=offered  (matched the open node, which lives at The Company Store)
+  //     travel   -> The Tally Room        <- the mapper's OWN sceneEffects, read correctly
+  //     travel   -> The Company Store     <- engage_before_arrival, overriding it
+  // Turn 5 was "I head directly for the Tally Room, IGNORING the store" and went to the store too.
+  // Two halves of one mapper output disagreed and the node's location won over the player's words.
+  //
+  // Scoped like the belt above: only free text, never a clicked chip (a chip IS engagement), and
+  // only when the named place is genuinely a different one - `namesSamePlace` is deliberately exact
+  // rather than fuzzy, because a wrong "same" here silently ignores the player again.
+  const headingTo = mapping.sceneEffects?.travelLocation ?? ''
+  if (entry === 'offered' && !mapping.affordanceKey && headingTo) {
+    const awaiting = await sceneAwaitingArrival(service, env.adventureId, beatId)
+    if (awaiting && !namesSamePlace(headingTo, awaiting.name)) {
+      await logEvent(service, env.adventureId, sessionId, 'entry_downgraded', {
+        from: 'offered', to: 'fold_in', reason: 'headed somewhere else',
+        heading_to: headingTo, scene_at: awaiting.name, text: text.slice(0, 120),
+      }).catch(() => {})
+      entry = 'fold_in'
+    }
   }
   try {
     return await executeEntry(service, env, sessionId, character, text, entry, mapping, spec, beatId, party, intentAt)

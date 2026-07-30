@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { addressedNpcId, isStageable, npcStateOf, resolveAddressed, resolveNpcNames, stagedElsewhere, stageableNpcs } from './staging'
+import { addressedNpcId, isStageable, namesSamePlace, npcStateOf, resolveAddressed, resolveNpcNames, stagedElsewhere, stageableNpcs } from './staging'
 import type { NpcStageRow } from './staging'
 
 const cast: NpcStageRow[] = [
@@ -163,5 +163,24 @@ describe('stagedElsewhere', () => {
     expect(stagedElsewhere('hoss-cottage', null)).toBe(false)
     expect(stagedElsewhere(null, null)).toBe(false)
     expect(stagedElsewhere('', 'lock-3')).toBe(false)
+  })
+})
+
+describe('namesSamePlace', () => {
+  it('sees through case, articles and punctuation', () => {
+    expect(namesSamePlace('the tally room', 'The Tally Room')).toBe(true)
+    expect(namesSamePlace('The Tally Room.', 'the tally room')).toBe(true)
+    expect(namesSamePlace('  The   Company Store ', 'the company store')).toBe(true)
+  })
+
+  it('keeps genuinely different places apart - a wrong "same" is the bug this prevents', () => {
+    expect(namesSamePlace('the tally room', 'The Company Store')).toBe(false)
+    expect(namesSamePlace('The Drained Lock', 'the lock chambers')).toBe(false)
+  })
+
+  it('is false on empty input rather than matching everything', () => {
+    expect(namesSamePlace('', '')).toBe(false)
+    expect(namesSamePlace('', 'The Tally Room')).toBe(false)
+    expect(namesSamePlace('the', 'The')).toBe(false)
   })
 })
