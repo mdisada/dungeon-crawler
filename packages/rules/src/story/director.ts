@@ -140,6 +140,16 @@ export interface DirectorDecision {
   /** The ladder position this decision represents (0 for none/offer_pressure). */
   rung: number
   reason: string
+  /**
+   * Which press this is, on `offer_pressure` only - 1 for the first, 2 for the next (2026-07-29).
+   *
+   * Already computed here to decide when to escalate to `offer_forced`; it was simply never handed
+   * to the delivery side, so every press was written from identical inputs and read as identical
+   * prose. Live in run abd318e1, Netta's entire opening speech was re-delivered verbatim at press 1
+   * and again at press 2. The BACKOFF was correct - two presses, four turns apart, exactly as
+   * designed - and the repetition came from the prompt, not the pacing.
+   */
+  presses?: number
 }
 
 const NONE: DirectorDecision = { action: 'none', rung: 0, reason: '' }
@@ -212,6 +222,7 @@ export function decideDirector(input: DirectorInput): DirectorDecision {
         action: 'offer_pressure',
         rung: 0,
         reason: `offer unanswered for ${state.offerPendingTurns} turns`,
+        presses,
       }
     }
     // Still un-answered but inside the quiet window: nothing else can progress either, so

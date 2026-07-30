@@ -304,3 +304,29 @@ describe('the objective clock measures ONE objective', () => {
     expect(s.turnsOnObjective).toBe(11)
   })
 })
+
+describe('offer press index (2026-07-29)', () => {
+  // The backoff was always right - presses land 4 turns apart. What was missing is WHICH press
+  // this is, so the delivery side could escalate instead of re-reading the same pitch. Run
+  // abd318e1 re-published the giver's entire opening speech verbatim at press 1 and press 2.
+  const withPending = (offerPendingTurns: number) => decideDirector(base({
+    state: { ...EMPTY_DIRECTOR_STATE, offerPendingTurns },
+    hasPendingOffer: true,
+    hasActiveObjective: false,
+    failForwardAllowed: true,
+  }))
+
+  it('numbers the presses', () => {
+    expect(withPending(3)).toMatchObject({ action: 'offer_pressure', presses: 1 })
+    expect(withPending(7)).toMatchObject({ action: 'offer_pressure', presses: 2 })
+    expect(withPending(11)).toMatchObject({ action: 'offer_pressure', presses: 3 })
+  })
+
+  it('stays quiet between presses', () => {
+    for (const turns of [4, 5, 6, 8, 9, 10]) expect(withPending(turns).action).toBe('none')
+  })
+
+  it('stops asking and starts the story after the last press', () => {
+    expect(withPending(15).action).toBe('offer_forced')
+  })
+})

@@ -85,9 +85,20 @@ export async function deliverRung(
         (typeof pendingOffer?.gold === 'number' && pendingOffer.gold > 0
           ? `The agreed price is ${pendingOffer.gold} gold - state it EXACTLY, never a different figure or currency. `
           : '') +
-        'Have them press for a decision NOW, in character: restate what they need and what it is ' +
-        'worth, make the cost of waiting concrete, and end by asking the party plainly whether ' +
-        'they are in. Do not answer for them.',
+        // DO NOT RE-DELIVER THE PITCH (2026-07-29). This used to say "restate what they need and
+        // what it is worth", and the narrator did exactly that: run abd318e1 re-published Netta's
+        // entire opening speech, word for word, at press 1 and again at press 2. The offer's need
+        // and its price are already on the player's screen in the banner, and the original pitch is
+        // still in the transcript window - a press only has to make WAITING hurt.
+        'Have them press for a decision NOW, in character. Do NOT restate the pitch or re-explain ' +
+        'what they want and what it pays - the party has heard it and it is still on their screen. ' +
+        'Say something NEW: what waiting has already cost, what is moving while they hesitate, what ' +
+        'this person is starting to think of them. End by asking plainly whether they are in, and ' +
+        'never answer for them.' +
+        (decision.presses && decision.presses > 1
+          ? ` This is press ${decision.presses}: they have asked before and been met with silence, ` +
+            'so let that show - shorter, harder, and closer to walking away than last time.'
+          : ''),
       'The offer presses',
     )
     return
