@@ -16,6 +16,7 @@ import { runClaimCheck, runConsistency, runObjectiveJudge } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { ensureSpineLoop, loadLoops, planAndOpenBeat } from './beats.ts'
 import { graphDecision, inPlayNodeKey, loadObjectiveNodes } from './graph-read.ts'
+import { establishedSoFar } from './canon.ts'
 import { recordSceneLedger } from './ledger.ts'
 import { applyMilestones } from './milestones.ts'
 import { narrationBeat } from './narration.ts'
@@ -577,6 +578,10 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
     // Nothing left to play: this prose is the adventure's final line, not the opening of a finale
     // the party still has to fight through. The two need opposite endings.
     ladder.remaining === 0,
+    // The authored record of the story, and what became of each objective (2026-07-29). This agent
+    // used to see only the condensed event trail above - type names with a few fields glued on.
+    await establishedSoFar(service, env.adventureId).catch(() => []),
+    ordered.map((o) => `${o.title}: ${o.outcome ?? (o.reveal_state === 'completed' ? 'completed' : o.reveal_state)}`),
   ).catch(() => '')) || leading.climax_summary || leading.description
 
   // Consistency, cheaply and deterministically. Publishing the climax directly (above) removed

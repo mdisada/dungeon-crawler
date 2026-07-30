@@ -81,12 +81,33 @@ export async function recordSceneLedger(
         return npc ? `${npc.name} is ${s}` : ''
       }).filter(Boolean))
 
+    // The authored sentence for the node that just resolved, so the digest adds to it rather than
+    // re-deriving it. Best-effort: no node key (ad-hoc, or a legacy guide) means no line, and the
+    // archivist behaves exactly as it did before.
+    let authoredOutcome = ''
+    const closedNodeKey = state.dm?.encounterSpec?.nodeKey
+    if (closedNodeKey) {
+      const { data: node } = await service
+        .from('story_nodes').select('outcome_summary')
+        .eq('adventure_id', env.adventureId).eq('key', closedNodeKey).maybeSingle()
+      const summary = (node?.outcome_summary ?? null) as { win?: string; loss?: string } | null
+      // The ledger runs after resolveOpenEncounter logged the tier, so read it rather than guess.
+      const { data: last } = await service
+        .from('event_log').select('payload')
+        .eq('adventure_id', env.adventureId).eq('type', 'encounter_resolved')
+        .eq('payload->>node_key', closedNodeKey)
+        .order('id', { ascending: false }).limit(1)
+      const tier = ((last ?? [])[0]?.payload as { tier?: string } | undefined)?.tier
+      authoredOutcome = String((tier === 'full' ? summary?.win : summary?.loss) ?? '').trim()
+    }
+
     const ledger = await runArchivist(env, {
       phase,
       label,
       vocabulary,
       objective: vocab.objective,
       facts,
+      authoredOutcome,
       transcript,
       npcNames: npcs.map((n) => n.name),
       pcNames: state.players.list.map((p) => p.name),

@@ -90,7 +90,7 @@ export interface Canon {
  */
 const MAX_ESTABLISHED = 8
 
-async function establishedSoFar(service: SupabaseClient, adventureId: string): Promise<string[]> {
+export async function establishedSoFar(service: SupabaseClient, adventureId: string): Promise<string[]> {
   const { data: events } = await service
     .from('event_log')
     .select('payload')
@@ -137,7 +137,7 @@ async function establishedSoFar(service: SupabaseClient, adventureId: string): P
  * Only the party's CURRENT location - the rooms they are not standing in are not theirs to see,
  * and that is the same rule pickReveal follows.
  */
-async function hereFeatures(
+export async function hereFeatures(
   service: SupabaseClient,
   adventureId: string,
   locationId: string | null,

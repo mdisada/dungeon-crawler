@@ -658,6 +658,21 @@ export async function runClimaxAuthor(
   personalOutcomes: string[] = [],
   /** True when no objective remains - this prose IS the adventure's final line, not a scene opening. */
   ladderFinished = false,
+  /**
+   * THE STORY, IN THE WORDS THE GUIDE WROTE FOR IT (2026-07-29).
+   *
+   * This agent writes the last thing anyone reads, and it was the worst-fed in the system. Its
+   * whole view of the adventure was `condensedEvents` - event TYPE NAMES with a few string fields
+   * glued on (`${e.type}: ${['text','title','tag','name'] joined}`), last 15 rows. So the finale was
+   * composed from lines like "encounter_resolved: skill_challenge investigation", with no sight of
+   * which objectives resolved, what the authored outcome sentences said, or what the party holds.
+   *
+   * `established` is the same list the narrator's STORY line carries: the authored present-tense
+   * sentence for every node that resolved, tier-correct, so a lost scene contributes its loss.
+   * `ladder` is what became of each objective. Both already existed; neither reached here.
+   */
+  established: string[] = [],
+  ladder: string[] = [],
 ): Promise<string> {
   if (env.demo) {
     return ladderFinished
@@ -674,7 +689,13 @@ export async function runClimaxAuthor(
       system: ladderFinished ? CLIMAX_ENDING_SYSTEM : CLIMAX_OPENING_SYSTEM,
       user: [
         `Committed ending: ${ending.title} (${ending.tone}) - ${ending.description}`,
-        `What actually happened (condensed):\n${condensedEvents.join('\n')}`,
+        // The authored record first: it is prose the guide wrote about this exact story, and it
+        // beats a list of event type names for every purpose this agent has.
+        established.length > 0
+          ? `WHAT BECAME TRUE, as the guide wrote it - this is the story, build the finale on it:\n${established.join('\n')}`
+          : '',
+        ladder.length > 0 ? `The objectives and what became of them:\n${ladder.join('\n')}` : '',
+        `Raw event trail (thin, for cross-checking only):\n${condensedEvents.join('\n')}`,
         personalOutcomes.length > 0
           ? `Personal threads to acknowledge in a clause each (never invent an outcome that is ` +
             `not stated here):\n${personalOutcomes.join('\n')}`
@@ -771,6 +792,19 @@ export interface ArchivistContext {
   objective?: { title: string; hiddenDescription: string } | null
   /** Established facts the scene must not contradict. */
   facts: string[]
+  /**
+   * The AUTHORED sentence for what is true after this node resolved (2026-07-29).
+   *
+   * The guide already wrote this - `story_nodes.outcome_summary`, one present-tense sentence per
+   * tier, described in its own comment as "the record every later scene reads instead of guessing".
+   * This agent was asked to summarise the same closed phase from the transcript, so the system kept
+   * TWO records of one truth: one authored, one improvised. That is the drift shape the rest of
+   * today's work closes, and it was still open here.
+   *
+   * Given the authored line, the digest's job narrows to what the line does not cover - who was
+   * there, what it cost, what the party now holds. Empty on guides that predate the field.
+   */
+  authoredOutcome?: string
   transcript: string[]
   npcNames: string[]
   pcNames: string[]
@@ -887,6 +921,10 @@ export async function runArchivist(env: AgentEnv, ctx: ArchivistContext): Promis
         ? `These milestones belong to the objective "${ctx.objective.title}" - ${ctx.objective.hiddenDescription}\nRead each milestone as shorthand for a step of THAT, even when its wording is generic or placeholder-like.`
         : '',
       `Authored milestones (copy verbatim, or return none): ${ctx.vocabulary.join(' | ') || 'none'}`,
+      ctx.authoredOutcome
+        ? `WHAT IS TRUE NOW, as the guide wrote it - do not contradict it and do not restate it, ` +
+          `add only what it leaves out: ${ctx.authoredOutcome}`
+        : '',
       `Established facts: ${ctx.facts.join(' | ') || 'none'}`,
       `NPCs: ${ctx.npcNames.join(', ') || 'none'}`,
       `Story dials (move only these, only when this phase clearly shifted one): ${

@@ -346,6 +346,15 @@ export interface AdjudicatorContext {
   /** Authored milestone vocabulary (objective + open-beat predicate atoms, exact text). */
   milestones: string[]
   /**
+   * The authored examinable detail of the room the party is standing in (2026-07-29).
+   *
+   * This agent sets the DC and decides the outcome for actions taken ON things in the room, and it
+   * could not see the room. Live in run abd318e1 a player pried at "the block wedged under the
+   * scales" - a shaped wooden chock, authored at stage 4 with its own detail - and the difficulty
+   * was set by an agent with no idea the block existed. Empty on guides authored before features.
+   */
+  hereFeatures: string
+  /**
    * The adventure's difficulty shift, applied to whatever DC the model returns. Kept OUT of the
    * prompt on purpose: telling the model "this is a hard adventure" makes it inflate its own DCs
    * and the shift then lands twice. The model judges the fiction; the profile does the arithmetic.
@@ -582,6 +591,7 @@ export async function runAdjudicator(
     `Known locations: ${ctx.knownLocations.join('; ') || 'none listed'}`,
     `Named NPCs in the world: ${ctx.knownNpcs.join('; ') || 'none listed'}`,
     `Authored milestones (exact text): ${ctx.milestones.join(' | ') || 'none'}`,
+    ctx.hereFeatures ? `In this room, as authored: ${ctx.hereFeatures}` : '',
     `Recent events: ${ctx.recentEvents.join(' | ') || 'none'}`,
   ].filter(Boolean).join('\n')
   // 600 was set when this returned prose with optional fields omitted; strict mode makes every

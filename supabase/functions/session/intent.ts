@@ -13,6 +13,7 @@ import type { GameState, Json, PendingPromptState } from '../_shared/state/index
 import { runAdjudicator } from './agents.ts'
 import type { AgentEnv, SceneEffects } from './agents.ts'
 import { narrationBeat } from './narration.ts'
+import { hereFeatures } from './canon.ts'
 import { pacingFor } from './pacing.ts'
 import { handleSay } from './npc-dialogue.ts'
 import { endEncounter, startSocial } from './social-staging.ts'
@@ -431,6 +432,8 @@ async function adjudicate(
       knownLocations: ((locationRows.data ?? []) as { name: string }[]).map((l) => l.name),
       knownNpcs: ((npcRows.data ?? []) as { name: string }[]).map((n) => n.name),
       milestones: [...new Set([...vocab.flags, ...vocab.events, ...vocab.facts])],
+      // The room, so a DC for prying at the block is set by something that knows what the block is.
+      hereFeatures: await hereFeatures(service, adventureId, state.scene.locationId ?? null),
       dcShift: pacingFor(state).dcShift,
     })
   } catch (err) {

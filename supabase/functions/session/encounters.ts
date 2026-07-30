@@ -21,6 +21,7 @@ import type { SpawnInstantiator } from './danger.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { writeMemoryFragment } from './memory.ts'
 import { recordSceneLedger } from './ledger.ts'
+import { hereFeatures } from './canon.ts'
 import { applyMilestones } from './milestones.ts'
 import { narrationBeat } from './narration.ts'
 import { pacingFor } from './pacing.ts'
@@ -669,6 +670,8 @@ export async function handleChallengeIntent(
         (traitNotes ? `Party traits in play here: ${traitNotes}. ` : '') +
         'Non-trivial contributions to the challenge should be skill checks, not auto-successes.',
       objective: null,
+      // The room, so a mid-challenge DC is set by something that knows what is in it.
+      hereFeatures: await hereFeatures(service, env.adventureId, state.scene.locationId ?? null),
       partySkills: partySkillList(party),
       partySize: party.length,
       recentEvents: agentContextLines(state, 5),
