@@ -124,6 +124,73 @@ export async function establishedSoFar(service: SupabaseClient, adventureId: str
 }
 
 
+/** The authored identity of an NPC, trimmed to one clause - who they are, in a handful of words. */
+export function identityClause(description: string, personality: unknown): string {
+  const source = description.trim() ||
+    (typeof personality === 'object' && personality !== null
+      ? String((personality as Record<string, unknown>).summary ?? (personality as Record<string, unknown>).traits ?? '')
+      : '')
+  if (!source) return ''
+  // First clause only. Descriptions are one or two sentences; the opening phrase is the identity
+  // ("Broad-shouldered tavernkeeper who has spent two years...") and the rest is colour.
+  const clause = source.split(/[.;]|\s+-\s+/)[0].trim()
+  return clause.length > 90 ? `${clause.slice(0, 88).replace(/[,\s]+$/, '')}...` : clause
+}
+
+/**
+ * WHO IS IN THIS SCENE - one definition, because two drifted once already (2026-07-30).
+ *
+ * `dialogue.speakers` is the ROUTING field and answers a different question: entry.ts deliberately
+ * refuses to stage speakers when a non-social encounter opens, or every later input becomes NPC
+ * dialogue and starves the challenge. Presence therefore also has to read the node's own cast, which
+ * is what run 15fc82be needed - 26 narrations with zero social encounters told the narrator every
+ * NPC in the story was elsewhere, including the boss the party was fighting.
+ */
+export function stagedNpcIds(state: GameState): Set<string> {
+  const params = state.dm?.encounterSpec?.params
+  const encounterCast = (typeof params === 'object' && params !== null && !Array.isArray(params) &&
+      Array.isArray((params as Record<string, unknown>).npc_ids)
+    ? ((params as Record<string, unknown>).npc_ids as unknown[]).filter((v): v is string => typeof v === 'string')
+    : [])
+  return new Set([
+    ...(state.dialogue?.speakers?.map((sp) => sp.npcId) ?? []),
+    ...encounterCast,
+  ])
+}
+
+/**
+ * The OTHER living NPCs standing in this scene, as "Name - who they are" (2026-07-30).
+ *
+ * Built for the NPC agent, which knew the PCs in the room and nothing about its fellow cast - see
+ * `NpcContext.presentNpcs` for the run where that put a present character "back at the chapel".
+ * Excludes the speaker, and excludes the dead and absent: a roster is for people who can be spoken
+ * to, and `GONE` is the narrator's separate concern.
+ */
+export async function presentCast(
+  service: SupabaseClient,
+  adventureId: string,
+  state: GameState,
+  excludeNpcId: string,
+): Promise<string[]> {
+  const staged = stagedNpcIds(state)
+  staged.delete(excludeNpcId)
+  if (staged.size === 0) return []
+  const { data } = await service
+    .from('npcs')
+    .select('id, name, initial_state, description, personality')
+    .eq('adventure_id', adventureId)
+    .in('id', [...staged])
+  const npcStates = state.dm?.facts.npcStates ?? {}
+  return ((data ?? []) as {
+    id: string; name: string; initial_state: string; description: string; personality: unknown
+  }[])
+    .filter((n) => n.name && (npcStates[n.id] ?? n.initial_state ?? 'alive') === 'alive')
+    .map((n) => {
+      const identity = identityClause(n.description ?? '', n.personality)
+      return identity ? `${n.name} - ${identity}` : n.name
+    })
+}
+
 /**
  * WHAT IS IN THIS ROOM, as the guide wrote it (2026-07-29).
  *

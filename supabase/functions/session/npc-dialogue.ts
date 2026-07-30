@@ -22,7 +22,7 @@ import {
 } from '../_shared/story/index.ts'
 import { loadLoops } from './beats.ts'
 import { trailingLabel } from '../_shared/story/index.ts'
-import { buildCanon, establishedSoFar, hereFeatures } from './canon.ts'
+import { buildCanon, establishedSoFar, hereFeatures, presentCast } from './canon.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { challengeCheckResolved } from './encounters.ts'
 import {
@@ -163,9 +163,12 @@ async function loadNpcBundle(
     })),
   ]
 
-  const [established, features] = await Promise.all([
+  const [established, features, present] = await Promise.all([
     establishedSoFar(service, env.adventureId).catch(() => [] as string[]),
     hereFeatures(service, env.adventureId, state.scene.locationId ?? null).catch(() => ''),
+    // Who ELSE is standing here - see NpcContext.presentNpcs for the run where not knowing put a
+    // present character "back at the chapel".
+    presentCast(service, env.adventureId, state, npcId).catch(() => [] as string[]),
   ])
   const lineCounts = pcLineCounts(state)
   // Personalization (2026-07-20): the NPC reacts to who each PC is, not just their name.
@@ -183,6 +186,7 @@ async function loadNpcBundle(
     // roughly half of what a player reads and was the last one without them.
     established,
     hereFeatures: features,
+    presentNpcs: present,
     conversation: {
       topicStack: state.dm?.conversation.topicStack ?? [],
       revealedThisScene: state.dm?.conversation.revealedThisScene ?? [],

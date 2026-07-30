@@ -671,6 +671,23 @@ export interface NpcContext {
    */
   established: string[]
   hereFeatures: string
+  /**
+   * THE OTHER NPCs STANDING RIGHT HERE (2026-07-30).
+   *
+   * This agent knew the PCs in the room (`pcs`) and could be told when the party addressed someone
+   * ABSENT (`absentNote`) - but nothing ever told it who else was PRESENT. So it answered on the
+   * assumption it was alone with the party, and confidently placed people elsewhere.
+   *
+   * Live in run e87b3506: Garrett Munn, standing in the bell tower, said of Mother Solla "she's back
+   * at the chapel, not here" - while she was at the rope beside him, named explicitly seven entries
+   * later. Both were CORRECTLY staged; I checked the authored itineraries and each places them at
+   * the Bell Tower for objective 0. Nothing was mis-staged and nothing was mis-narrated. The NPC
+   * simply had no way to know she was there.
+   *
+   * "Name - who they are", the same identity clause the narrator's HERE line carries. Excludes the
+   * speaker themselves.
+   */
+  presentNpcs: string[]
   conversation: { topicStack: string[]; revealedThisScene: string[] }
   /** The scene's transcript so far - without it the NPC forgets what happened two lines ago
    *  (the orb handed over and immediately denied, playtest 2026-07-20). */
@@ -834,6 +851,12 @@ export async function runNpcAgent(env: AgentEnv, ctx: NpcContext): Promise<NpcAg
     `Knowledge (id: what it reveals [condition]): ${ctx.knowledge.map((k) => `${k.id}: ${k.reveals}${k.condition ? ` [requires: ${k.condition}]` : ''}`).join(' | ') || 'none'}`,
     `Already revealed this scene: ${ctx.conversation.revealedThisScene.join(', ') || 'nothing'}`,
     `PCs present (id, name, lines spoken this scene): ${ctx.pcs.map((p) => `${p.characterId} "${p.name}" ${p.linesThisScene}`).join('; ')}`,
+    // Stated as presence, not as a topic. The failure this fixes was an NPC declaring a present
+    // character absent, so what it needs is the fact, plus an explicit ban on the inference it drew.
+    ctx.presentNpcs.length > 0
+      ? `ALSO IN THIS SCENE, standing with you right now - never say or imply any of these people ` +
+        `are elsewhere, and you may speak to them or about them: ${ctx.presentNpcs.join('; ')}`
+      : '',
     ctx.partyProfiles.length > 0
       ? `Who these people are (react to their traits and quirks personally):\n${ctx.partyProfiles.map((p) => `- ${p}`).join('\n')}`
       : '',

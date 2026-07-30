@@ -16,7 +16,7 @@ import {
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
 import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions, runOutcomeClaimCheck } from './agents.ts'
 import type { AgentEnv, NarrationStyle } from './agents.ts'
-import { buildCanon, nodePull } from './canon.ts'
+import { buildCanon, identityClause, nodePull, stagedNpcIds } from './canon.ts'
 import { retrieveMemories, writeMemoryFragment } from './memory.ts'
 import {
   agentContextLines, agentContextSplit, appendLinesDiff, loadPartyCharacters, newLine,
@@ -200,18 +200,6 @@ function factSheet(state: GameState): string {
   ].join('\n')
 }
 
-/** The authored identity of an NPC, trimmed to one clause - who they are, in a handful of words. */
-function identityClause(description: string, personality: unknown): string {
-  const source = description.trim() ||
-    (typeof personality === 'object' && personality !== null
-      ? String((personality as Record<string, unknown>).summary ?? (personality as Record<string, unknown>).traits ?? '')
-      : '')
-  if (!source) return ''
-  // First clause only. Descriptions are one or two sentences; the opening phrase is the identity
-  // ("Broad-shouldered tavernkeeper who has spent two years...") and the rest is colour.
-  const clause = source.split(/[.;]|\s+-\s+/)[0].trim()
-  return clause.length > 90 ? `${clause.slice(0, 88).replace(/[,\s]+$/, '')}...` : clause
-}
 
 /**
  * The cast, as data: who is in this scene, who else exists, and who cannot appear at all.
@@ -260,15 +248,7 @@ async function rosterLines(
   // including the boss the party was fighting.
   //
   // The node already records who it stages. Reading presence from there leaves routing untouched.
-  const params = state.dm?.encounterSpec?.params
-  const encounterCast = (typeof params === 'object' && params !== null && !Array.isArray(params) &&
-      Array.isArray((params as Record<string, unknown>).npc_ids)
-    ? ((params as Record<string, unknown>).npc_ids as unknown[]).filter((v): v is string => typeof v === 'string')
-    : [])
-  const staged = new Set([
-    ...(state.dialogue?.speakers?.map((sp) => sp.npcId) ?? []),
-    ...encounterCast,
-  ])
+  const staged = stagedNpcIds(state)
   const { data } = await service
     .from('npcs')
     .select('id, name, initial_state, description, personality, itinerary')
@@ -314,8 +294,18 @@ async function rosterLines(
     here.length > 0
       ? `HERE   ${here.map((n) => (n.identity ? `${n.name} - ${n.identity}` : n.name)).join('; ')}`
       : '',
+    // IDENTITY, NOT JUST A NAME AND A PLACE (2026-07-30). HERE carried who someone IS; CAST carried
+    // only who exists and where, and the description fetched above was thrown away for this branch.
+    // But the narrator routinely writes and VOICES people who are not staged as speakers, and with
+    // nothing to write them from it invents. Live in e87b3506 it gave Mother Solla - authored as
+    // "the chapel bell-ringer who descends from the tower at full dark" - the line "The stair goes up
+    // to the bell. I have never climbed it.", inverting the character at the centre of the mystery.
+    // She was in CAST, so all it had was her name and her location.
     elsewhere.length > 0
-      ? `CAST   ${elsewhere.slice(0, 20).map((n) => (n.where ? `${n.name} (at ${n.where})` : n.name)).join(', ')}`
+      ? `CAST   ${elsewhere.slice(0, 20).map((n) => {
+        const where = n.where ? ` (at ${n.where})` : ''
+        return n.identity ? `${n.name} - ${n.identity}${where}` : `${n.name}${where}`
+      }).join('; ')}`
       : '',
     gone.length > 0
       ? `GONE   ${gone.slice(0, 12).map((n) => `${n.name} - ${n.state === 'dead' ? 'dead' : 'not in this scene'}`).join('; ')}`
