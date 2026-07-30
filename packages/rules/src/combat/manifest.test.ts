@@ -127,6 +127,35 @@ describe('buildManifest', () => {
     expect(cells).not.toContain('5,5')
   })
 
+  it('starts the sides in opposite halves when the map authors no spawns', () => {
+    const m = buildManifest(baseInput({
+      party: [member('pc-a'), member('pc-b'), member('pc-c')],
+      enemies: [{ name: 'Goblin', cr: '1/4', count: 6 }],
+      map: blankMap(20, 10),
+    }))
+    expect(m.party.every((p) => p.x <= 9)).toBe(true)
+    expect(m.enemies.every((e) => e.x >= 10)).toBe(true)
+    expect(m.warnings).toEqual([])
+  })
+
+  it('leaves the middle column to neither side on an odd-width grid', () => {
+    const m = buildManifest(baseInput({ party: [member('pc-a')], map: blankMap(21, 10) }))
+    expect(m.party.every((p) => p.x <= 9)).toBe(true)
+    expect(m.enemies.every((e) => e.x >= 11)).toBe(true)
+  })
+
+  it('crosses the midline only when a side has no room left, and says so', () => {
+    // Four party members, but the party half is one column of two free squares.
+    const m = buildManifest(baseInput({
+      party: [member('pc-a'), member('pc-b'), member('pc-c'), member('pc-d')],
+      enemies: [{ name: 'Goblin', cr: '1/4', count: 1 }],
+      map: { ...blankMap(4, 2), obstacles: [[0, 0], [0, 1]] },
+    }))
+    const cells = [...m.party, ...m.enemies].map((c) => `${c.x},${c.y}`)
+    expect(new Set(cells).size).toBe(cells.length)
+    expect(m.warnings.filter((w) => w.includes('midline')).length).toBe(2)
+  })
+
   it('gives a party of two or more a retreat threshold, and a solo character none', () => {
     const group = buildManifest(baseInput({ party: [member('pc-a'), member('pc-b')] }))
     expect(group.party.map((p) => p.morale)).toEqual([DEFAULT_PARTY_MORALE, DEFAULT_PARTY_MORALE])

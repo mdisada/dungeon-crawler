@@ -255,7 +255,31 @@ export function buildManifest(input: BuildManifestInput): CombatManifest {
   }
 }
 
-/** Deploy a side onto its spawn cells in order (F09 SS3.7), falling back to a free-column scan. */
+/** A range of grid columns, inclusive. */
+interface ColumnRange {
+  min: number
+  max: number
+}
+
+/**
+ * The columns a side may deploy into when the map authors no spawn cell for it: its own half of
+ * the grid, party on the left and enemies on the right.
+ *
+ * The fan-out scan used to walk the full width from a preferred column, so on a mapless fight -
+ * which, until battle maps were assigned, was EVERY fight - a party that could not fit its
+ * preferred column drifted across the board and started the fight standing among the enemies it
+ * was meant to be facing. Two lines start apart; that is what makes an approach a decision.
+ *
+ * An odd width leaves the middle column to neither side rather than handing it to one.
+ */
+function sideHalf(side: 'party' | 'enemy', bounds: GridBounds): ColumnRange {
+  const half = Math.floor(bounds.width / 2)
+  return side === 'party'
+    ? { min: 0, max: Math.max(0, half - 1) }
+    : { min: Math.min(bounds.width - 1, bounds.width - half), max: Math.max(0, bounds.width - 1) }
+}
+
+/** Deploy a side onto its spawn cells in order (F09 SS3.7), falling back to its own half. */
 function placeSide(
   setups: CombatantSetup[],
   spawnCells: Cell[],
@@ -267,9 +291,12 @@ function placeSide(
 ): void {
   const isFree = (x: number, y: number) =>
     inBounds(x, y, bounds) && !obstacleSet.has(`${x},${y}`) && !occupied.has(`${x},${y}`)
+  const half = sideHalf(side, bounds)
+  const wholeGrid: ColumnRange = { min: 0, max: Math.max(0, bounds.width - 1) }
+  // Deploy a few squares in from the edge, so a side has room behind it as well as ahead.
   const preferredCol = side === 'party'
-    ? Math.min(bounds.width - 1, 2)
-    : Math.max(0, bounds.width - 3)
+    ? Math.min(half.max, 2)
+    : Math.max(half.min, bounds.width - 3)
   let spawnIdx = 0
   for (const setup of setups) {
     let cell: Cell | null = null
@@ -280,7 +307,14 @@ function placeSide(
         break
       }
     }
-    if (!cell) cell = firstFreeCell(preferredCol, bounds, isFree)
+    if (!cell) cell = firstFreeCell(preferredCol, half, bounds, isFree)
+    if (!cell) {
+      // The half is full (a big fight on a small or heavily blocked map). Crossing the midline is
+      // a worse start than standing apart, but it beats not deploying: an unplaced combatant kept
+      // its default (0,0) and stacked with every other one that failed.
+      cell = firstFreeCell(preferredCol, wholeGrid, bounds, isFree)
+      if (cell) warnings.push(`No room left in the ${side} half; ${setup.name} deployed across the midline.`)
+    }
     if (!cell) {
       warnings.push(`No free square to deploy ${setup.name}.`)
       continue
@@ -291,16 +325,17 @@ function placeSide(
   }
 }
 
-/** First free cell scanning the preferred column, then columns fanning outward. Deterministic. */
+/** First free cell in the preferred column, then columns fanning outward within range. Deterministic. */
 function firstFreeCell(
   preferredCol: number,
+  range: ColumnRange,
   bounds: GridBounds,
   isFree: (x: number, y: number) => boolean,
 ): Cell | null {
-  const cols = [preferredCol]
-  for (let d = 1; d < bounds.width; d++) {
-    if (preferredCol - d >= 0) cols.push(preferredCol - d)
-    if (preferredCol + d < bounds.width) cols.push(preferredCol + d)
+  const cols = preferredCol >= range.min && preferredCol <= range.max ? [preferredCol] : []
+  for (let d = 1; d <= range.max - range.min; d++) {
+    if (preferredCol - d >= range.min) cols.push(preferredCol - d)
+    if (preferredCol + d <= range.max) cols.push(preferredCol + d)
   }
   for (const cx of cols) {
     for (let y = 0; y < bounds.height; y++) {
