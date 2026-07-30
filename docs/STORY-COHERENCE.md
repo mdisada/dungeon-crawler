@@ -236,6 +236,68 @@ third of a playthrough. The guide is currently a sketch and live play does most 
 Items 3-5 move that ratio; items 1-2 stop the writing that happens being ordered to change the
 world.
 
+# Why only 1 objective per 30 turns - MEASURED 2026-07-30, and my first answer was wrong
+
+Across **26 healthy lab runs / 750 turns / 34 objective completions**. Three hypotheses were on the
+table: the party never gets the clue, pacing is just slow, or progression is fundamentally broken.
+
+## The progression pipeline is NOT broken
+
+**38 of 49 objective completions (78%) came from winning an authored route.** 8 by the rescue node,
+3 force-credited, 0 by the recognition judge. Objectives complete by play, not by failsafe. Whatever
+is wrong, it is not the crediting path or the safety net.
+
+## The reveal gate is NOT the bottleneck - I was wrong about this
+
+Item 8 called it "the next real bug". Measured against 480 ingredients in played adventures:
+
+| | count | discovered |
+|---|---|---|
+| condition-gated | 292 | **22%** |
+| not gated | 188 | **16%** |
+
+Gated clues are discovered slightly MORE often than ungated ones. Overall discovery is 20% and the
+gate is not the discriminator. The unparsed condition string is still a design smell worth cleaning
+up - `revealVerdict` never reads "successful DC 12 persuasion" - but it does not explain slow
+progression, and item 8 must not be treated as the fix for pacing.
+
+## THE LAB UNDER-MEASURES PROGRESSION. Read this before trusting any pacing number above.
+
+`generatePlayerTurn` (tests/lab/player-agent.mjs) is given exactly two things: the last 10 transcript
+lines and the pending offer. It is **never given `state.dialogue.suggestedChoices`** - the authored
+affordance chips that `graph-navigator.ts` writes and `intent-input-row.tsx` renders beside the input
+box for a real player.
+
+So the simulated player plays blind, and every pacing figure here is measured against a player who
+cannot see what the game is offering. Run c839c674 is the shape of it - 16 of the first 17 turns
+folded, with the agent typing **"idk what to do"** on turn 8, and asking "who's this guy" / "who was
+that" / "who is she" on separate turns.
+
+**22.1 turns/objective is therefore an upper bound on the real cost, not the real cost.** Fixing the
+harness is a prerequisite for any further pacing work; tuning thresholds against this number would be
+tuning against an artifact.
+
+## What still looks real after that correction
+
+- **A median adventure has 3 objectives.** Even a generous halving of the measured rate leaves the
+  budget tight against `DEFAULT_DIRECTOR_THRESHOLDS`, which is "owner-calibrated for a 30-50 turn
+  one-shot". Worth re-checking once the harness sees chips.
+- **27% of healthy runs complete ZERO objectives.**
+- **Turn spend across 739 healthy turns:** `folded_in` 34%, `check_prompted` 27%, `conversation` 13%,
+  `encounter_entered` 11%. Only about one turn in nine enters an authored scene.
+- **The opening is dead time.** Median 3 turns before the offer is accepted (mean 4, max 18) - and
+  before that acceptance there is no beat, so there are no affordances to publish either. The first
+  `beat_opened` in c839c674 carried `trigger: quest_accepted`.
+
+## Do this first, in order
+
+1. **Give the lab player the chips.** Pass `suggestedChoices` into `generatePlayerTurn`. Until then
+   the lab cannot measure pacing, and it is the cheapest change on this page.
+2. Re-measure turns/objective against a sighted player. Only then decide whether thresholds or
+   objective counts need to move.
+3. Leave the reveal gate alone as a pacing fix. Clean up the unparsed condition separately, on its
+   own merits, or drop the field.
+
 # Traps: read before believing an instrument
 
 Four times in one session an instrument was wrong and the code was right. These are the ones that
