@@ -16,16 +16,34 @@ import { openSkillChallengeFromSpec } from './encounters.ts'
 import { narrationBeat } from './narration.ts'
 import { startSocial } from './social-staging.ts'
 import { runHookWeaverLive, runStallPromoter } from './story-agents.ts'
+import { nodePull } from './canon.ts'
 import { logEvent } from './util.ts'
 
-/** Where the party stands - grounds every rung prompt. */
-function situation(state: GameState): string {
+/**
+ * Where the party stands - grounds every rung prompt.
+ *
+ * NO QUEST TITLE (2026-07-30). This used to end `Current goal: ${objective}.` and quote the
+ * encounter's label, and both of those strings ARE the objective title - stage 5 sets
+ * `encounter.label = objective.title`. So every escalation rung handed the narrator the exact text
+ * we spend the rest of the pipeline keeping out of prose, and the narrator pasted it.
+ *
+ * That is what made the leak count untrackable rather than improving. Run 13b7c386 shipped ten
+ * trailing labels where d3f20788 shipped none, with the same code for the paths I had fixed - all
+ * ten carrying `pull_present: true`, so the PULL line was working and the title was arriving from
+ * here instead. Rungs fire when a party stalls, so the count was measuring how much the party
+ * stalled. The zero in the previous run was luck, not a fix.
+ *
+ * The authored `pull` says the same thing as a situation rather than a task, which is the whole
+ * point of it existing. Stakes survive because they are authored prose, not a label.
+ */
+function situation(state: GameState, pull: string): string {
   const enc = state.encounter
-  const objective = state.objectives.list.find((o) => o.id === state.objectives.currentId)?.title
   return [
     `Scene: ${state.scene.locationName || 'unknown'} (${state.scene.mode}).`,
-    objective ? `Current goal: ${objective}.` : '',
-    enc ? `They are mid-${enc.kind.replaceAll('_', ' ')} "${enc.label}"${enc.stakes ? ` - at stake: ${enc.stakes}` : ''}.` : '',
+    pull ? `Unresolved: ${pull}` : '',
+    enc
+      ? `They are mid-${enc.kind.replaceAll('_', ' ')}${enc.stakes ? ` - at stake: ${enc.stakes}` : ''}.`
+      : '',
   ].filter(Boolean).join(' ')
 }
 
@@ -65,7 +83,15 @@ export async function deliverRung(
   decision: DirectorDecision,
   pendingOffer: OfferBannerView | null,
 ): Promise<void> {
-  const ground = situation(state)
+  // The authored situation, in place of the quest title this used to carry - see `situation`.
+  const ground = situation(
+    state,
+    await nodePull(
+      service, env.adventureId,
+      state.objectives?.currentId ?? null,
+      state.dm?.encounterSpec?.nodeKey ?? null,
+    ).catch(() => ''),
+  )
   const opener = 'The party has been circling without progress - the DM leans in, in the fiction.'
 
   if (decision.action === 'offer_pressure') {

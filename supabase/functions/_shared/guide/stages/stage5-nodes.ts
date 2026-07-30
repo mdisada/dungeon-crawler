@@ -524,7 +524,13 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
         narrationSeed,
         locationKey,
         encounter: {
-          kind: resolvedKind, label: objective.title, stakes, rationale: '',
+          // THE NODE'S OWN NAME, NOT THE OBJECTIVE'S (2026-07-30). This was `objective.title`, which
+          // made `encounter.label` a second copy of the quest string - and that copy reaches the
+          // narrator through every prompt that mentions the open encounter, the EncounterBanner, and
+          // the trailing-label guard's own watch list. One authored title, three ways to leak it.
+          // `label` above is derived from the first affordance's flavour, so the banner now reads
+          // "Talk: Press her on the ledger" instead of restating the objective.
+          kind: resolvedKind, label: nodeLabel(affordances[0]?.hint ?? '', objective.title), stakes, rationale: '',
           // npc_ids are merged in at storage time (stages-content.ts storedSpec), which spreads
           // whatever is already here - so authored exits ride along untouched.
           params: (socialExits.length > 0 ? { exits: socialExits } : {}) as Json,
