@@ -378,6 +378,125 @@ alongside the offer - is a design decision, not a repair.
 4. Leave the reveal gate alone as a pacing fix. Clean up the unparsed condition separately, on its
    own merits, or drop the field.
 
+# Run d3f20788 narration review - 7 issues, each traced to what the agent RECEIVED
+
+Read all 82 entries. The mystery is coherent and the prose is strong: **0 trailing labels** (down
+from 4), distinct voices, a clean evidence chain (staged token -> soaked clothes on dry stone ->
+weights vs manifest -> Ostvik's hold 3). Every defect below is sequencing or presence.
+
+Each is classified by what actually went wrong, because the four want different fixes:
+**STATE** (code handed the LLM wrong facts), **DATA** (the LLM was never given facts it needed),
+**ORCHESTRATION** (the prompts were right; publish order was not), **MODEL** (it had everything and
+still wrote it wrong).
+
+## F1. An NPC is re-staged at a location she is not authored for - STATE
+
+Mira Hoss is authored `obj0 = Hoss cottage` and has no itinerary entry for Lock 3. #66 leaves her
+behind explicitly ("She turns back to the half-filled trunk by the door"). #70 has her walking to
+Lock 3 with the party; #76 and #78 are spoken BY her there, giving tactical orders ("Bram and I will
+buy you the time").
+
+Traced in the event log - and the scene teardown itself worked correctly:
+
+    t19,20,21  social_started  npc_ids:[42f50f96]   <- Mira, at Hoss cottage. Correct.
+    t26        social_ended    npc_ids:[42f50f96]
+    t26        scene_travel -> Lock 3
+    t26        social_started  npc_ids:[42f50f96]   <- Mira again, now at Lock 3. Wrong.
+    t28        npc_action {type:'join_combat'} npc_id:42f50f96
+
+**Both LLMs received correct information.** State said Mira was in the scene, so the NPC agent voiced
+her and the narrator described her - both correctly. The bug is that the re-stage after travel
+validates nothing against the destination. Note this sits upstream of the `presentCast` fix
+(1f1e2c0), which would now *reinforce* the error by telling other NPCs she is present.
+
+Fix: check a staged NPC against the destination before re-staging. Code, not prompt.
+
+## F2. Four narrations in one turn, the arrival published LAST - ORCHESTRATION
+
+Turn 26, to the millisecond:
+
+    05.807  narration  Mira hands over the key             (at the cottage)
+    05.810  objective_completed
+    05.810  narration  "The ledger rests ... inside Lock 3's housing"
+    05.811  scene_travel -> Lock 3
+    05.811  encounter_opened  "Sudden hazard near Lock 3"
+    05.812  narration  "A hydraulic gauge ... spikes"       (inside Lock 3)
+    05.813  narration  "... Lock 3 opens around them"       (the ARRIVAL)
+
+The player reads Lock 3's interior, then a disaster inside it, then travels there. Each prompt was
+individually correct; the producers publish in completion order rather than story order. Same family
+as the parked-tail ordering cost and the offer-acceptance teleport.
+
+**The second line is the 2026-07-30 progress.ts fix biting back:** the objective-completion narration
+now uses the NEXT objective's authored `pull`, and a pull describes that node's situation *at that
+node's location*. It stopped leaking a quest title and started leaking a place.
+
+## F3. The same arrival narrated twice, near-verbatim - DATA
+
+#42 and #46 are the same paragraph four entries apart. In between the player said "The company
+store, then. We'll find it." (#45). Travel log: t17 -> the company store, then t17 -> Hoss cottage
+via `engage_before_arrival`.
+
+The narrator was handed Hoss cottage's authored `arrival_line` and told "Narrate the journey and
+their arrival ... work it in" - **twice** - and complied both times. Correct instruction-following on
+incomplete data: nothing records that the party has already arrived somewhere, so `arrival_line` has
+no first-visit-only notion.
+
+This qualifies the earlier retraction on `engage_before_arrival`: it is right not to REFUSE, but it
+can override a declared destination and duplicate an arrival. A coherence cost, not a pacing one.
+
+## F4. "They pulled him from Lock 3 three nights ago" contradicts the guide - DATA
+
+- #4 (narrator, voicing Mira): "They **pulled him from Lock 3** three nights ago"
+- #25: "a dead man lies at the bottom with **water still dripping** from his clothes"
+- #60 (Mira): "Edren's body is **still lying at Lock 3**"
+
+The guide is unambiguous. Lock 3's authored `arrival_line` IS "...yet a dead man lies at the bottom
+with water still dripping from his clothes", and an ingredient reads "Edren Hoss is dead - the body
+is here to be examined." So #25 is correct and #4 is the invention.
+
+**Why it invented:** #4 happens at Greymire Saltworks. `hereFeatures` carries the CURRENT location
+only, and nothing else carries a named-but-unvisited place's authored state. The narrator was asked
+to write exposition about Lock 3 with no authored fact about Lock 3 in front of it.
+
+## F5. "A dead man bobs in a dry chamber" - DATA + MODEL
+
+#20, describing Lock 3 two entries before #22 says "You can't see Lock 3 from here". Same data root
+as F4 - narrating an unvisited place from nothing. The MODEL half: "bobs" is impossible in a dry
+chamber, and the authored line resolves that paradox correctly ("dry as chalk ... water still
+dripping from his clothes") when the party finally arrives.
+
+## F6. An invented plot-shaped object, recorded nowhere - MODEL
+
+#20 invents "A ward bell - rung when a body's found"; #23 has it cut short. Its premise contradicts
+the body having been found three nights earlier, and no new body ever appears.
+
+Worth noting against the flavour tier: `flavour_recorded` captured the paper scrap, Ostvik's boat,
+the manifest, the burst conduit and the flooded channel - **and never the bell.** An invented object
+with plot shape entered the story outside the record that exists to hold exactly that.
+
+## F7. Authored evidence given a new meaning - MODEL
+
+#74: the "not salt" scrap - authored as cargo-weight evidence, its ingredient ("Edren was actively
+investigating the discrepancy between real salt output and the token-based pay system") already
+discovered - becomes a valve map: "the numbers mark which joints to close to kill the pressure."
+Improvised to resolve a RANDOM hazard rather than an authored one. Good DM instinct; colour
+rewriting a clue's meaning.
+
+## The synthesis: one root under F3, F4 and F5
+
+**The narrator only ever receives the CURRENT location's authored detail.** It is nonetheless asked
+about, and freely writes about, places the party has not reached - so it invents their state, and the
+invention collides with the authored `arrival_line` the moment the party walks in.
+
+That is one fix, not three: give the narrator the authored one-line state of the named locations it
+may reference (arrival lines are already written and already stored), or forbid it asserting anything
+about a place the party has not entered. The same field fixes F3 if it also carries "visited: yes".
+
+Ranked: **F1 and F2 are independent code fixes.** F3/F4/F5 are one data fix. **F6 and F7 are model
+behaviour and should be left alone** until something cheaper than a guard exists - the
+mechanical-vocab lesson applies, and neither has been shown to recur.
+
 # Traps: read before believing an instrument
 
 Four times in one session an instrument was wrong and the code was right. These are the ones that
