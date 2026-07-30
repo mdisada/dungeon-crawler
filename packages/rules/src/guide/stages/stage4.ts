@@ -75,6 +75,7 @@ export interface Stage4Output {
 export const INGREDIENTS_PER_CHAPTER = { min: 4, max: 12, defaultMin: 6, defaultMax: 10 }
 export const PILLAR_TAGS = ['combat', 'social', 'exploration'] as const
 export const INGREDIENT_TYPES = ['clue', 'secret', 'event', 'item', 'rumor'] as const
+export const COOP_KINDS = ['split_knowledge', 'complementary_obstacle'] as const
 
 /**
  * A `placement.condition` the RUNTIME can actually satisfy. `filterReveals` gates a conditioned
@@ -299,15 +300,26 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
     }
   })
 
+  const coopFlaws: { key: string; reason: string }[] = []
   const coopSets: CoopSetDraft[] = c.arr(root.coop_sets ?? [], '$.coop_sets', 0, 10).map((raw, i) => {
     const path = `$.coop_sets[${i}]`
     const s = c.obj(raw, path)
-    return {
-      key: c.str(s.key, `${path}.key`),
-      kind: c.oneOf(s.kind, `${path}.kind`, ['split_knowledge', 'complementary_obstacle'] as const),
-      reveals: c.str(s.reveals, `${path}.reveals`),
-    }
-  })
+    const key = typeof s.key === 'string' ? s.key.trim() : ''
+    const kind = COOP_KINDS.find((k) => k === s.kind) ?? null
+    const reveals = typeof s.reveals === 'string' ? s.reveals.trim() : ''
+    // A COOP SET IS OPTIONAL CONTENT, INCLUDING WHEN IT IS MALFORMED (2026-07-31).
+    //
+    // Three lines below, this file promises that a nonconforming set is demoted to plain
+    // ingredients with a warning and never fails the stage. The row's own fields were still hard
+    // errors, so a solo adventure - one that was explicitly told not to author coop content -
+    // lost a whole chapter to `$.coop_sets[0].reveals: expected a non-empty string` after a 111s
+    // call (live, "By Dawn's Light"). The clues in that set were fine; only the pooled conclusion
+    // was missing, and a set with no conclusion is exactly what demotion is for.
+    if (!key) coopFlaws.push({ key: '', reason: `the set at ${path} had no key` })
+    else if (!kind) coopFlaws.push({ key, reason: 'its "kind" was missing or unrecognised' })
+    else if (!reveals) coopFlaws.push({ key, reason: 'it had no "reveals" text, so pooling its clues would conclude nothing' })
+    return { key, kind: kind ?? 'split_knowledge', reveals }
+  }).filter((s) => s.key !== '')
 
   const npcKeys = new Set([...ctx.existingNpcs.map((n) => n.key), ...npcs.map((n) => n.key)])
   const locationKeys = new Set([...ctx.existingLocations.map((l) => l.key), ...locations.map((l) => l.key)])
@@ -402,10 +414,24 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
       }
     })
 
+  // Malformed sets are demoted here rather than at the row above, because demotion needs the
+  // ingredients: a member whose set is dropped stays in the pool as a plain clue, and its key had
+  // to survive until now so its own `coop_set_key` still resolved.
+  const flawWarnings: string[] = []
+  const usableCoopSets = coopSets.filter((set) => {
+    const flaw = coopFlaws.find((f) => f.key === set.key)
+    if (!flaw) return true
+    for (const ing of ingredients) {
+      if (ing.coopSetKey === set.key) ing.coopSetKey = null
+    }
+    flawWarnings.push(`coop set "${set.key}" was demoted to plain ingredients: ${flaw.reason}`)
+    return false
+  })
+
   // Coop conformance is a QUALITY bar, not a structural contract: nonconforming sets are
   // repaired (demoted to plain ingredients) with warnings, never a stage failure - same
   // philosophy as parseCombatSeed above and stage 5's budget warnings.
-  const repaired = repairCoopConformance(coopSets, ingredients, ctx.seed.minPlayers, ctx.objectives.length)
+  const repaired = repairCoopConformance(usableCoopSets, ingredients, ctx.seed.minPlayers, ctx.objectives.length)
 
   const coverage = validateEntityCoverage(
     ctx.requiredEntities,
@@ -438,6 +464,7 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
     coopSets: repaired.coopSets,
     ingredients,
     warnings: [
+      ...flawWarnings,
       ...repaired.warnings,
       // Trimming from the end can strip a coop set's member clues; repairCoopConformance above
       // then demotes that set with its own warning, which is the right outcome and already covered.

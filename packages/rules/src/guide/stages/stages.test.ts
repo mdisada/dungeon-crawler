@@ -374,6 +374,28 @@ describe('stage 4 (ingredients + coop sets)', () => {
     if (!result.ok) expect(result.errors.some((e) => e.includes('$.ingredients'))).toBe(true)
   })
 
+  it('demotes a coop set missing its pooled conclusion instead of failing the chapter', () => {
+    // Live 2026-07-31: a solo adventure - told not to author coop content at all - lost a chapter
+    // to `$.coop_sets[0].reveals: expected a non-empty string` after a 111s call.
+    const doc = JSON.parse(STAGE4_RESPONSE)
+    const key = doc.coop_sets[0].key
+    doc.coop_sets[0].reveals = '  '
+    const result = parseStage4(JSON.stringify(doc), STAGE4_CONTEXT)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.coopSets.some((s) => s.key === key)).toBe(false)
+    expect(result.data.ingredients.every((i) => i.coopSetKey !== key)).toBe(true)
+    expect(result.data.warnings.some((w) => w.includes('reveals'))).toBe(true)
+  })
+
+  it('demotes a coop set whose kind is unrecognised', () => {
+    const doc = JSON.parse(STAGE4_RESPONSE)
+    doc.coop_sets[0].kind = 'group_puzzle'
+    const result = parseStage4(JSON.stringify(doc), STAGE4_CONTEXT)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.warnings.some((w) => w.includes('kind'))).toBe(true)
+  })
+
   it('rejects unknown placement / coop keys', () => {
     const broken = STAGE4_RESPONSE.replace('"npc_key":"npc:tam"', '"npc_key":"npc:nobody"')
     const result = parseStage4(broken, STAGE4_CONTEXT)
