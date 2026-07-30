@@ -33,6 +33,24 @@ export interface DeflectInput {
   threshold: number
   /** Deflections already delivered in THIS stretch of no progress. */
   priorDeflections: number
+  /**
+   * True when this NPC still holds undiscovered authored content the CURRENT objective needs
+   * (2026-07-30).
+   *
+   * Talking to the person who holds the clue is not drift - it is the spine, being played the only
+   * way a mystery can be played. `turnsSinceProgress` cannot tell the difference, because a question
+   * answered is not a state change, so the counter climbs while the party gets it exactly right.
+   *
+   * Run e87b3506: the party asked about the vial, the graves, Voss's instruction and the seal, and
+   * learned the real plot from the answers. All seven turns were `fold_in`, none counted, the counter
+   * reached 7, and this ladder took the NPC to `shut` for five consecutive turns - while
+   * `reveal_blocked` fired twice on a clue gated behind "successful DC 12 persuasion" with that same
+   * NPC. The system demanded progress through a door it had just closed.
+   *
+   * So a route-bearing NPC never hardens past `soft`. That is Rule 2 in one line: if canon says this
+   * person holds the way forward, the affordance to talk to them must remain.
+   */
+  holdsRoute?: boolean
 }
 
 /**
@@ -47,11 +65,21 @@ export interface DeflectInput {
  *
  * Deliberately shallow. By the time a party has ignored `shut` the Progress Director's own ladder
  * (reveal, replan, rescue) is already climbing, and a fourth rung would just be the DM nagging.
+ *
+ * AND `shut` SAYS ITS PIECE ONCE (2026-07-30). It used to be the terminal rung in the literal sense:
+ * every deflection from the third onward returned it, for as long as the stretch lasted - and the
+ * stretch can only end when the spine moves, which `shut` is the main thing preventing. In
+ * e87b3506 that produced five consecutive turns of an NPC saying almost nothing. A nudge with no
+ * ceiling is not a nudge, it is a wall, so after `shut` has landed the ladder settles back to `firm`:
+ * still refusing the tangent, no longer refusing to speak.
  */
 export function deflectLevel(input: DeflectInput): DeflectLevel {
   if (input.turnsOffSpine < Math.max(input.threshold, 1)) return 'none'
   if (input.priorDeflections <= 0) return 'soft'
-  return input.priorDeflections === 1 ? 'firm' : 'shut'
+  // Never harden the one channel the story runs through - see `holdsRoute`.
+  if (input.holdsRoute) return 'soft'
+  if (input.priorDeflections === 1) return 'firm'
+  return input.priorDeflections === 2 ? 'shut' : 'firm'
 }
 
 /**

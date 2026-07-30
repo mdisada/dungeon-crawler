@@ -1456,3 +1456,42 @@ blocks nothing look identical once the suspect draft never ships. Supersedes not
 
 **Docs updated:** `STORY-COHERENCE.md` (C1 closed as "not a bug, it was the cheap model"; C3 added;
 open items 0 and 1 added), this file.
+
+---
+
+## 2026-07-30 — The deflection ladder may not close the channel the story runs through
+
+**What:** `deflectLevel` (`packages/rules/src/story/deflect.ts`) changes in two ways.
+
+1. **`shut` fires once, then settles back to `firm`.** It previously returned `shut` for every
+   deflection from the third onward, for the whole stretch.
+2. **A route-bearing NPC never hardens past `soft`** — new `holdsRoute` input, computed at the call
+   site from undiscovered `ingredients` placed on that NPC whose `objective_links` include the
+   current objective (or are empty). `npc_deflected` now also logs `holds_route` and `prior`.
+
+**Why:** run `e87b3506`. The party asked about the vial, the graves, Voss's instruction and the wax
+seal, and learned the actual plot from the answers — passing 6 of 10 checks. Every one of those turns
+classified `fold_in`, which `isSpineProgress` does not count, so `turnsSinceProgress` climbed 3 → 7
+while they were getting it right. Four separate mechanisms read that one counter, and the second of
+them responded by escalating an NPC to `shut` for five consecutive turns — while `reveal_blocked`
+fired twice on a clue gated behind "successful DC 12 persuasion" with that same NPC. The scene was
+then force-failed `off_spine` and `main_objective_routes_spent` force-credited the plot.
+
+**The system diagnosed "these players are stalling" and prescribed "stop answering them", while they
+were solving the mystery.** The plot survived only because of the main-objective backstop; the
+experience did not.
+
+`shut` had no release by construction: it persists while the stretch lasts, and the stretch ends only
+when the spine moves, which `shut` prevents. That is a wall wearing a nudge's clothes.
+
+**What was deliberately NOT done:** counting inquiries as progress. A question answered from
+`established` or `hereFeatures` is not a state change, so crediting it would let colour drive the
+progress counter — Rule 1, and a much worse bug than the one being fixed. `ingredient_revealed` is
+already the honest signal for "an inquiry surfaced authored content" and is already in `SPINE_TYPES`.
+The remaining problem is therefore the reveal gate (`revealVerdict`: `condition && !checkPassed`),
+not the counter, and it is recorded as the next step rather than guessed at now. Also worth recording:
+the director's early rungs (`nudge`, `reveal`, `replan`) emit narration only and credit nothing, so
+none of them resets the counter — the escape hatches at 2, 4 and 6 cannot end a stretch.
+
+**Docs updated:** `STORY-COHERENCE.md` open item 0 (the lock marked fixed, the counter left open with
+the gate named as the next thing to read), this file.

@@ -415,10 +415,30 @@ last one's outcome; a conversation ages by turns and its ceiling is no longer sk
    This is the corollary of the 2026-07-29 "asking is not acting" fix, which was correct and should
    stay: a question must not *enact* a scene. What was never applied is the other half - a
    *productive* question still has to count as motion, or a mystery is punished for being played as a
-   mystery. `ingredient_revealed` is already in `SPINE_TYPES` and fired once, so the mechanism exists
-   and is merely gated too tightly. Two things to fix, in `progress-signal.ts` and the deflection
-   ladder: an inquiry that surfaces authored content should count as spine progress, and `shut` must
-   never remove the affordance the ladder is simultaneously demanding.
+   mystery.
+
+   **The lock is FIXED 2026-07-30** (`deflect.ts`). Two defects, both in the ladder rather than the
+   counter:
+   - `shut` was terminal in the literal sense - every deflection from the third onward returned it,
+     for as long as the stretch lasted, and a stretch can only end when the spine moves, which `shut`
+     is the main thing preventing. A nudge with no ceiling is a wall. It now fires **once** and
+     settles back to `firm`.
+   - A route-bearing NPC now **never hardens past `soft`** (`holdsRoute`). If the person still holds
+     an undiscovered clue the current objective needs, talking to them *is* the spine, whatever the
+     counter says - Rule 2 in one line. `npc_deflected` now logs `holds_route` and `prior`, so the
+     next run is readable without re-deriving them: a `shut` beside `holds_route=true` means this
+     regressed.
+
+   **Still open: the counter itself.** `turnsSinceProgress` measures "did the bookkeeping change",
+   not "did the party get anywhere", and those come apart exactly when a story advances by learning.
+   Deliberately NOT fixed by counting inquiries: a question answered from `established` or
+   `hereFeatures` is not a state change, so crediting it would let colour drive the counter, which is
+   Rule 1. `ingredient_revealed` is already in `SPINE_TYPES` and is the honest signal - it fired once
+   while `reveal_blocked` fired twice. **The next thing to look at is that gate**
+   (`revealVerdict`, `condition && !checkPassed`): a clue gated behind a check the party cannot
+   currently attempt is a place the story can stall, and the only thing that saved the run was the
+   main-objective backstop. Note the early director rungs cannot help here - `nudge`, `reveal` and
+   `replan` all emit narration only and credit nothing, so they never reset the counter either.
 
 1. **Objective titles are themselves spoilers, and the sidebar shows them.** Owner call 2026-07-30:
    fix at **adventure creation (stage 3)**, not at play time. `player-sidebar.tsx` renders

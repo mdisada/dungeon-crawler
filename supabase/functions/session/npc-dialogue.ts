@@ -74,6 +74,34 @@ async function knowledgeFor(service: SupabaseClient, adventureId: string, npcId:
   })
 }
 
+/**
+ * Does this NPC still hold undiscovered authored content the CURRENT objective needs? (2026-07-30)
+ *
+ * The deflection ladder must not harden against the person carrying the way forward - see
+ * deflect.ts `holdsRoute` for the run that made this necessary.
+ *
+ * `objective_links` empty means the clue is not bound to one objective, so it counts for whichever
+ * is current: the safe direction is to KEEP the channel open, because over-shutting is the harm this
+ * exists to prevent and the plot cannot be failed anyway.
+ */
+async function holdsRouteKnowledge(
+  service: SupabaseClient,
+  adventureId: string,
+  npcId: string,
+  objectiveId: string | null,
+): Promise<boolean> {
+  const { data } = await service
+    .from('ingredients')
+    .select('objective_links')
+    .eq('adventure_id', adventureId)
+    .eq('discovered', false)
+    .eq('placement->>npc_id', npcId)
+  return ((data ?? []) as { objective_links: string[] | null }[]).some((row) => {
+    const links = row.objective_links ?? []
+    return links.length === 0 || (objectiveId !== null && links.includes(objectiveId))
+  })
+}
+
 interface NpcBundle {
   npc: NpcRow
   state: GameState
@@ -634,16 +662,27 @@ export async function handleSay(
   // the personality and wants already in its context, so a smuggler and a grieving tavernkeeper
   // brush the party off differently.
   const turnsOffSpine = state.dm?.story?.director?.turnsSinceProgress ?? 0
+  const priorDeflections = await deflectionsThisStretch(service, env.adventureId, turnsOffSpine)
+  // If this person still holds a clue the current objective needs, talking to them IS the spine -
+  // whatever the counter says. See deflect.ts `holdsRoute`.
+  const holdsRoute = await holdsRouteKnowledge(
+    service, env.adventureId, npcId, state.objectives?.currentId ?? null,
+  ).catch(() => false)
   const level = deflectLevel({
     turnsOffSpine,
     threshold: pacingFor(state).deflect,
-    priorDeflections: await deflectionsThisStretch(service, env.adventureId, turnsOffSpine),
+    priorDeflections,
+    holdsRoute,
   })
   const goal = state.objectives?.list?.find((o) => o.id === state.objectives?.currentId)?.title ?? ''
   const deflectNote = deflectDirective(level, goal) || undefined
   if (deflectNote) {
+    // `holds_route` and `prior` are logged so the next run can be read without re-deriving them:
+    // a `shut` beside holds_route=true would mean this fix regressed, and a long run of `firm`
+    // beside holds_route=false is the ladder behaving as designed.
     await logEvent(service, env.adventureId, sessionId, 'npc_deflected', {
-      level, npc_id: npcId, turns_off_spine: state.dm?.story?.director?.turnsSinceProgress ?? 0,
+      level, npc_id: npcId, turns_off_spine: turnsOffSpine,
+      holds_route: holdsRoute, prior: priorDeflections,
     }).catch(() => {})
   }
   const npc = await loadNpc(service, env.adventureId, npcId)
