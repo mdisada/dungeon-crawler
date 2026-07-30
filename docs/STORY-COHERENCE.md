@@ -375,7 +375,26 @@ last one's outcome; a conversation ages by turns and its ceiling is no longer sk
 3. **`fold_in` physical actions.** 9% of folds are real actions absorbed as colour - "I brace
    myself and draw my greataxe, stepping further into the cellar" during a live skill-challenge
    hook. Suspect the `prefer fold_in` tiebreaker in `ENTRY_SYSTEM`. Wants a measured run first.
-4. **The fold-streak prompt line does not work.** Streaks of 8 persist after shipping it.
+4. **The fold-streak prompt line is HARMFUL, not merely ineffective.** Corrected 2026-07-29 after
+   reading run abd318e1. It fires at >=3 consecutive folds and tells the mapper "if this one
+   reaches for anything at all, it is engagement". Streaks of 8 still persisted, so it was first
+   recorded here as "does not work" - wrong. It works, and what it does is push QUESTIONS into the
+   `offered` branch, where none of the asking-vs-acting protections run (those live inside
+   `fold_in`).
+   Live: 11 of 12 intents folded correctly, and the single outlier was "What was in the slips of
+   paper?" arriving after SEVEN consecutive folds - classified `offered` by the model itself
+   (`mapper_entry=offered`, no affordance match), opening a social encounter, so the NPC answered
+   her own authored beat instead of the question. One turn earlier the near-identical "What do the
+   slips of paper in the leather case say?" folded correctly.
+   Compounded by the mapper's standing bias, `"When unsure between offered and fold_in, prefer
+   offered"` - the nudge lands on a scale already tipped.
+   Two fixes: the streak line should say an ACTION that reaches for something is engagement while a
+   question stays a question (conditional text we already control), and `seeksInformation` should be
+   consulted BEFORE the branch so an unambiguous question cannot be labelled `offered` under any
+   prompt pressure. The chip path must stay exempt - clicking "ask her about Pol" IS engagement.
+   Worth questioning whether the nudge earns its place at all: seven folds in a row happened
+   because the player was investigating a room we had just given five authored features to
+   investigate, which is the system working.
 5. **Node prose built around deleted NPCs.** Stage 6 removes group-NPCs and never revisits the
    labels and seeds written around them.
 6. **`runConsistency` is dead code** - `canon.restrictions` is always empty, so it returns ok before
