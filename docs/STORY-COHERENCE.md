@@ -493,9 +493,30 @@ That is one fix, not three: give the narrator the authored one-line state of the
 may reference (arrival lines are already written and already stored), or forbid it asserting anything
 about a place the party has not entered. The same field fixes F3 if it also carries "visited: yes".
 
-Ranked: **F1 and F2 are independent code fixes.** F3/F4/F5 are one data fix. **F6 and F7 are model
-behaviour and should be left alone** until something cheaper than a guard exists - the
-mechanical-vocab lesson applies, and neither has been shown to recur.
+## Status, 2026-07-30 (commit 6dfeaf6, deployed)
+
+| | |
+|---|---|
+| F1 | **FIXED.** `stagedElsewhere` in packages/rules + a filter in `startSocial`, the one chokepoint all seven stagers pass through. Filters the offender rather than refusing the call, and stages on every uncertainty. |
+| F2 | **HALF FIXED.** `nextPullIfHere` gates the completion narration on the party actually being there. The road-hazard-before-arrival half is NOT fixed - see below. |
+| F3 F4 F5 | **FIXED** by one change: the PLACES line. |
+| F6 F7 | **LEFT ALONE** on purpose - model behaviour, neither shown to recur, and the mechanical-vocab lesson says do not guard that on suspicion. |
+
+**The remaining half of F2, diagnosed and deliberately not shipped.**
+`applySceneEffects` calls `maybeSpawnEncounter(... 'scene_travel' ...)` immediately after committing
+travel (scene-director.ts ~115), while the arrival is only a `sceneNote` string appended to the
+CALLER's own narration much further down. So a road hazard narrating before the party arrives is
+structurally guaranteed, not a race.
+
+The fix is to return the spawn as a thunk on `AppliedSceneEffects` and have each caller fire it after
+publishing - three request pipelines (entry.ts ~421, intent.ts ~488, npc-dialogue.ts ~823). It cannot
+be verified without a paid run, and 2026-07-30 already produced one change that bit back (the
+completion narration swapping a leaked title for a leaked place). Left for a session that can pay for
+verification.
+
+**Verify all of the above on the next run:** `staging_elsewhere_dropped` incidents (F1 firing), a
+`PLACES` line reaching the narrator without an echo (F3/4/5), and whether any narration still
+describes a location before its `scene_travel`.
 
 # Traps: read before believing an instrument
 
