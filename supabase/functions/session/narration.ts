@@ -487,6 +487,33 @@ async function castRosterLine(
 export const MECHANICAL_FALLBACK = 'The attempt is resolved; the outcome stands.'
 
 /**
+ * A stopwatch for one publishNarration, reported as a single `narration_perf` event.
+ *
+ * WHY PER-FUNCTION AND NOT JUST PER-CALL (2026-07-30). `usage_log.latency_ms` already says what each
+ * MODEL call cost, and that answered the first-order question - on run 13b7c386 the narrator was 39
+ * calls at 16.3s and 36% of the whole run. It cannot answer the second-order one: of the ~35% of
+ * wall clock that is NOT an LLM call, which function is holding it. buildCanon alone issues a dozen
+ * queries, and `roll_pending` averaged 37s per call, worse than a whole player turn, with no
+ * instrument that could say why.
+ *
+ * `parallel_wall` is reported beside the individual marks on purpose: the context block runs under
+ * Promise.all, so its parts SUM to more than they COST, and reading the sum as elapsed time would
+ * send the next person optimising the wrong one.
+ */
+function stopwatch() {
+  const marks: Record<string, number> = {}
+  const time = async <T>(label: string, work: Promise<T>): Promise<T> => {
+    const started = Date.now()
+    try {
+      return await work
+    } finally {
+      marks[label] = (marks[label] ?? 0) + (Date.now() - started)
+    }
+  }
+  return { marks, time }
+}
+
+/**
  * Draft -> consistency -> (regen once) -> commit as a narrator line. Returns the published
  * text. A second violation logs an incident but KEEPS the prose; `fallback` is now only the
  * demo path's stand-in for a model that isn't there.
@@ -499,7 +526,9 @@ export async function publishNarration(
   fallback: string = MECHANICAL_FALLBACK,
   style: NarrationStyle = 'beat',
 ): Promise<string> {
-  const state = (await loadState(service, env.adventureId)).state
+  const perf = stopwatch()
+  const perfStarted = Date.now()
+  const state = (await perf.time('load_state', loadState(service, env.adventureId))).state
   // This session's story has ended - the epilogue was the last thing the player should read.
   // The ending itself publishes directly (see updateEndings), so it is never suppressed here.
   if (state.dm?.story?.endedSessionId && state.dm.story.endedSessionId === sessionId) {
@@ -531,10 +560,11 @@ export async function publishNarration(
   // `canon.story` is the other half of that split and it goes to the NARRATOR (2026-07-27): the
   // forces at work, what the party has already achieved, what is on a clock. Withholding it left
   // the fact-checker better informed about the story than its author.
-  const canon = await buildCanon(service, env.adventureId, state)
+  const canon = await perf.time('build_canon', buildCanon(service, env.adventureId, state))
+  const contextStarted = Date.now()
   const [roster, profiles, memories, flavour, known, whereWeAre, pull] = await Promise.all([
-    rosterLines(service, env.adventureId, state),
-    partyProfileLines(service, await loadPartyCharacters(service, env.adventureId)),
+    perf.time('roster', rosterLines(service, env.adventureId, state)),
+    perf.time('party_profiles', loadPartyCharacters(service, env.adventureId).then((c) => partyProfileLines(service, c))),
     // Retrieval memory (Slice 7): ground on what past sessions established.
     //
     // UNGATED (2026-07-28). This ran only for `exposition`, so the two styles that answer a player
@@ -543,21 +573,24 @@ export async function publishNarration(
     // those are exactly the moments recall matters, and they were the ones excluded.
     //
     // One embedding call per narration. It degrades to no-memories on any failure, by design.
-    retrieveMemories(service, env, prompt),
+    perf.time('memories_spine', retrieveMemories(service, env, prompt)),
     // The flavour tier, on its own small budget - see retrieveMemories' `kinds`.
-    retrieveMemories(service, env, prompt, 3, ['flavour']),
-    knownLine(service, env.adventureId),
-    sceneLocation(service, env, sessionId, state),
+    perf.time('memories_flavour', retrieveMemories(service, env, prompt, 3, ['flavour'])),
+    perf.time('known', knownLine(service, env.adventureId)),
+    perf.time('scene_location', sceneLocation(service, env, sessionId, state)),
     // The live node's authored orientation line - the open encounter's node, or else the first
     // unresolved route node of the current objective. That fallback is the whole point: every leak
     // this replaces happened with no encounter open. Empty on a legacy guide, and goalLine then
     // falls back to the objective title exactly as it did before.
-    nodePull(
+    perf.time('node_pull', nodePull(
       service, env.adventureId,
       state.objectives?.currentId ?? null,
       state.dm?.encounterSpec?.nodeKey ?? null,
-    ).catch(() => ''),
+    ).catch(() => '')),
   ])
+  // The block runs in parallel, so this is what it actually COST; the marks above are what each
+  // part would have cost alone, and they sum to more.
+  perf.marks.context_parallel_wall = Date.now() - contextStarted
 
   // LABELLED DATA, NOT PROSE (2026-07-27). This block used to be four paragraphs of English that
   // re-taught the narrator its own standing rules on every call. Those rules are constant, so they
@@ -605,7 +638,7 @@ export async function publishNarration(
 
   let text: string
   try {
-    text = await runNarrator(env, grounded, undefined, style)
+    text = await perf.time('narrator', runNarrator(env, grounded, undefined, style))
     // THE BRIEFING IS NOT THE STORY (2026-07-29). The labelled block above is what we pay to send;
     // a weak model can treat it as a document to continue and copy it back. Measured at 3 of 348
     // published lines - one player was shown `CAST Dorya Salk - female Mirefleet resident...`
@@ -668,10 +701,10 @@ export async function publishNarration(
         kind: 'narration_truncated_trimmed', style,
       }).catch(() => {})
     }
-    text = await claimGuard(service, env, sessionId, text, canon, (constraint) =>
-      runNarrator(env, grounded, constraint, style))
-    text = await outcomeGuard(service, env, sessionId, text, state, (constraint) =>
-      runNarrator(env, grounded, constraint, style))
+    text = await perf.time('claim_guard', claimGuard(service, env, sessionId, text, canon, (constraint) =>
+      runNarrator(env, grounded, constraint, style)))
+    text = await perf.time('outcome_guard', outcomeGuard(service, env, sessionId, text, state, (constraint) =>
+      runNarrator(env, grounded, constraint, style)))
     let verdict = await runConsistency(env, text, canon.npcs, canon.npcStates, canon.text, { restrictions: canon.restrictions })
     if (!verdict.ok) {
       const constraint = verdict.violations.map((v) => `${v.claim} (${v.conflictsWith})`).join('; ')
@@ -758,6 +791,12 @@ export async function publishNarration(
     }).catch(() => {})
     return ''
   }
+  // Emitted BEFORE the arrival flush, which can recursively narrate - otherwise a nested
+  // publishNarration's time would be folded into its parent's total and neither would be readable.
+  await logEvent(service, env.adventureId, sessionId, 'narration_perf', {
+    style, total_ms: Date.now() - perfStarted, ...perf.marks,
+  }).catch(() => {})
+
   // The party has now been told where they are, so anything waiting on that may happen. See
   // parkArrivalSpawn: an arrival encounter must never narrate before the arrival it follows.
   await flushArrivalSpawns()
