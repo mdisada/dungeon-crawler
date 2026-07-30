@@ -173,10 +173,21 @@ export function stagedNpcIds(state: GameState): Set<string> {
       Array.isArray((params as Record<string, unknown>).npc_ids)
     ? ((params as Record<string, unknown>).npc_ids as unknown[]).filter((v): v is string => typeof v === 'string')
     : [])
-  return new Set([
-    ...(state.dialogue?.speakers?.map((sp) => sp.npcId) ?? []),
-    ...encounterCast,
-  ])
+  // SPEAKERS WIN WHEN THERE ARE ANY (2026-07-30). This was the UNION, and that let a dropped NPC
+  // stay present: the F1 staging guard filters the cast inside `startSocial`, which writes only
+  // `dialogue.speakers` - the node's authored `params.npc_ids` is untouched. So an NPC dropped for
+  // being authored elsewhere remained in HERE, and the narrator was handed "Finn is in this scene"
+  // in the same request the system decided he was not. Run dd0d359b logged both halves:
+  //     staging_elsewhere_dropped        Finn   <- the guard, working
+  //     npc_absent_from_prose_ignored    Finn   <- the narrator writing him anyway
+  //
+  // The encounter cast is still the answer when NOTHING is staged, which is the case run 15fc82be
+  // needed: 26 narrations with zero social encounters told the narrator every NPC was elsewhere,
+  // including the boss the party was fighting. entry.ts deliberately stages no speakers for a
+  // non-social encounter, so that path is unchanged - it just no longer overrides a live
+  // conversation's own roster.
+  const speakers = state.dialogue?.speakers?.map((sp) => sp.npcId) ?? []
+  return new Set(speakers.length > 0 ? speakers : encounterCast)
 }
 
 /**
@@ -275,6 +286,34 @@ export async function placeLines(
     return detail ? `${name} (${mark}) - ${detail}` : `${name} (${mark})`
   }).filter(Boolean)
   return parts.length > 0 ? parts.join('; ') : ''
+}
+
+/**
+ * Place NAMES and IDENTITIES for an NPC - deliberately not the narrator's PLACES line.
+ *
+ * The narrator is the DM and gets `arrival_line` for unreached places, because it needs to know what
+ * the party will find. An NPC is a person in the world: it gets what a place IS and never what is
+ * currently inside it. See `NpcContext.knownPlaces` for the run that made this necessary and the
+ * arrival line that proves the boundary matters.
+ */
+export async function knownPlaceLines(
+  service: SupabaseClient,
+  adventureId: string,
+): Promise<string> {
+  const { data } = await service
+    .from('locations')
+    .select('name, description')
+    .eq('adventure_id', adventureId)
+  const clip = (t: string) => (t.length > 90 ? `${t.slice(0, 88).replace(/[,;:.\s]+$/, '')}...` : t)
+  const parts = ((data ?? []) as { name: string; description: string | null }[])
+    .slice(0, 10)
+    .flatMap((l) => {
+      const name = (l.name ?? '').trim()
+      if (!name) return []
+      const what = (l.description ?? '').trim()
+      return [what ? `${name} - ${clip(what)}` : name]
+    })
+  return parts.join('; ')
 }
 
 /**

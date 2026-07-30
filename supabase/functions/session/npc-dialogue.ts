@@ -22,7 +22,7 @@ import {
 } from '../_shared/story/index.ts'
 import { loadLoops } from './beats.ts'
 import { trailingLabel } from '../_shared/story/index.ts'
-import { buildCanon, establishedSoFar, hereFeatures, presentCast } from './canon.ts'
+import { buildCanon, establishedSoFar, hereFeatures, knownPlaceLines, presentCast } from './canon.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { challengeCheckResolved } from './encounters.ts'
 import {
@@ -163,12 +163,14 @@ async function loadNpcBundle(
     })),
   ]
 
-  const [established, features, present] = await Promise.all([
+  const [established, features, present, places] = await Promise.all([
     establishedSoFar(service, env.adventureId).catch(() => [] as string[]),
     hereFeatures(service, env.adventureId, state.scene.locationId ?? null).catch(() => ''),
     // Who ELSE is standing here - see NpcContext.presentNpcs for the run where not knowing put a
     // present character "back at the chapel".
     presentCast(service, env.adventureId, state, npcId).catch(() => [] as string[]),
+    // Place names and what they ARE - never arrival lines. See NpcContext.knownPlaces.
+    knownPlaceLines(service, env.adventureId).catch(() => ''),
   ])
   const lineCounts = pcLineCounts(state)
   // Personalization (2026-07-20): the NPC reacts to who each PC is, not just their name.
@@ -186,6 +188,7 @@ async function loadNpcBundle(
     // roughly half of what a player reads and was the last one without them.
     established,
     hereFeatures: features,
+    knownPlaces: places,
     presentNpcs: present,
     conversation: {
       topicStack: state.dm?.conversation.topicStack ?? [],

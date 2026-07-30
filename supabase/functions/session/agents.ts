@@ -672,6 +672,29 @@ export interface NpcContext {
   established: string[]
   hereFeatures: string
   /**
+   * THE PLACES THIS PERSON WOULD KNOW OF - names and what they ARE, never what is inside them
+   * (2026-07-30).
+   *
+   * Run c87998c4 asked Overseer Vane "what's the tallyhouse", twice, rephrased the second time to
+   * the plainly generic "what's a tallyhouse" - and got stonewalled both times. He was not being
+   * evasive; he was EMPTY. This agent received `hereFeatures` for the current room and nothing about
+   * anywhere else, so deflecting or inventing were his only options. Same cause as his "salt dust in
+   * the pan grates" for a smoke nobody had established.
+   *
+   * The authored answer existed the whole time: "A timber records building near the center of the
+   * saltworks, where the wage ledgers are kept." Vocational knowledge for an overseer.
+   *
+   * DESCRIPTIONS ONLY, NEVER `arrival_line`. That boundary is the point, and it is enforced by which
+   * column is read rather than by asking the model to be careful. A description says what a place IS
+   * to anyone who lives there; an arrival line is what the PARTY discovers on entering, and in that
+   * same guide it carried "a faint warmth rising from the cellar stones that you might not notice" -
+   * a hidden thing an NPC must not be able to mention before anyone found it.
+   *
+   * The clue system is untouched: ingredients stay gated by reveals_to and placement.condition with
+   * server-side filterReveals. Locations are not clues.
+   */
+  knownPlaces: string
+  /**
    * THE OTHER NPCs STANDING RIGHT HERE (2026-07-30).
    *
    * This agent knew the PCs in the room (`pcs`) and could be told when the party addressed someone
@@ -851,6 +874,11 @@ export async function runNpcAgent(env: AgentEnv, ctx: NpcContext): Promise<NpcAg
       : '',
     ctx.hereFeatures
       ? `In this room, as authored - you can see these and speak about them: ${ctx.hereFeatures}`
+      : '',
+    ctx.knownPlaces
+      ? `Places in your world and what they are - ordinary local knowledge you can explain plainly ` +
+        `if asked: ${ctx.knownPlaces}. That list is complete: never invent another place. You do ` +
+        `NOT know what is inside any of them right now unless you have been told.`
       : '',
     `Knowledge (id: what it reveals [condition]): ${ctx.knowledge.map((k) => `${k.id}: ${k.reveals}${k.condition ? ` [requires: ${k.condition}]` : ''}`).join(' | ') || 'none'}`,
     `Already revealed this scene: ${ctx.conversation.revealedThisScene.join(', ') || 'nothing'}`,
@@ -1092,7 +1120,9 @@ const NARRATOR_CONTEXT_KEY =
   'it, and never close a passage on it. GOAL: the same thing as a bare task title - orientation ' +
   'ONLY, never stated, echoed, or used as a closing line. HERE: who is in this scene and who they ' +
   'ARE - hold every detail true, their role and their gender included. CAST: exist, but elsewhere. ' +
-  'PLACES: every location and whether the party has been there. One marked "not reached" may be ' +
+  'PLACES: every location this story has, and whether the party has been there. THAT LIST IS ' +
+  'COMPLETE - never invent another place name; if somewhere is not on it, it does not exist. ' +
+  'One marked "not reached" may be ' +
   'named and discussed, never described as though seen - and what is listed for it is already ' +
   'true, so never contradict it. GONE: discuss freely, never stage or voice. ' +
   'FORCES: proper nouns that exist in this world - ' +
