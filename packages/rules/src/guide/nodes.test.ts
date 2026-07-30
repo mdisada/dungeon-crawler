@@ -39,7 +39,7 @@ describe('parseNodeSpec', () => {
     if (!result.ok) return
     expect(result.node.encounter.onSuccess).toEqual(['ward_lowered'])
     expect(result.node.encounter.onFailure).toEqual(['guards_alerted'])
-    expect(result.node.affordances[0].label).toBe('time the pulses and cross')
+    expect(result.node.affordances[0].label).toBe('Time the pulses and cross')
   })
 
   it('drops an outcome atom off the objective+local menu', () => {
@@ -81,20 +81,31 @@ describe('parseNodeSpec', () => {
 })
 
 describe('affordanceLabel', () => {
-  it('shows the authored hint verbatim', () => {
-    expect(affordanceLabel('social', 'reason with the warden')).toBe('reason with the warden')
+  it('shows the authored hint as a sentence', () => {
+    expect(affordanceLabel('social', 'reason with the warden')).toBe('Reason with the warden')
   })
 
   it('never doubles a verb the author already wrote', () => {
     // 13% of 1193 authored chips shipped as "Attempt: Attempt to..." while code owned the prefix.
-    for (const [kind, hint] of [
-      ['skill_challenge', 'Attempt to sever the ledger from the leviathan'],
-      ['combat', 'attempt to stop the signal'],
-      ['puzzle', 'Attempt to create a new entry on the spot'],
-      ['social', 'Attempt to intimidate Corl'],
-    ] as const) {
-      expect(affordanceLabel(kind, hint)).toBe(hint)
+    for (const hint of [
+      'Attempt to sever the ledger from the leviathan',
+      'Attempt to create a new entry on the spot',
+      'Attempt to intimidate Corl',
+    ]) {
+      expect(affordanceLabel('skill_challenge', hint)).toBe(hint)
     }
+    // Sentence-cased, but the words are still only the author's.
+    expect(affordanceLabel('combat', 'attempt to stop the signal')).toBe('Attempt to stop the signal')
+  })
+
+  it('capitalizes only the first character, leaving the rest alone', () => {
+    expect(affordanceLabel('social', "press Vane's man at the store"))
+      .toBe("Press Vane's man at the store")
+    expect(affordanceLabel('skill_challenge', 'force the DC lock')).toBe('Force the DC lock')
+  })
+
+  it('is a no-op on a hint that does not start with a letter', () => {
+    expect(affordanceLabel('social', '"we had a deal"')).toBe('"we had a deal"')
   })
 
   it('still guarantees a chip says something when the hint is missing', () => {

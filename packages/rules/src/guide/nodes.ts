@@ -157,7 +157,13 @@ const KIND_VERB: Record<NodeKind, string> = {
  * guarantee a chip says something.
  */
 export function affordanceLabel(kind: NodeKind, hint: string): string {
-  return hint.trim() || KIND_VERB[kind]
+  const flavor = hint.trim()
+  if (!flavor) return KIND_VERB[kind]
+  // Sentence case, in code (owner, 2026-07-30). Authored hints arrive lowercase because they used to
+  // sit after a "Verb:" prefix, and a chip is now a standalone line the player reads. Unlike verb
+  // stripping this cannot go wrong: one character, uppercased, and a no-op on anything that is not a
+  // lowercase letter. Nothing else is touched, so "Vane's" and any acronym survive intact.
+  return flavor[0].toUpperCase() + flavor.slice(1)
 }
 
 /** Reads the authored `{win, loss}` pair, tolerating absence - an omitted outcome is thin, not
