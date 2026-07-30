@@ -14,7 +14,7 @@ import { bossReferencedBy } from './npc-state.ts'
 import { appendLinesDiff, newLine } from './orchestrate.ts'
 import { setScene } from './state.ts'
 import { antagonistTurn } from './steward.ts'
-import { assertOk, commitDiffs, loadState, logEvent } from './util.ts'
+import { assertOk, commitDiffs, loadState, logEvent, parkArrivalSpawn } from './util.ts'
 
 export interface AppliedSceneEffects {
   traveledTo: string | null
@@ -111,8 +111,10 @@ export async function applySceneEffects(
         await logEvent(service, env.adventureId, sessionId, 'scene_travel', {
           location_id: match.id, name: match.name, proposed: effects.travelLocation,
         })
-        // Transition point (Slice 6): the road pushes back sometimes.
-        await maybeSpawnEncounter(service, env, sessionId, 'scene_travel', spawnInstantiator(service, env, sessionId))
+        // AN ARRIVAL, NOT A TRANSITION (2026-07-30). Parked so it lands after the narration that
+        // says the party got here - see parkArrivalSpawn for why this is not called inline.
+        parkArrivalSpawn(() =>
+          maybeSpawnEncounter(service, env, sessionId, 'arrival', spawnInstantiator(service, env, sessionId)))
       }
     } else {
       await logEvent(service, env.adventureId, sessionId, 'scene_effect_rejected', {

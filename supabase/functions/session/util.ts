@@ -311,3 +311,40 @@ export async function writeCheckpoint(
 export function snapshotHash(state: GameState): string {
   return hashState(state as unknown as Json)
 }
+
+/**
+ * A TRANSITION IS NOT A PLACE, SO NOTHING HAPPENS "DURING" ONE (owner, 2026-07-30).
+ *
+ * The random-encounter roll on travel used to fire inside `applySceneEffects`, immediately after
+ * `setScene` - so it read the DESTINATION's danger and table, named the hazard after the
+ * destination, and narrated it, all before the caller's own narration said the party had arrived.
+ * Run d3f20788 published "A hydraulic gauge on the control panel spikes" one millisecond before
+ * "Lock 3 opens around them".
+ *
+ * The owner's framing is what resolved it: travelling is a transition, and an encounter has to
+ * happen somewhere - so it belongs to the scene BEFORE or the scene AFTER, never to the move. It is
+ * an ARRIVAL encounter. Rolling against the destination was already right; narrating it before the
+ * arrival was the whole bug.
+ *
+ * Parked rather than threaded through callers on purpose. entry.ts alone has five return paths
+ * after `applySceneEffects`, and a fix that has to be repeated at each one is a fix that will be
+ * missed at one. `publishNarration` is the single chokepoint every narration passes through, so
+ * flushing there puts the spawn after whichever narration the turn actually produced.
+ *
+ * A miss is harmless: a turn that publishes nothing simply skips the roll, and a skipped random
+ * encounter costs the story nothing (13 spawns in 182 rolls across every recorded run).
+ */
+const arrivalSpawns: (() => Promise<unknown>)[] = []
+
+export function parkArrivalSpawn(run: () => Promise<unknown>): void {
+  arrivalSpawns.push(run)
+}
+
+/**
+ * Runs and clears any parked arrival spawn. Drained BEFORE awaiting, so the spawn's own narration -
+ * which comes back through publishNarration - cannot re-enter and fire it a second time.
+ */
+export async function flushArrivalSpawns(): Promise<void> {
+  const due = arrivalSpawns.splice(0, arrivalSpawns.length)
+  for (const run of due) await run().catch((err) => console.error('arrival spawn failed', err))
+}

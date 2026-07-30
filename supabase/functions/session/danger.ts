@@ -17,7 +17,10 @@ import type { AgentEnv } from './agents.ts'
 import { pacingFor } from './pacing.ts'
 import { assertOk, loadState, logEvent } from './util.ts'
 
-export type SpawnTrigger = 'scene_travel' | 'advance_day' | 'encounter_failure' | 'loud_action'
+// 'arrival' was 'scene_travel' until 2026-07-30. Renamed with the behaviour: it now fires after
+// the party is narrated as having got there, so the old name described the wrong moment.
+// Historical rolls in the event log carry `trigger: 'scene_travel'`.
+export type SpawnTrigger = 'arrival' | 'advance_day' | 'encounter_failure' | 'loud_action'
 
 export type SpawnInstantiator = (entry: EncounterTableEntry) => Promise<void>
 

@@ -23,7 +23,7 @@ import {
   partyProfileLines, typingDiff,
 } from './orchestrate.ts'
 import { recordProposal } from './proposals.ts'
-import { assertOk, commitDiffs, loadContext, loadState, logEvent } from './util.ts'
+import { assertOk, commitDiffs, flushArrivalSpawns, loadContext, loadState, logEvent } from './util.ts'
 
 /**
  * Rollout switch for the rebuilt prose check (2026-07-23).
@@ -741,6 +741,9 @@ export async function publishNarration(
     }).catch(() => {})
     return ''
   }
+  // The party has now been told where they are, so anything waiting on that may happen. See
+  // parkArrivalSpawn: an arrival encounter must never narrate before the arrival it follows.
+  await flushArrivalSpawns()
   await recordProposal(service, {
     adventureId: env.adventureId,
     sessionId,
