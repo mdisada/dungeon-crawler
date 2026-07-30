@@ -541,9 +541,15 @@ export async function publishNarration(
     retrieveMemories(service, env, prompt, 3, ['flavour']),
     knownLine(service, env.adventureId),
     sceneLocation(service, env, sessionId, state),
-    // The open node's authored orientation line. Empty on a legacy guide or between nodes, and
-    // goalLine falls back to the objective title exactly as it did before.
-    nodePull(service, env.adventureId, state.dm?.encounterSpec?.nodeKey ?? null).catch(() => ''),
+    // The live node's authored orientation line - the open encounter's node, or else the first
+    // unresolved route node of the current objective. That fallback is the whole point: every leak
+    // this replaces happened with no encounter open. Empty on a legacy guide, and goalLine then
+    // falls back to the objective title exactly as it did before.
+    nodePull(
+      service, env.adventureId,
+      state.objectives?.currentId ?? null,
+      state.dm?.encounterSpec?.nodeKey ?? null,
+    ).catch(() => ''),
   ])
 
   // LABELLED DATA, NOT PROSE (2026-07-27). This block used to be four paragraphs of English that

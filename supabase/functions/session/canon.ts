@@ -138,27 +138,67 @@ export async function establishedSoFar(service: SupabaseClient, adventureId: str
  * and that is the same rule pickReveal follows.
  */
 /**
- * The open node's authored orientation line - what the narrator writes from instead of the quest
+ * The live node's authored orientation line - what the narrator writes from instead of the quest
  * string (2026-07-30). See migration 20260730120000 for why the title had to stop being the
  * directive: a narrator told "orient to this, never say it" says it.
  *
- * Returns '' when no node is open, when the guide predates the column, or when its author skipped
- * the field. Every one of those falls back to `GOAL <title>`, which is exactly today's behaviour -
- * so this is additive and no guide needs regenerating to keep working.
+ * MUST NOT KEY OFF THE OPEN ENCOUNTER ALONE. The first version did, and it was inert for every case
+ * it was built for: all five label leaks in e87b3506 landed with NO encounter open (3 opened across
+ * 30 turns), so `encounterSpec.nodeKey` was null, this returned '', and the narrator got the quest
+ * title exactly as before. That is the same shape as the `establishes` trap - guide right, runtime
+ * right, tests green, feature dead - and it is why this is checked before a paid run, not after.
+ *
+ * So the fallback is the LADDER. An objective's route nodes are authored as alternatives but played
+ * in order, so when nothing is open the live situation is the first route node not yet resolved.
+ *
+ * Costs two indexed selects on the no-encounter path. Affordable: state I/O measured at 4% of a
+ * request, and this replaces the single most player-visible defect the last run shipped.
+ *
+ * Returns '' when the guide predates the column or its author skipped the field, which falls back to
+ * `GOAL <title>` - today's behaviour, so no guide needs regenerating to keep working.
  */
 export async function nodePull(
   service: SupabaseClient,
   adventureId: string,
-  nodeKey: string | null,
+  objectiveId: string | null,
+  openNodeKey: string | null,
 ): Promise<string> {
-  if (!nodeKey) return ''
-  const { data } = await service
-    .from('story_nodes')
-    .select('pull')
-    .eq('adventure_id', adventureId)
-    .eq('key', nodeKey)
-    .maybeSingle()
-  const pull = data?.pull
+  // An open encounter's own node wins: that scene is literally being played.
+  if (openNodeKey) {
+    const { data } = await service
+      .from('story_nodes')
+      .select('pull')
+      .eq('adventure_id', adventureId)
+      .eq('key', openNodeKey)
+      .maybeSingle()
+    const open = data?.pull
+    if (typeof open === 'string' && open.trim()) return open.trim()
+  }
+  if (!objectiveId) return ''
+
+  const [nodesResult, eventsResult] = await Promise.all([
+    service
+      .from('story_nodes')
+      .select('key, index, role, pull')
+      .eq('adventure_id', adventureId)
+      .eq('objective_id', objectiveId)
+      .order('index'),
+    service
+      .from('event_log')
+      .select('key:payload->>node_key')
+      .eq('adventure_id', adventureId)
+      .eq('type', 'encounter_resolved'),
+  ])
+  const resolved = new Set(
+    ((eventsResult.data ?? []) as { key: string | null }[]).map((e) => e.key ?? ''),
+  )
+  const rows = (nodesResult.data ?? []) as
+    { key: string; index: number; role: string; pull: string | null }[]
+  const unplayed = rows.filter((n) => !resolved.has(n.key))
+  // Routes first, in ladder order. The rescue node is only reached having lost every route, so it
+  // is the right answer only when nothing else is left.
+  const next = unplayed.find((n) => n.role === 'route') ?? unplayed[0]
+  const pull = next?.pull
   return typeof pull === 'string' ? pull.trim() : ''
 }
 
