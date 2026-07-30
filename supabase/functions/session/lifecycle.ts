@@ -15,7 +15,8 @@ import { runPersonalIntro, runSlotBinder } from './story-agents.ts'
 import { entryContract, journalViews, stageEntryOfferIfNeeded } from './story.ts'
 import { antagonistTurn } from './steward.ts'
 import {
-  applyAndBroadcast, assertOk, broadcast, loadContext, loadState, logEvent, resolveMediaUrl, writeCheckpoint,
+  applyAndBroadcast, assertOk, broadcast, invalidateStateCache, loadContext, loadState, loadStateFresh, logEvent,
+  resolveMediaUrl, writeCheckpoint,
 } from './util.ts'
 import type { AdventureRow } from './util.ts'
 
@@ -630,13 +631,16 @@ export async function restoreCheckpoint(service: SupabaseClient, checkpointId: s
   const ctx = await loadContext(service, checkpoint.adventure_id, userId)
   if (!ctx?.isDm) return { status: 403, body: { error: 'Only the DM can restore' } }
 
-  const current = await loadState(service, checkpoint.adventure_id)
+  // Fresh, and invalidated after: this is the one state write that does not go through
+  // commitDiffs, so it owns both halves of the cache contract itself. See resetRequestCaches.
+  const current = await loadStateFresh(service, checkpoint.adventure_id)
   const nextVersion = current.state_version + 1
   const { error: writeError } = await service
     .from('adventure_state')
     .update({ state: checkpoint.state_snapshot, state_version: nextVersion, updated_at: new Date().toISOString() })
     .eq('adventure_id', checkpoint.adventure_id)
     .eq('state_version', current.state_version)
+  invalidateStateCache()
   assertOk(writeError, 'restore write failed')
 
   await logEvent(service, checkpoint.adventure_id, null, 'checkpoint_restored', { checkpoint_id: checkpointId })

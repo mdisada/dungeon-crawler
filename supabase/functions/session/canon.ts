@@ -24,6 +24,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { deadlinePressureLines, parseDeadlineRecords } from '../_shared/story/index.ts'
 import type { GameState, Json } from '../_shared/state/index.ts'
 import { scenePropsHere } from './npc-state.ts'
+import { resolvedNodes } from './util.ts'
 
 /**
  * A fact a draft can genuinely CONTRADICT. Only restrictions are citable as grounds for
@@ -91,14 +92,8 @@ export interface Canon {
 const MAX_ESTABLISHED = 8
 
 export async function establishedSoFar(service: SupabaseClient, adventureId: string): Promise<string[]> {
-  const { data: events } = await service
-    .from('event_log')
-    .select('payload')
-    .eq('adventure_id', adventureId)
-    .eq('type', 'encounter_resolved')
-    .order('id', { ascending: true })
-  const resolved = ((events ?? []) as { payload: { node_key?: string; tier?: string } }[])
-    .flatMap((e) => (e.payload?.node_key ? [{ key: e.payload.node_key, tier: e.payload.tier }] : []))
+  // Shared with nodePull and nextPullIfHere - one read per request, see resolvedNodes.
+  const resolved = await resolvedNodes(service, adventureId)
   if (resolved.length === 0) return []
 
   const { data: nodes } = await service
@@ -330,22 +325,16 @@ export async function nodePull(
   }
   if (!objectiveId) return ''
 
-  const [nodesResult, eventsResult] = await Promise.all([
+  const [nodesResult, resolvedRows] = await Promise.all([
     service
       .from('story_nodes')
       .select('key, index, role, pull')
       .eq('adventure_id', adventureId)
       .eq('objective_id', objectiveId)
       .order('index'),
-    service
-      .from('event_log')
-      .select('key:payload->>node_key')
-      .eq('adventure_id', adventureId)
-      .eq('type', 'encounter_resolved'),
+    resolvedNodes(service, adventureId),
   ])
-  const resolved = new Set(
-    ((eventsResult.data ?? []) as { key: string | null }[]).map((e) => e.key ?? ''),
-  )
+  const resolved = new Set(resolvedRows.map((r) => r.key))
   const rows = (nodesResult.data ?? []) as
     { key: string; index: number; role: string; pull: string | null }[]
   const unplayed = rows.filter((n) => !resolved.has(n.key))
@@ -381,15 +370,12 @@ export async function nextPullIfHere(
   partyLocationId: string | null,
 ): Promise<string> {
   if (!objectiveId) return ''
-  const [nodesResult, eventsResult] = await Promise.all([
+  const [nodesResult, resolvedRows] = await Promise.all([
     service.from('story_nodes').select('key, index, role, pull, location_id')
       .eq('adventure_id', adventureId).eq('objective_id', objectiveId).order('index'),
-    service.from('event_log').select('key:payload->>node_key')
-      .eq('adventure_id', adventureId).eq('type', 'encounter_resolved'),
+    resolvedNodes(service, adventureId),
   ])
-  const resolved = new Set(
-    ((eventsResult.data ?? []) as { key: string | null }[]).map((e) => e.key ?? ''),
-  )
+  const resolved = new Set(resolvedRows.map((r) => r.key))
   const rows = (nodesResult.data ?? []) as
     { key: string; index: number; role: string; pull: string | null; location_id: string | null }[]
   const unplayed = rows.filter((n) => !resolved.has(n.key))

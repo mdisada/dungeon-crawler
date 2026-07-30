@@ -124,7 +124,89 @@ export function takeStatePerf(): StatePerf {
   return sample
 }
 
+/**
+ * PER-REQUEST CACHES. Reset at the top of every request; never allowed to outlive one (2026-07-30).
+ *
+ * Measured on run fd892c6f: 5.8 full-state reads per request at 168ms each, all returning the same
+ * ~28 KB blob, because loadState is called independently by publishNarration, buildCanon's callers,
+ * the scene director and progress evaluation. 168ms for one indexed row by primary key is a round
+ * trip, not a query - so the win is fewer trips, not a faster query.
+ *
+ * THREE HAZARDS, and all of them are why this is scoped to a single request:
+ *
+ * 1. MODULE SCOPE SURVIVES THE REQUEST. A Deno isolate is reused, so a cache with no reset would
+ *    hand turn N+1 the state from turn N - a canon bug of exactly the class this codebase has spent
+ *    its time removing. `resetRequestCaches()` runs at the top of the handler, not the bottom.
+ * 2. commitDiffs MUST NOT SEE A CACHE. It re-reads deliberately and retries on `stale
+ *    state_version`; served a cached blob it would retry against the same stale version three times
+ *    and then throw, turning a recoverable write conflict into a failed turn. It calls
+ *    `loadStateFresh` and drops the cache on success.
+ * 3. CALLERS SHARE THE OBJECT. Six callers holding one reference means one mutation corrupts the
+ *    rest, silently. Every read returns its own clone - sub-millisecond against a 168ms round trip.
+ */
+let stateCache: { adventureId: string; row: Promise<StateRow> } | null = null
+let resolvedNodesCache: { adventureId: string; rows: Promise<ResolvedNode[]> } | null = null
+
+export function resetRequestCaches(): void {
+  stateCache = null
+  resolvedNodesCache = null
+}
+
+/** Drops the state cache. Called by every writer - a cached blob past a write is a stale blob. */
+export function invalidateStateCache(): void {
+  stateCache = null
+}
+
+/** One resolved story node, oldest first. See `resolvedNodes`. */
+export interface ResolvedNode {
+  key: string
+  tier: string | undefined
+}
+
+/**
+ * Every `encounter_resolved` event, once per request.
+ *
+ * canon.ts ran this identical query THREE times per narration - establishedSoFar, nodePull and
+ * nextPullIfHere each scanning `event_log where type='encounter_resolved'` independently, two of
+ * them added on 2026-07-30. Same rows, same request, three round trips.
+ */
+export async function resolvedNodes(
+  service: SupabaseClient,
+  adventureId: string,
+): Promise<ResolvedNode[]> {
+  if (resolvedNodesCache && resolvedNodesCache.adventureId === adventureId) {
+    return await resolvedNodesCache.rows
+  }
+  const load = (async () => {
+    const { data } = await service
+      .from('event_log')
+      .select('payload')
+      .eq('adventure_id', adventureId)
+      .eq('type', 'encounter_resolved')
+      .order('id', { ascending: true })
+    return ((data ?? []) as { payload: { node_key?: string; tier?: string } }[])
+      .flatMap((e) => (e.payload?.node_key ? [{ key: e.payload.node_key, tier: e.payload.tier }] : []))
+  })()
+  resolvedNodesCache = { adventureId, rows: load }
+  return await load
+}
+
 export async function loadState(service: SupabaseClient, adventureId: string): Promise<StateRow> {
+  if (stateCache && stateCache.adventureId === adventureId) {
+    const cached = await stateCache.row
+    // A CLONE PER CALLER - see hazard 3 above.
+    return { state: structuredClone(cached.state), state_version: cached.state_version }
+  }
+  // The promise is cached, not the value, so concurrent callers inside one Promise.all share the
+  // single in-flight read instead of each starting their own.
+  const load = loadStateFresh(service, adventureId)
+  stateCache = { adventureId, row: load }
+  const row = await load
+  return { state: structuredClone(row.state), state_version: row.state_version }
+}
+
+/** The uncached read. `commitDiffs` uses this directly - see hazard 2. */
+export async function loadStateFresh(service: SupabaseClient, adventureId: string): Promise<StateRow> {
   const startedAt = Date.now()
   const { data, error } = await service
     .from('adventure_state')
@@ -247,10 +329,15 @@ export async function commitDiffs(
 ): Promise<StateRow> {
   let lastError: unknown
   for (let i = 0; i < attempts; i++) {
-    const row = await loadState(service, adventureId)
+    // FRESH, ALWAYS. The retry below exists to re-read after a concurrent writer bumped the
+    // version; a cached blob would make every attempt see the same stale version and fail.
+    const row = await loadStateFresh(service, adventureId)
     try {
-      return await applyAndBroadcast(service, adventureId, row, build(row.state), fx)
+      const written = await applyAndBroadcast(service, adventureId, row, build(row.state), fx)
+      invalidateStateCache()
+      return written
     } catch (err) {
+      invalidateStateCache()
       lastError = err
       if (!(err instanceof Error) || !err.message.includes('stale state_version')) throw err
     }

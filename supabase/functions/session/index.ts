@@ -21,7 +21,7 @@ import { createGenericNpc, endEncounter, startSocial } from './social-staging.ts
 import { decideProposal } from './proposals.ts'
 import { claimAssist, resolvePending, rollPending } from './prompts.ts'
 import { demoStep, moveIntent, resync, setScene } from './state.ts'
-import { takeStatePerf } from './util.ts'
+import { resetRequestCaches, takeStatePerf } from './util.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
@@ -40,6 +40,9 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
   if (req.method !== 'POST') return json(405, { error: 'Method not allowed' })
 
+  // Before anything reads: a Deno isolate is reused between requests, so a per-request cache that
+  // is not cleared HERE becomes a cross-turn cache. See resetRequestCaches in util.ts.
+  resetRequestCaches()
   const requestStartedAt = Date.now()
   let perfAction = 'unknown'
   let perfAdventureId = ''
