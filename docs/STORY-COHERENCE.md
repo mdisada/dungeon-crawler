@@ -153,12 +153,31 @@ Each entry: what it is, hardest evidence, and whether it is a state, detector or
 
 ## C. The machine speaking in the fiction's voice
 
-- **C1. The outcome ladder narrates its own bookkeeping.** PROMPT (or strip).
-  "The failure clings to you like the foundry dust" (bac9f4b9 #5); "The first setback already cost
-  you... Now the second settles in" (bc918319 #13).
+- **C1. The outcome ladder narrates its own bookkeeping.** **NOT A BUG - it was the cheap model.**
+  Closed 2026-07-30. "The failure clings to you like the foundry dust" (bac9f4b9 #5) and "The first
+  setback already cost you" (bc918319 #13) both came from flash-lite narration. Run e87b3506 - the
+  first run with glm-5.2 in the narrator AND npc_agent seats, 30 turns - recorded **zero** hits of
+  the mechanical-vocabulary guard across narration and dialogue. `mechanical-vocab.ts` is deleted.
+  The lesson is about the method, not the words: shadow mode is what made the deletion provable.
+  Enforcing would have hidden it, because a guard with no true positives and a guard that blocks
+  nothing look identical once the suspect draft never ships.
 - **C2. Prompt scaffolding published as story text.** FIXED 2026-07-29 - `stripContextEcho`.
   Was 3 of 348 lines showing players `CAST Dorya Salk - female Mirefleet resident...` with PARTY,
   SOFAR and LAST beneath. The guard fired for real in bac9f4b9 (`context_echo_stripped: 1`).
+- **C3. The objective title pasted on as a closing sentence.** FIXED 2026-07-30 at the source.
+  Five published passages in e87b3506 ended on the literal line "Learn why the plague bell tolls.",
+  and a sixth wove "The truth in Voss's cellar waits" into mid-paragraph prose where the
+  trailing-label guard cannot see it. The cause was an instruction at war with its own input: the
+  narrator was handed `GOAL <objective title>` and told "never state as a task", and the cheapest
+  way to satisfy "orient to this" is to say it. **Fix: the guide now authors `story_nodes.pull`** -
+  one present-tense sentence naming the unresolved situation, never the task - and the narrator gets
+  `PULL` instead of `GOAL`. Echoing a situation costs nothing; echoing a task breaks the fiction.
+  `TRAILING_LABEL_CHECK` stays at `shadow` as a backstop, not the defence.
+  Falls back to the title when unauthored, so the 23 pre-existing guides are unaffected.
+  - *Not a spoiler fix.* Both leaked strings are already on the player's screen - the objective
+    title in `player-sidebar.tsx` under "Current objective", the encounter label in
+    `encounter-banner.tsx`. This was UI copy restated inside the fiction. See the separate open item
+    on whether those titles should be spoiler-free in the first place.
 
 ## D. Delivery
 
@@ -366,16 +385,59 @@ last one's outcome; a conversation ages by turns and its ceiling is no longer sk
 
 ## Open, in the order I would take them
 
-1. **Verify the decoupling live** - see "What to do next" above. It is built and deployed but two
+0. **ASKING IS NOT PROGRESS - the biggest live finding, and it is not a prose bug.** Found in
+   e87b3506, 2026-07-30. The party solved the mystery *correctly*, by asking, and the anti-stall
+   machinery punished them for it until the scene was declared lost.
+
+   What they did: asked what Solla said about the wind, whether the tower was locked, what the vial
+   was for, what was in it, what Voss looked like, what the seal was, what the grave stakes meant.
+   From the answers they learned the real plot - the bell is Voss's standing instruction to take the
+   tincture, the vial has been refilled, its seal matches market apothecary goods, every grave is
+   dated *after* the plague was declared over. They passed **6 of 10** checks.
+
+   What the machinery did:
+
+   | signal | value |
+   | --- | --- |
+   | `entry_mapped` | 7 of 12 -> `fold_in`, all correctly classified as asking |
+   | `isSpineProgress` | counts `entry_mapped` only when `entry === 'offered'` - **fold_in is never progress** |
+   | `turnsSinceProgress` | climbed 3 -> 7 while the mystery was being solved |
+   | `npc_deflected` x7 | soft -> firm -> **shut x5**, same NPC |
+   | `reveal_blocked` x2 | gated behind "successful DC 12 persuasion" - **while that NPC was shut** |
+   | `encounter_force_failed` | reason `off_spine` |
+   | `main_objective_routes_spent` | *"every authored scene was played and lost"* |
+
+   The chain: asking is not progress -> counter climbs -> NPC shuts -> the party loses the only
+   affordance that could produce progress -> the gated check becomes unrollable -> the scene is
+   failed for being off-spine -> the main-objective guard force-credits the plot so the story
+   survives. **The safety net caught the story. It should not have had to.**
+
+   This is the corollary of the 2026-07-29 "asking is not acting" fix, which was correct and should
+   stay: a question must not *enact* a scene. What was never applied is the other half - a
+   *productive* question still has to count as motion, or a mystery is punished for being played as a
+   mystery. `ingredient_revealed` is already in `SPINE_TYPES` and fired once, so the mechanism exists
+   and is merely gated too tightly. Two things to fix, in `progress-signal.ts` and the deflection
+   ladder: an inquiry that surfaces authored content should count as spine progress, and `shut` must
+   never remove the affordance the ladder is simultaneously demanding.
+
+1. **Objective titles are themselves spoilers, and the sidebar shows them.** Owner call 2026-07-30:
+   fix at **adventure creation (stage 3)**, not at play time. `player-sidebar.tsx` renders
+   `currentObjective.title` under "Current objective", so a title like *"Find the truth in Voss's
+   cellar"* tells the player there is a cellar, whose it is, and that a truth is in it - before any
+   of that is discovered. That is a spoiler regardless of what the narrator does; it just arrives via
+   the UI. Stage 3 should author titles that name only what the party already knows, in the same way
+   `pull` is now constrained (see C3). Deliberately deferred, not dropped.
+
+2. **Verify the decoupling live** - see "What to do next" above. It is built and deployed but two
    pieces have never executed: the `node_established` credit fix and the stage-5 split.
-2. **The affordance lifecycle, steps 2-4.** Chips are still published for scenes elsewhere; the
+3. **The affordance lifecycle, steps 2-4.** Chips are still published for scenes elsewhere; the
    `PULLED -> PRESENT` transition still does not exist, so arriving never republishes a beat's real
    affordances; NPC-presence affordances untouched. Step 1 (the mapper guard) shipped and fires
    correctly - `engage_before_arrival` fired twice in 9a5f87a6.
-3. **`fold_in` physical actions.** 9% of folds are real actions absorbed as colour - "I brace
+4. **`fold_in` physical actions.** 9% of folds are real actions absorbed as colour - "I brace
    myself and draw my greataxe, stepping further into the cellar" during a live skill-challenge
    hook. Suspect the `prefer fold_in` tiebreaker in `ENTRY_SYSTEM`. Wants a measured run first.
-4. **The fold-streak prompt line is HARMFUL, not merely ineffective.** Corrected 2026-07-29 after
+5. **The fold-streak prompt line is HARMFUL, not merely ineffective.** Corrected 2026-07-29 after
    reading run abd318e1. It fires at >=3 consecutive folds and tells the mapper "if this one
    reaches for anything at all, it is engagement". Streaks of 8 still persisted, so it was first
    recorded here as "does not work" - wrong. It works, and what it does is push QUESTIONS into the
@@ -395,15 +457,15 @@ last one's outcome; a conversation ages by turns and its ceiling is no longer sk
    Worth questioning whether the nudge earns its place at all: seven folds in a row happened
    because the player was investigating a room we had just given five authored features to
    investigate, which is the system working.
-5. **Node prose built around deleted NPCs.** Stage 6 removes group-NPCs and never revisits the
+6. **Node prose built around deleted NPCs.** Stage 6 removes group-NPCs and never revisits the
    labels and seeds written around them.
-6. **`runConsistency` is dead code** - `canon.restrictions` is always empty, so it returns ok before
+7. **`runConsistency` is dead code** - `canon.restrictions` is always empty, so it returns ok before
    the model call. Repair it with real propositions or delete it.
-7. **Widen the perf instrumentation** to all queries; 50% of a request is unexplained.
-8. **31% of nodes have an empty `onFailure`** - no price at all for going badly. This matters MORE
+8. **Widen the perf instrumentation** to all queries; 50% of a request is unexplained.
+9. **31% of nodes have an empty `onFailure`** - no price at all for going badly. This matters MORE
    now: since the plot advances either way, the outcome map is the only thing that distinguishes
    winning from losing, so a node with an empty failure map is a scene where losing is free.
-9. **Nothing detects single-narrator canon drift** - a narrator contradicting what it established
+10. **Nothing detects single-narrator canon drift** - a narrator contradicting what it established
    four paragraphs earlier. Seen live in bc918319 (a forced door re-attributed from an unknown
    intruder to an ally, destroying a clue) and 5a5e6c7f (a hidden compartment found, then "no
    hidden compartments" one turn later). The continuity probe is location-and-concurrency only,

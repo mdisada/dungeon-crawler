@@ -11,12 +11,12 @@ import { npcLocationAt } from '../_shared/guide/npc-itinerary.ts'
 import type { ItineraryStop } from '../_shared/guide/npc-itinerary.ts'
 import { dialogueGateActive, dmSettings } from '../_shared/play/index.ts'
 import {
-  mechanicalVocab, stripContextEcho, takeIntroduced, trailingLabel, trimToCompleteSentence,
+  stripContextEcho, takeIntroduced, trailingLabel, trimToCompleteSentence,
 } from '../_shared/story/index.ts'
 import type { GameState, Json, PendingReviewState } from '../_shared/state/index.ts'
 import { runClaimCheck, runConsistency, runNarrator, runNarratorOptions, runOutcomeClaimCheck } from './agents.ts'
 import type { AgentEnv, NarrationStyle } from './agents.ts'
-import { buildCanon } from './canon.ts'
+import { buildCanon, nodePull } from './canon.ts'
 import { retrieveMemories, writeMemoryFragment } from './memory.ts'
 import {
   agentContextLines, agentContextSplit, appendLinesDiff, loadPartyCharacters, newLine,
@@ -135,74 +135,21 @@ export const OUTCOME_CLAIM_CHECK: 'off' | 'shadow' | 'enforce' = 'enforce'
 
 
 /**
- * Rollout switches for the two prose-SHAPE guards below (2026-07-29).
+ * Rollout switch for the trailing-label guard (2026-07-29, verdict 2026-07-30).
  *
- * Both start at 'shadow', deliberately, and for the reason claimGuard's own comment gives: "the
- * last thing to block prose was wrong 14 times out of 14, so this one earned its authority with
- * data first". I shipped these straight at 'enforce' and that was the wrong call - a word blocklist
- * that regenerates prose IS blocking prose on a heuristic, which is the one thing this codebase's
- * failure-modes list says never to do.
+ * Stays at 'shadow' on purpose, and the reason is now the upstream fix rather than doubt about the
+ * check: the narrator no longer receives a quest string to paste (see `pullLine`), so this guards a
+ * defect whose source has been removed. It is the backstop that tells us if a label finds its way
+ * back into the prompt, not the defence.
  *
- * And enforcing destroys the evidence needed to judge the guard: when the suspect draft never
- * ships, a true catch and a false one look identical in the log. That is exactly how runConsistency
- * hid a 0-for-14 record. In 'shadow' the original reaches the player and the finding is recorded
- * beside it, so the hit rate becomes a number instead of a hope.
- *
- * Flip to 'enforce' only on read evidence: pull the incidents after a run and check whether the
- * hits are real leaks or innocent prose ("a chance encounter", "the fog rolled in"). If they are
- * mostly innocent, narrow the list or delete the guard - it was never proven necessary on the model
- * we actually ship, and every leak it was built for came from a flattened flash-lite run.
+ * Its sibling MECHANICS_CHECK is gone. Shadow mode is what killed it - one honest run on the model
+ * we actually ship (e87b3506, glm-5.2 narrator AND npc_agent, 30 turns) recorded ZERO hits across
+ * narration and dialogue, where the flash-lite runs that motivated the word list leaked constantly.
+ * Enforcing would have hidden that: a guard with no true positives and a guard that blocks nothing
+ * look identical once the suspect draft never ships. The list was solving a cheap-model artifact.
  */
-export const MECHANICS_CHECK: 'off' | 'shadow' | 'enforce' = 'shadow'
 export const TRAILING_LABEL_CHECK: 'off' | 'shadow' | 'enforce' = 'shadow'
 
-/**
- * THE MACHINE MUST NOT SPEAK IN THE FICTION'S VOICE (2026-07-29).
- *
- * NARRATOR_BASE has said "Never mention dice, rolls, checks, or game mechanics" since it was
- * written, and the prose still reaches the player carrying the engine's vocabulary:
- *
- *   "The failure clings to you like the foundry dust"        (bac9f4b9 #5)
- *   "The first setback already cost you... Now the second settles in"   (bc918319 #13)
- *
- * Which is the whole lesson of this session in one line: an instruction the model can quietly
- * ignore is not a limit. So this is the shape that has actually held here - claimGuard and
- * outcomeGuard - deterministic detection, one constrained regeneration, and keep the prose if the
- * second attempt is no better. A guaranteed-bad canned line is worse than an odd word.
- *
- * Word-boundary matched, and deliberately narrow: these are terms with no innocent use in second-
- * person present-tense fiction. "fail" and "failed" are NOT here - "you fail to shift it" is
- * perfectly good prose; "the failure" as a noun the player possesses is not.
- */
-const MECHANICAL_VOCAB = /(the failure|a failure|setbacks?|the check|a check|skill check|dice|die roll|rolled?|d20|encounter|objectives?|tier|milestones?|hit points?|HP|DC)/i
-
-async function mechanicsGuard(
-  service: SupabaseClient,
-  env: AgentEnv,
-  sessionId: string,
-  draft: string,
-  regenerate: (constraint: string) => Promise<string>,
-): Promise<string> {
-  // Moved to packages/rules/src/story/mechanical-vocab.ts and narrowed (2026-07-29). The inline
-  // version lost its word boundaries in transit, so `roll` matched "the fog rolled in" - it would
-  // have fired a regeneration on innocent prose constantly.
-  if (MECHANICS_CHECK === 'off') return draft
-  const hit = mechanicalVocab(draft)
-  if (!hit) return draft
-  await logEvent(service, env.adventureId, sessionId, 'incident', {
-    kind: 'mechanical_vocab_in_prose', term: hit, enforced: MECHANICS_CHECK === 'enforce',
-    draft: draft.slice(0, 200),
-  }).catch(() => {})
-  // Shadow: the finding is on record, the player reads the draft as written.
-  if (MECHANICS_CHECK !== 'enforce') return draft
-  const second = await regenerate(
-    `NEVER use the words "${hit}" or any other game-machinery vocabulary - no failure, setback, ` +
-    'check, roll, dice, encounter, objective, tier, milestone, hit points or DC. The player is ' +
-    'reading a story, not a record of a game. Say what happened in the fiction instead.',
-  ).catch(() => draft)
-  // Keep whichever is clean; a second offence keeps the prose rather than a mechanical fallback.
-  return mechanicalVocab(second) ? draft : second
-}
 
 /**
  * Characters from outside the adventure's language, published to the player (2026-07-28).
@@ -441,8 +388,23 @@ async function knownLine(service: SupabaseClient, adventureId: string): Promise<
   return facts.length > 0 ? `KNOWN  ${facts.slice(0, 12).join(' // ')}` : ''
 }
 
-/** The thread the party is actually pulling on. Read from state - no query. */
-function goalLine(state: GameState): string {
+/**
+ * The thread the party is actually pulling on - as a SITUATION, not a task (2026-07-30).
+ *
+ * `GOAL <objective title>` used to be this line, paired with the instruction "never state as a
+ * task". Run e87b3506 closed five published passages on the literal sentence "Learn why the plague
+ * bell tolls." and wove "The truth in Voss's cellar waits" into a sixth - so the instruction lost,
+ * as an instruction contradicting its own input always will. The fix is not a stronger instruction
+ * or a stricter strip: it is to stop handing a prose writer a quest string.
+ *
+ * `pull` is authored by the guide for exactly this slot - one present-tense sentence about the
+ * unresolved thing in the world. Echoing it verbatim is harmless, which is the whole point.
+ *
+ * Falls back to the title when no node is open or the guide never authored one, so behaviour is
+ * unchanged for the 23 guides that predate the column.
+ */
+function goalLine(state: GameState, pull: string): string {
+  if (pull) return `PULL   ${pull}`
   const title = goalTitle(state)
   return title ? `GOAL   ${title}` : ''
 }
@@ -563,7 +525,7 @@ export async function publishNarration(
   // forces at work, what the party has already achieved, what is on a clock. Withholding it left
   // the fact-checker better informed about the story than its author.
   const canon = await buildCanon(service, env.adventureId, state)
-  const [roster, profiles, memories, flavour, known, whereWeAre] = await Promise.all([
+  const [roster, profiles, memories, flavour, known, whereWeAre, pull] = await Promise.all([
     rosterLines(service, env.adventureId, state),
     partyProfileLines(service, await loadPartyCharacters(service, env.adventureId)),
     // Retrieval memory (Slice 7): ground on what past sessions established.
@@ -579,6 +541,9 @@ export async function publishNarration(
     retrieveMemories(service, env, prompt, 3, ['flavour']),
     knownLine(service, env.adventureId),
     sceneLocation(service, env, sessionId, state),
+    // The open node's authored orientation line. Empty on a legacy guide or between nodes, and
+    // goalLine falls back to the objective title exactly as it did before.
+    nodePull(service, env.adventureId, state.dm?.encounterSpec?.nodeKey ?? null).catch(() => ''),
   ])
 
   // LABELLED DATA, NOT PROSE (2026-07-27). This block used to be four paragraphs of English that
@@ -605,7 +570,7 @@ export async function publishNarration(
     prompt,
     '',
     `SCENE  ${whereWeAre} | ${state.scene.mode} | day ${state.scene.day}`,
-    goalLine(state),
+    goalLine(state, pull),
     ...roster,
     canon.story,
     profiles.length > 0 ? `PARTY  ${profiles.join(' // ')}` : '',
@@ -687,8 +652,6 @@ export async function publishNarration(
     text = await claimGuard(service, env, sessionId, text, canon, (constraint) =>
       runNarrator(env, grounded, constraint, style))
     text = await outcomeGuard(service, env, sessionId, text, state, (constraint) =>
-      runNarrator(env, grounded, constraint, style))
-    text = await mechanicsGuard(service, env, sessionId, text, (constraint) =>
       runNarrator(env, grounded, constraint, style))
     let verdict = await runConsistency(env, text, canon.npcs, canon.npcStates, canon.text, { restrictions: canon.restrictions })
     if (!verdict.ok) {

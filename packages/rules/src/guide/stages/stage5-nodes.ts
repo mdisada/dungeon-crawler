@@ -209,6 +209,10 @@ export function buildRescueNode(objectiveId: string, route: GuaranteedRoute): St
     // A rescue is the floor: it is reached having lost every authored route, and it has no failure
     // edge of its own, so only the win is a state anything downstream will ever read.
     outcomeSummary: { win: `The party achieves this the hard way: ${route.label}.`, loss: '' },
+    // A rescue node is materialized by code from the stage-3 guaranteed route, so there is nobody
+    // to author a pull. Empty falls back to the objective title, which is what this path has always
+    // shown the narrator.
+    pull: '',
     localAtoms: [],
   }
 }
@@ -232,6 +236,7 @@ Rules:
 - CAST ONLY FROM THE ROSTER. The people below are everyone this chapter has. If a scene needs a harbourmaster, a warden, a fence, look for who already holds that role and use them - do NOT write a new named person into narration_seed, label, setback_line or outcome. A name you invent has no row behind it: nobody can talk to them, they hold no disposition, they cannot be staged, and they vanish when the scene ends. Unnamed background figures (a clerk, two dockhands, the crowd) are fine.
 - You do NOT author outcomes, edges, or what a success awards. The engine derives every one of those. You write the FICTION and pick from the menus.
 - narration_seed: 1-2 sentences the narrator opens the scene on, ending on a hook. stakes: one line - what is at risk.
+- pull: ONE present-tense sentence naming the unresolved thing in the world while this scene is live - what the narrator writes from on every turn it is open. This is NOT the objective restated: write the SITUATION, never the task. "The tower stair is gated and Mother Solla keeps the key" - never "Learn why the bell tolls". It must read as prose about the room, because the narrator sees it every turn and will sometimes echo it, and an echoed situation costs nothing while an echoed task breaks the fiction. Name only what the party can already see or has already been told: this is orientation, not a reveal, so it may never mention a place they have not reached or a fact they have not learned.
 - affordances: 2-3 short player options {key, hint}. The hint is the flavor; the app prefixes the mechanic.
 - setback: the ONE thing that changes when the party falls short here - a short flag name and a kind. Name the consequence, not the failure ("warden_suspicious", not "check_failed"). It must be specific to THIS scene, never the objective's own goal.
 - setback_line: one line describing how the party arrives at their next attempt having just fallen short here. Never phrase it as a success.
@@ -243,6 +248,7 @@ Respond with ONLY a JSON object:
   "objectives": [
     { "objective_number": 1, "nodes": [
       { "kind": "social", "narration_seed": "...", "stakes": "...",
+        "pull": "The warden's ledger sits behind her counter and she has not let anyone near it.",
         "npc_keys": ["npc:..."], "location_key": "loc:...",
         "exits": [ { "outcome": "she_names_the_buyer", "description": "Maren gives up the name.", "tier": "success" },
                    { "outcome": "she_closes_ranks", "description": "She shuts the door on them.", "tier": "failure" } ],
@@ -474,6 +480,13 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
         win: outcome.win || `The party achieves this: ${objective.title}.`,
         loss: outcome.loss || arrivalContext,
       }
+
+      // THE NARRATOR'S ORIENTATION LINE (2026-07-30). Left EMPTY when unauthored rather than
+      // derived from the title - deliberately, because a derived one would be the objective
+      // restated, which is the exact string this field exists to keep out of the prompt. An empty
+      // pull falls back to `GOAL <title>` at read time, so an old guide behaves as it always has
+      // and a new one that skips the field is no worse than an old one.
+      const pull = typeof n.pull === 'string' ? n.pull.trim() : ''
       // Only what the MODEL wrote is held to the distinctness rule below. A derived fallback is
       // code's own filler, and two nodes sharing one is code repeating itself, not the author
       // giving two routes the same cost.
@@ -524,6 +537,7 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
         },
         establishes,
         outcomeSummary,
+        pull,
         affordances,
         transitions,
         localAtoms: declared,

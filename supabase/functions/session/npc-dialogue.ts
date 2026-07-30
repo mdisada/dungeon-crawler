@@ -21,13 +21,13 @@ import {
   activeLoop, addressedNpcId, deflectDirective, deflectLevel, resolveAddressed,
 } from '../_shared/story/index.ts'
 import { loadLoops } from './beats.ts'
-import { mechanicalVocab, trailingLabel } from '../_shared/story/index.ts'
+import { trailingLabel } from '../_shared/story/index.ts'
 import { buildCanon, establishedSoFar, hereFeatures } from './canon.ts'
 import { discoverAtLocation, discoveryNote } from './discovery.ts'
 import { challengeCheckResolved } from './encounters.ts'
 import {
-  directedNarrationPrompt, MECHANICS_CHECK, narrationBeat, PROSE_CLAIM_CHECK, publishNarration,
-  stageNarrationReview,
+  directedNarrationPrompt, narrationBeat, PROSE_CLAIM_CHECK, publishNarration,
+  stageNarrationReview, TRAILING_LABEL_CHECK,
 } from './narration.ts'
 import {
   agentContextLines, appendLinesDiff, loadPartyCharacters, newLine, partyProfileLines,
@@ -204,29 +204,31 @@ export async function npcReply(
 
   let output = await runNpcAgent(env, buildContext(undefined, direction))
 
-  // THE MACHINE MUST NOT SPEAK THROUGH THE NPC EITHER (2026-07-29). mechanicsGuard was wired into
-  // publishNarration and not here - and here is where it got through. Live in run abd318e1 the
-  // social encounter was labelled "Earn Netta Vasch's trust" and Netta said "We need to earn your
-  // trust", inverted, with the machine's own goal in her mouth. Roughly half of what a player reads
-  // comes from this agent.
+  // THE MACHINE MUST NOT SPEAK THROUGH THE NPC EITHER (2026-07-29, narrowed 2026-07-30). Roughly
+  // half of what a player reads comes from this agent, and the encounter label sits in its context.
+  // Live in run abd318e1 the social encounter was labelled "Earn Netta Vasch's trust" and Netta said
+  // "We need to earn your trust", inverted, with the machine's own goal in her mouth.
+  //
+  // The mechanical-vocabulary half of this guard is GONE. Run e87b3506 - the first honest run, glm-5.2
+  // in this seat rather than flash-lite - recorded zero hits in 30 turns on a word list built
+  // entirely from flattened cheap-model prose. What remains is the exact-string check, which has no
+  // false-positive surface: we hold the label at call time.
   //
   // Same trade as claimGuard on this path: one constrained regeneration, and keep the first reply if
   // the second is no cleaner. A guaranteed-bad canned line is worse than an odd phrase.
   const spokenLabels = [state.encounter?.label ?? ''].filter((l) => l.trim().length > 0)
-  const dirty = (line: string) => mechanicalVocab(line) ?? trailingLabel(line, spokenLabels)
-  const offence = MECHANICS_CHECK === 'off' ? null : dirty(output.dialogue)
-  if (offence) {
+  const pasted = TRAILING_LABEL_CHECK === 'off' ? null : trailingLabel(output.dialogue, spokenLabels)
+  if (pasted) {
     await logEvent(service, env.adventureId, sessionId, 'incident', {
-      kind: 'mechanical_vocab_in_dialogue', term: offence,
-      enforced: MECHANICS_CHECK === 'enforce', draft: output.dialogue.slice(0, 200),
+      kind: 'trailing_label_in_dialogue', label: pasted,
+      enforced: TRAILING_LABEL_CHECK === 'enforce', draft: output.dialogue.slice(0, 200),
     }).catch(() => {})
-    const retry = MECHANICS_CHECK !== 'enforce' ? output : await runNpcAgent(env, buildContext(
-      `NEVER say "${offence}" or any other game-machinery phrasing - no failure, setback, check, ` +
-      'dice, DC, hit points, and never name the goal of the scene as if it were a thing you want. You ' +
-      'are a person in a place, speaking about what is in front of you.',
+    const retry = TRAILING_LABEL_CHECK !== 'enforce' ? output : await runNpcAgent(env, buildContext(
+      `NEVER say "${pasted}" - that is the game's own label for this scene, not something a person ` +
+      'would say. You are a person in a place, speaking about what is in front of you.',
       direction,
     )).catch(() => output)
-    if (!dirty(retry.dialogue)) output = retry
+    if (!trailingLabel(retry.dialogue, spokenLabels)) output = retry
   }
 
   const npcs = [{ id: npc.id, name: npc.name }]

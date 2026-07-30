@@ -137,6 +137,31 @@ export async function establishedSoFar(service: SupabaseClient, adventureId: str
  * Only the party's CURRENT location - the rooms they are not standing in are not theirs to see,
  * and that is the same rule pickReveal follows.
  */
+/**
+ * The open node's authored orientation line - what the narrator writes from instead of the quest
+ * string (2026-07-30). See migration 20260730120000 for why the title had to stop being the
+ * directive: a narrator told "orient to this, never say it" says it.
+ *
+ * Returns '' when no node is open, when the guide predates the column, or when its author skipped
+ * the field. Every one of those falls back to `GOAL <title>`, which is exactly today's behaviour -
+ * so this is additive and no guide needs regenerating to keep working.
+ */
+export async function nodePull(
+  service: SupabaseClient,
+  adventureId: string,
+  nodeKey: string | null,
+): Promise<string> {
+  if (!nodeKey) return ''
+  const { data } = await service
+    .from('story_nodes')
+    .select('pull')
+    .eq('adventure_id', adventureId)
+    .eq('key', nodeKey)
+    .maybeSingle()
+  const pull = data?.pull
+  return typeof pull === 'string' ? pull.trim() : ''
+}
+
 export async function hereFeatures(
   service: SupabaseClient,
   adventureId: string,

@@ -1059,7 +1059,9 @@ export async function runReplyGists(env: AgentEnv, ctx: NpcContext, rejected?: s
  * missing: same prompt size, three gaps closed.
  */
 const NARRATOR_CONTEXT_KEY =
-  ' Labelled facts follow. GOAL: never state as a task. HERE: who is in this scene and who they ' +
+  ' Labelled facts follow. PULL: the unresolved situation - what the scene is about; write toward ' +
+  'it, and never close a passage on it. GOAL: the same thing as a bare task title - orientation ' +
+  'ONLY, never stated, echoed, or used as a closing line. HERE: who is in this scene and who they ' +
   'ARE - hold every detail true, their role and their gender included. CAST: exist, but elsewhere. ' +
   'GONE: discuss freely, never stage or voice. FORCES: proper nouns that exist in this world - ' +
   'you may NAME one, and you do not know what any of them mean: never explain, define, or ' +

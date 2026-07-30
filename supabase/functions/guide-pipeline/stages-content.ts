@@ -529,6 +529,9 @@ async function authorChapterNodes(
       key: node.key, index: node.index, kind: node.kind, role: node.role, label: node.label,
       narration_seed: node.narrationSeed, encounter_spec: storedSpec(node, npcIds),
       outcome_summary: storedOutcome(node),
+      // The narrator's diegetic orientation line, in place of the objective title. Empty string
+      // stores as null so a legacy guide and an unauthored field read identically.
+      pull: node.pull || null,
       // Resolved here, exactly as npc keys are: the model authors a key from a closed list and the
       // orchestrator turns it into an id. An unresolvable key stores null - "wherever the party
       // is" - rather than a dangling reference.
@@ -550,6 +553,7 @@ async function authorChapterNodes(
       key: node.key, index: node.index, kind: node.kind, role: node.role, label: node.label,
       narration_seed: node.narrationSeed, encounter_spec: storedSpec(node, []),
       outcome_summary: storedOutcome(node),
+      pull: node.pull || null,
       // Rescue nodes stay unplaced on purpose - see buildRescueNode.
       location_id: null,
       affordances: node.affordances as unknown as Json, transitions: storedTransitions(node),

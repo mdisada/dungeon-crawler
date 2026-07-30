@@ -1407,3 +1407,52 @@ and an explicit entry beats the phase default - so it pins the GUIDE too. A lab 
 real guide must pass a PARTIAL `model_map` naming only the play-side roles.
 
 **Updated:** `supabase/functions/_shared/model-routing.ts`.
+
+---
+
+## 2026-07-30 — The narrator gets an authored situation, not the quest title; the mechanical-vocab guard is deleted
+
+**What:** Two changes, both decided by one run's evidence (`e87b3506` — the first playthrough with
+`glm-5.2` in the narrator *and* `npc_agent` seats rather than `gemini-2.5-flash-lite`; 30 turns,
+$0.15).
+
+1. **`story_nodes.pull`** (migration `20260730120000`). The guide authors one present-tense sentence
+   naming the unresolved situation while a node is open, and the narrator's context carries
+   `PULL <situation>` in place of `GOAL <objective title>`. Falls back to the title when unauthored,
+   so the 23 existing guides are untouched and need no regeneration.
+2. **`packages/rules/src/story/mechanical-vocab.ts` is deleted.** `trailingLabel` moved to
+   `trailing-label.ts`; `MECHANICS_CHECK` and `mechanicsGuard` are gone from `narration.ts`, and the
+   NPC path now runs the exact-string check alone.
+
+**Why (1):** the narrator was handed a quest string and instructed "never state as a task". It
+stated it as a task — five published passages in `e87b3506` closed on the literal sentence "Learn why
+the plague bell tolls.", and a sixth wove "The truth in Voss's cellar waits" into mid-paragraph prose
+where the trailing-label guard cannot reach. That is not a model ignoring an instruction so much as
+an instruction at war with its own input: the cheapest way to satisfy "orient to this string" is to
+say the string. Stripping the tail treats the symptom and provably misses the inline case. An
+authored situation can be echoed verbatim at no cost, because it already reads as prose about the
+room.
+
+Explicitly **not** a spoiler fix, and an earlier draft of this reasoning was wrong on that point:
+both leaked strings are already rendered to the player — the objective title in
+`player-sidebar.tsx` ("Current objective"), the encounter label in `encounter-banner.tsx`
+("Social: Earn Netta Vasch's trust", deliberately, so players know what the game is waiting on).
+The defect was UI copy restated inside the fiction. Whether the *titles themselves* are
+spoiler-free — "Find the truth in Voss's cellar" naming a cellar the party has not found — is a real
+and separate problem, and the owner's call (2026-07-30) is to fix it at **adventure creation, stage
+3**, not at play time. Deferred, recorded in `STORY-COHERENCE.md` open item 1.
+
+**Why (2):** the guard was built from `"The failure clings to you like the foundry dust"` and
+`"The first setback already cost you"` — and every one of those examples came from flash-lite prose.
+On the model actually shipped, across 30 turns of narration *and* dialogue, it recorded **zero
+hits**. It was solving a cheap-model artifact, and the owner's objection to it (*"vocabulary regex
+in the pipeline... too restrictive and unreliable"*) was correct on the merits.
+
+The method matters more than the deletion: this was decided because the guard ran in `shadow`.
+Enforcing would have hidden the answer, since a guard with no true positives and a guard that
+blocks nothing look identical once the suspect draft never ships. Supersedes nothing — the
+2026-07-29 decision to start both prose-shape guards in `shadow` is what made this measurable, and
+`TRAILING_LABEL_CHECK` stays at `shadow` as a backstop now that its source is removed.
+
+**Docs updated:** `STORY-COHERENCE.md` (C1 closed as "not a bug, it was the cheap model"; C3 added;
+open items 0 and 1 added), this file.

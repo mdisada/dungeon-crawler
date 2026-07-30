@@ -79,6 +79,29 @@ export interface StoryNodeSpec {
    */
   outcomeSummary: { win: string; loss: string }
   /**
+   * WHY THE PARTY IS STILL HERE, in the fiction - the narrator's orientation line (2026-07-30).
+   *
+   * The narrator used to be handed `GOAL <objective title>` and told "never state as a task". It
+   * stated it as a task anyway: run e87b3506 closed five passages on the literal sentence "Learn why
+   * the plague bell tolls." and wove "The truth in Voss's cellar waits" into a sixth. That is not a
+   * model failing to follow an instruction so much as an instruction at war with itself - "orient to
+   * this string, never say this string" - where the cheapest way to satisfy the first half is to say
+   * it. A quest title is UI copy; handing it to a prose writer as a directive is the bug.
+   *
+   * So the guide authors the orientation instead: one present-tense sentence naming the unresolved
+   * thing in the world, not the task. "The tower stair is gated and Mother Solla keeps the key" -
+   * never "Learn why the bell tolls". Pasting THIS verbatim costs nothing, because it already reads
+   * as prose about the room.
+   *
+   * NOT player-facing on its own and not a spoiler channel: it may only name what the party can
+   * already see or has already been told. The objective title stays the player's signpost in the
+   * sidebar; this is what the narrator writes from.
+   *
+   * Empty string means "not authored" - the narrator falls back to the objective title exactly as
+   * before, so the 23 existing guides keep working untouched. Same contract `outcomeSummary` uses.
+   */
+  pull: string
+  /**
    * The plot fact this beat MAKES TRUE when it resolves - at ANY tier (2026-07-29).
    *
    * DERIVED, never authored: it is the objective's minimal satisfying set, exactly as `onSuccess`
@@ -205,6 +228,8 @@ export function parseNodeSpec(raw: unknown, ctx: NodeParseContext): { ok: true; 
     node: {
       key, objectiveKey: ctx.objectiveKey, index, kind, role, label, narrationSeed,
       locationKey: null, outcomeSummary: parseOutcomeSummary(obj.outcome),
+      // Optional by contract: an unauthored pull falls back to the objective title at read time.
+      pull: c.str(obj.pull ?? '', '$.pull', { allowEmpty: true }),
       // Stored rows authored before the decoupling carry their plot atom in `on_success`; this
       // parser has no objective predicate to derive from, so it reads none. Stage 5 is where
       // `establishes` is derived, and that is the only path new guides take.
