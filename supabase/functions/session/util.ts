@@ -356,6 +356,15 @@ export async function logEvent(
     .from('event_log')
     .insert({ adventure_id: adventureId, session_id: sessionId, type, payload })
   assertOk(error, 'event log write failed')
+  // A RESOLUTION INVALIDATES THE RESOLVED LIST (2026-07-30). `resolvedNodes` caches per request and
+  // a resolution happens MID-request: resolveOpenEncounter logs this and the outcome narration
+  // follows in the same invocation. Without this line that narration would read a list taken before
+  // the resolution - `establishedSoFar` would omit the outcome_summary of the scene just played, and
+  // `nodePull` would hand back the pull for a node that had already resolved.
+  //
+  // This is the whole point of caching per request rather than per scene: the invalidation has to
+  // live on the write, and `logEvent` is the single chokepoint every event write passes through.
+  if (type === 'encounter_resolved') resolvedNodesCache = null
 }
 
 const AUTO_CHECKPOINT_KEEP = 20
