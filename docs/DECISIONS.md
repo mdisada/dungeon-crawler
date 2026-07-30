@@ -1541,3 +1541,76 @@ n=1 is not a distribution, and the climax veto — the piece that matters most �
 
 **Docs updated:** `STORY-COHERENCE.md` (new "The ending system" section; the "rejected by the API"
 line in "Measured vs assumed" now names the one cause that is known), this file.
+
+---
+
+## 2026-07-30 — A fight's map is assigned to the encounter, by code, at authoring time
+
+**What:** `encounters.battle_map_id` (new column, nullable, `on delete set null`), assigned at
+stage 5 by a deterministic tag match (`packages/rules/src/guide/map-match.ts`) against the
+encounter summary plus its location's name and description. The live initiator reads it and builds
+the manifest's obstacles, per-side spawn cells and grid from that `battle_maps` row. No match
+assigns nothing, logs a stage-5 guide warning, and the fight falls to an open 32x32 field.
+
+**Why:** `combat.ts` read the map from `locations.map` jsonb and **nothing has ever written that
+column** — not the guide pipeline, not the editors, not the session. Every engine-resolved fight
+ran on an empty field with no cover and no spawn markers. The maps existed the whole time in
+`battle_maps`, with nothing linking a fight to one; F09 §3.4 called for this column and it was
+never built.
+
+Code owns the match rather than the encounter designer, for the reason code owns outcome atoms
+(MAIN-SPEC §1.1(2a)): which map fits a crypt ambush is a lookup over a closed vocabulary, and a
+model re-picking it would only add drift between regenerations. Stored rather than derived at play
+time so the choice is reviewable in the guide editor before anyone plays, and so two runs of one
+guide fight on the same ground.
+
+An unmatched fight gets nothing rather than a nearest-anything: an open field contradicts no
+fiction, a tavern interior standing in for an open harbour is an error the table can see.
+
+**Measured:** against the live library (8 starter maps, all untagged), the matcher covers 38 of 164
+authored battle encounters on map names alone — and covered zero until the tokenizer learned to
+split CamelCase, because the whole library is named `OldGraveyardPublic`. Seven of the eight maps
+also have no obstacles or spawns painted, so today they contribute a grid and an image, not
+terrain. Tagging and painting at `/maps` is what raises the rest; it is authoring work, not code.
+
+**Docs updated:** this file. `docs/F09-combat-engine-tactical-map.md` §3.4 described the intent and
+is now implemented as written, except that the starter library ships as `battle_maps` rows rather
+than in the rules package.
+
+---
+
+## 2026-07-30 — Enemies are statted from `srd_monsters`, and the party fights in its armour
+
+**What:** Enemy sourcing in the combat initiator is now: authored `npcs.stat_block` → hand-tuned
+`MONSTER_FIXTURES` → `srd_monsters` row → CR-derived generic. Matching tries the authored name,
+then its head noun ("Vane's Hired Thug" → thug), with a species alias for SRD variants ("Sahuagin"
+→ "Sahuagin Warrior") and singular/plural tolerance. Separately, the live party select now carries
+`class_key`, which decides a PC's AC.
+
+**Why:** both were silent. 185 of 224 authored enemy lines resolved to a CR-derived block while the
+full SRD 5.2.1 set sat unread in `srd_monsters`; a derived block is also harsher than the real one
+(CR-1 derivation: Ghoul AC 14 / 33 hp, against the SRD's AC 12 / 22). And omitting `class_key`
+dropped every PC to unarmoured 10 + DEX — a level-1 fighter at AC 10 instead of 18 — which
+`convert.ts` already measures at roughly +8 points of party win rate per point of AC. The Combat
+Lab passed `class_key`; live play did not, so the same fight rehearsed and played at different
+numbers.
+
+The lab harness had the same hole from the other side: `tests/lab/run-playthrough.mjs` created its
+three PCs with no class at all. **Every combat measurement this project has recorded was made by a
+party at AC 10-13** — including the nine-loss climax of 2026-07-27, which is therefore not the
+evidence about encounter difficulty it appeared to be. Fixed in the harness too.
+
+Fixtures stay ahead of the SRD table because they are tuned and carry spell kits the SRD payload
+does not convert (the Mage and Priest actually cast). One fixture was added — Thug, the most
+authored enemy in the corpus (38 lines) and the one name the database cannot supply, since the
+2024 revision dropped it.
+
+**Measured:** 77 of 224 lines still derive, down from 185. What remains is invented creatures
+(dockhand, hollow miner, drowned petitioner) — exactly what the CR derivation is for — and each is
+recorded in the manifest warnings.
+
+**Not done here:** per-encounter intensity (F09 §7.1) is still hardcoded to 0 because nothing
+authors it; and post-combat HP is still not written back, because nothing in the game heals yet and
+a one-way ratchet to 0 hp would brick a party.
+
+**Docs updated:** this file.
