@@ -351,6 +351,10 @@ export async function playerIntent(
       await runProgressDirector(service, env, play.sessionId, {
         sinceEventId: directorSinceEventId,
         countsAsTurn: kind !== 'dm_command',
+        // entry.ts sets `inquiry` when the fold answered a question rather than enacting one - the
+        // same signal that selects the `answer` narration style. It holds the narrating rungs so a
+        // concise answer is not immediately buried under an unsolicited paragraph.
+        answeredQuestion: (result.body as { inquiry?: boolean } | undefined)?.inquiry === true,
       })
     }
     try {

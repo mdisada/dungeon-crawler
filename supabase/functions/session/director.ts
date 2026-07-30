@@ -155,6 +155,13 @@ export interface DirectorTurnContext {
   sinceEventId: number
   /** dm_command turns and pure chat do not count toward the stuck streak. */
   countsAsTurn: boolean
+  /**
+   * This turn answered a player's QUESTION (the `answer` narration style).
+   *
+   * Set from entry.ts's `inquiry` flag, and it holds the two NARRATING rungs - see the suppression
+   * below for the run that made it necessary.
+   */
+  answeredQuestion?: boolean
 }
 
 /**
@@ -262,24 +269,58 @@ export async function runProgressDirector(
       jitter: jitterFor(currentObjectiveId),
     })
 
-    const committed: DirectorState = decision.action === 'none'
+    // A NUDGE MUST NOT LAND ON TOP OF AN ANSWER (2026-07-30).
+    //
+    // Questions resolve as `fold_in`, and a fold is not progress - so `turnsSinceProgress` reaches
+    // the nudge threshold of 2 almost immediately for a party that is asking things. The result, in
+    // run d5dc171e, was that ten of thirty turns published TWO narrations: a deliberately concise
+    // `answer` followed instantly by a full re-framing `beat`.
+    //
+    //   t10  "who is otho brann"
+    //        answer  "Otho Brann is the saltworks foreman - the man who carries the keys..."
+    //        nudge   "The evidence sits heavy in your minds: drag marks, a wet chain..."
+    //
+    // The player asked one thing, got one line, and then a paragraph they did not ask for. That
+    // cancels the entire point of the `answer` style, and it is the largest single contributor to
+    // multi-narration turns - which are also the biggest wall-clock cost in a run.
+    //
+    // Only `nudge` and `reveal` are held: they exist purely to produce narration. The structural
+    // rungs - replan_beat, guaranteed_route, fail_forward - still fire, so a party that only ever
+    // asks questions is still bounded; they simply stop being lectured between answers.
+    //
+    // Held, NOT spent. The decision is treated as `none` for persistence too, so `rung` and
+    // `lastRungTurn` are untouched and the ladder offers it again on the next turn that is not an
+    // answer. Suppressing after the commit below would burn the rung silently.
+    const heldForAnswer = ctx.answeredQuestion === true &&
+      (decision.action === 'nudge' || decision.action === 'reveal')
+    if (heldForAnswer) {
+      await logEvent(service, env.adventureId, sessionId, 'director_held', {
+        action: decision.action, rung: decision.rung, reason: decision.reason,
+        because: 'this turn answered a question', counters: next as unknown as Json,
+      }).catch(() => {})
+    }
+    const effective: DirectorDecision = heldForAnswer
+      ? { action: 'none', rung: 0, reason: decision.reason }
+      : decision
+
+    const committed: DirectorState = effective.action === 'none'
       ? next
-      : { ...next, rung: Math.max(next.rung, decision.rung), lastRungTurn: next.turnsSinceProgress }
+      : { ...next, rung: Math.max(next.rung, effective.rung), lastRungTurn: next.turnsSinceProgress }
     await commitDiffs(service, env.adventureId, () => [
       { domain: 'dm', patch: { story: { director: committed as unknown as Json } } },
     ]).catch(() => {})
 
-    if (decision.action === 'none') return decision
+    if (effective.action === 'none') return effective
     if (!DIRECTOR_APPLIES) {
       await logEvent(service, env.adventureId, sessionId, 'director_shadow', {
-        action: decision.action, rung: decision.rung, reason: decision.reason,
+        action: effective.action, rung: effective.rung, reason: effective.reason,
         counters: next as unknown as Json, route_health: routeHealth,
       })
       return decision
     }
 
     await logEvent(service, env.adventureId, sessionId, 'director_action', {
-      action: decision.action, rung: decision.rung, reason: decision.reason,
+      action: effective.action, rung: effective.rung, reason: effective.reason,
       counters: next as unknown as Json, route_health: routeHealth,
     })
 
