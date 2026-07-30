@@ -336,6 +336,17 @@ export async function executeRun(run) {
         }
       })
 
+      // THE STORY ENDING IS NOT A FAILED TURN (2026-07-30). `adventure_ended` is logged during the
+      // turn that publishes the epilogue, so the loop check above - which runs BEFORE submitting -
+      // cannot see it yet and submits one more input. The session now refuses that with a 409
+      // instead of accepting it and silently suppressing the narration, which is right for a
+      // player. But recorded as a bare status it reads as "1/65 turns were rejected by the API",
+      // making every successful ending run look like it had an error in it.
+      if (res.status === 409 && res.body?.resolved === 'story_ended') {
+        log('play', 'run.ending_reached', `story already ended at turn ${turn} - input correctly refused`, {})
+        break
+      }
+
       // Pending prompts must be answered or the next turn 409s. Assists claimed by a second
       // PC when there is one; group checks rolled by everyone; solo checks by their owner.
       // Whatever happens, the loop must NEVER hand the next turn a live prompt - run 01075d91

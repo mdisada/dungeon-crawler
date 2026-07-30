@@ -126,6 +126,21 @@ export async function playerIntent(
   if (!guard.ok) return { status: guard.status, body: { error: guard.error } }
   const play = guard.value
 
+  // A FINISHED STORY STOPS TAKING INPUT (2026-07-30).
+  //
+  // publishNarration already refuses to publish past the ending, and that guard is right - it is
+  // what stops an epilogue being followed by another scene. But the turn was still ACCEPTED: run
+  // 92f0fff5 logged `intent_submitted`, `entry_mapped` and then `narration_suppressed` for a player
+  // who typed "what are those ledgers" after the epilogue. They spent a turn and got silence, which
+  // reads as the game breaking rather than the game being over.
+  //
+  // Refused here instead, so the client can say so. Checked against THIS session's id, the same
+  // comparison publishNarration makes: a new session on the same adventure is a new story.
+  if (row.state.dm?.story?.endedSessionId &&
+    row.state.dm.story.endedSessionId === play.sessionId) {
+    return { status: 409, body: { error: 'This story has ended.', resolved: 'story_ended' } }
+  }
+
   const kind = String(body.kind ?? '')
   const text = String(body.text ?? '').slice(0, 2000)
   const targetId = body.target_id ? String(body.target_id) : null

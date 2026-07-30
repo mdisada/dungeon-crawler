@@ -592,6 +592,18 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
     .reverse()
     .map((e) => `${e.type}: ${['text', 'title', 'tag', 'name'].map((k) => e.payload[k]).filter((v) => typeof v === 'string').join(' ')}`)
   const personalOutcomes = await personalEpilogueLines(service, env.adventureId).catch(() => [])
+  // Which objectives completed only because a main objective cannot fail - see the ladder lines
+  // below. Read from the incident the force-credit already logs, so nothing new is recorded.
+  const { data: spentRows } = await service
+    .from('event_log')
+    .select('payload')
+    .eq('adventure_id', env.adventureId)
+    .eq('type', 'incident')
+  const forceCredited = new Set(
+    ((spentRows ?? []) as { payload: { kind?: string; objective_id?: string } }[])
+      .filter((r) => r.payload?.kind === 'main_objective_routes_spent' && r.payload?.objective_id)
+      .map((r) => r.payload.objective_id as string),
+  )
   let climax = (await runClimaxAuthor(
     env, { title: leading.title, description: leading.description, tone: leading.tone }, condensed,
     personalOutcomes,
@@ -601,7 +613,27 @@ async function updateEndings(service: SupabaseClient, env: AgentEnv, sessionId: 
     // The authored record of the story, and what became of each objective (2026-07-29). This agent
     // used to see only the condensed event trail above - type names with a few fields glued on.
     await establishedSoFar(service, env.adventureId).catch(() => []),
-    ordered.map((o) => `${o.title}: ${o.outcome ?? (o.reveal_state === 'completed' ? 'completed' : o.reveal_state)}`),
+    // HOW it completed, not just THAT it completed (2026-07-30).
+    //
+    // This rendered "Find the counter-ledger: completed" for an objective the party played and LOST
+    // every scene of - correctly, because a main objective cannot fail and the plot advances on
+    // either branch. But the climax author read that as a win and wrote the party performing the
+    // winning action, while `personalOutcomes` - computed from what the PCs actually achieved -
+    // told the truth in the same paragraph. Run 92f0fff5's ending contradicted itself:
+    //
+    //   "When you pulled it free and laid it open before Captain Marek Solan..."
+    //   "...Kestrel never held Del's hidden record in her own hands"
+    //
+    // Two halves of one epilogue fed from two different truths. The invariant is not the problem -
+    // the plot SHOULD advance - but the prose must not claim the party did the thing they failed to
+    // do. `main_objective_routes_spent` already records exactly which objectives those were.
+    ordered.map((o) => {
+      const outcome = o.outcome ?? (o.reveal_state === 'completed' ? 'completed' : o.reveal_state)
+      return forceCredited.has(o.id)
+        ? `${o.title}: ${outcome} - but the party never pulled this off; every scene of it was ` +
+          'played and lost, and the story moved past them. NEVER write them performing this.'
+        : `${o.title}: ${outcome}`
+    }),
   ).catch(() => '')) || leading.climax_summary || leading.description
 
   // Consistency, cheaply and deterministically. Publishing the climax directly (above) removed
