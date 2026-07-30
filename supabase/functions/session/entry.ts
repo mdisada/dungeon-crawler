@@ -705,9 +705,11 @@ async function executeEntry(
         'new named person, and do not let time pass. If the answer is not established, say plainly ' +
         'what they cannot tell from here - an honest "you cannot see from this angle" is better ' +
         'than an invented detail nothing else will remember.' +
-        (spec
-          ? ` Close on what still waits: "${spec.label}".`
-          : ' Close on what is in front of them.')
+        // NO LABEL HERE EITHER (2026-07-30). This quoted `spec.label`, which on any guide predating
+        // the stage-5 fix IS the objective title - the same string `situation()` was handing over,
+        // and the same one that reached players as a pasted closing sentence ten times in
+        // run 13b7c386. An answer should not close on anything anyway; see the `answer` style.
+        ' Answer and stop.'
       // An endeavour: unchanged behaviour, which was only ever correct for this half.
       : `Carry this forward: ${character.name} - ${said}. Let it actually happen and MOVE the ` +
         `scene with it - describe what changes as they act.${sceneNote}${discoveryFragment} Never re-ask a question ` +
@@ -720,7 +722,8 @@ async function executeEntry(
             'with it, not another choice of direction.'
           : ' End at the next concrete thing demanding their response - never a menu of paths.'),
     'Cutscene',
-    'outcome',
+    // An inquiry is a lookup, not a scene - see NarrationStyle 'answer'.
+    isInquiry ? 'answer' : 'outcome',
   )
   return { status: 200, body: { ok: true, resolved: 'folded_in', inquiry: isInquiry } }
 }

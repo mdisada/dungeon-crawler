@@ -762,7 +762,11 @@ function cannedNpcOutput(ctx: NpcContext): unknown {
 }
 
 const NPC_SYSTEM =
-  'You roleplay one NPC in a D&D-style game. Stay in character; 1-3 sentences of spoken dialogue. ' +
+  // A COUNTABLE BUDGET (2026-07-30). "1-3 sentences" is the unbounded phrasing the 2026-07-27
+  // length note already found does not bind - three sentences can be any length at all. Measured
+  // across four glm runs: 334 chars mean, 402 median, 483 max, with no budget stated anywhere.
+  'You roleplay one NPC in a D&D-style game. Stay in character; 1-3 sentences of spoken dialogue, ' +
+  '50 words at most - a person answering across a table, not making a speech. ' +
   'Reply with ONLY JSON: {"dialogue": string, "tone": string, "address_pc"?: character_id, ' +
   '"reveals"?: [ingredient_id], "opening"?: {"unlocked_by": character_id, "skill": string}, ' +
   '"disposition_delta": {"value": -2..2, "reason": string}, "proposed_actions"?: ' +
@@ -1112,9 +1116,18 @@ const NARRATOR_CONTEXT_KEY =
  * it worked is measurable: `narration_published` now records `style`, so narration-audit.mjs can
  * compare beats against beats.
  */
-const NARRATOR_BASE =
-  'You narrate a tabletop RPG. Second person, present tense. THREE sentences, 70 words at most - ' +
-  'the player is waiting to act, and length is the main thing that makes a turn drag. Be vivid ' +
+/**
+ * The standing rules, with NO length in them (2026-07-30).
+ *
+ * Length used to be the first sentence of NARRATOR_BASE, which meant every style that wanted a
+ * different budget had to restate the whole brief - and `exposition`, the one that did, quietly
+ * dropped the "a named character is never yours to kill" rule when it forked. Splitting the budget
+ * off lets a style set its own without duplicating the safety rules or drifting from them.
+ *
+ * `beat` and `outcome` recompose to the exact string they had before; only `answer` is new.
+ */
+const NARRATOR_RULES =
+  'Be vivid ' +
   'through specifics, never through volume: one exact detail beats three general ones. ' +
   'Never invent facts about named NPCs/items/places beyond the given context. ' +
   // A NAMED CHARACTER IS NOT YOURS TO REMOVE (2026-07-28). Live run 286cf89e: the narrator wrote
@@ -1146,14 +1159,38 @@ const NARRATOR_BASE =
   'context already gave you what you needed. That line is never shown to the player. ' +
   'Output only narration text and that final line.' + NARRATOR_CONTEXT_KEY
 
+/** Three sentences, 70 words - the budget beats and outcomes have always carried. */
+const NARRATOR_BASE =
+  'You narrate a tabletop RPG. Second person, present tense. THREE sentences, 70 words at most - ' +
+  'the player is waiting to act, and length is the main thing that makes a turn drag. ' +
+  NARRATOR_RULES
+
 /**
  * 'beat' opens situations and must end on a choice; 'outcome' resolves and may settle;
  * 'exposition' is the cutscene voice (encounter-states Slice 3): longer-form, ends with an
- * explicit in-fiction ask telegraphing the encounter ahead.
+ * explicit in-fiction ask telegraphing the encounter ahead; 'answer' replies to a question.
+ *
+ * WHY 'answer' EXISTS (owner, 2026-07-30). Answering "what's the tally room" used to publish as
+ * `outcome`, so a LOOKUP got the same 70-word budget as narrating the aftermath of a kicked-over
+ * desk. Those are different jobs: a player asking a question wants a fact and their turn back.
+ *
+ * Measured across four glm runs before the split - outcome 505 chars mean against a ~420 target,
+ * beat 528, exposition 602 against ~540. Everything overshoots, and the style closest to its target
+ * was `exposition`, the only one with a self-contained brief and the words "hard limit". So this
+ * one is written the same way.
  */
-export type NarrationStyle = 'beat' | 'outcome' | 'exposition'
+export type NarrationStyle = 'beat' | 'outcome' | 'exposition' | 'answer'
 
 const NARRATOR_SYSTEMS: Record<NarrationStyle, string> = {
+  // Shortest thing the narrator ever writes, and it says so three ways: the count, the word cap,
+  // and what a failure looks like. Same standing rules as every other style.
+  answer:
+    'You narrate a tabletop RPG. Second person, present tense. A player has asked a question and is ' +
+    'waiting on the answer, so BE CONCISE: ONE or TWO sentences, 40 words at most. Hard limit - a ' +
+    'third sentence is a failure, not a bonus. Answer what was asked and stop. Do not set the ' +
+    'scene again, do not recap what they already know, do not add atmosphere they did not ask for, ' +
+    'and do not end on a hook. ' +
+    NARRATOR_RULES,
   beat:
     NARRATOR_BASE +
     ' End every narration at a concrete decision point facing the players - someone awaiting ' +
@@ -1168,13 +1205,18 @@ const NARRATOR_SYSTEMS: Record<NarrationStyle, string> = {
     'force a closing question, but never strand the players either: make the immediate ' +
     'situation concrete and leave at least one visible thread to pull (a path, a person, a ' +
     'sound, a detail worth a closer look) so they always know what they could engage with next.',
+  // REBUILT ON THE SHARED RULES (2026-07-30). This was the one self-contained style, and forking a
+  // brief is how a fork drifts: it had quietly lost three things every other style carries - "be
+  // vivid through specifics, never through volume" (the anti-verbosity rule), "a named character is
+  // never yours to kill", and the trailing "NEW:" line that feeds the flavour tier. That last one
+  // means every cutscene invention since the tier shipped went unrecorded - a likelier explanation
+  // for the unrecorded ward bell in run 13b7c386 than the model simply not bothering.
   exposition:
     'You narrate a tabletop RPG. Second person, present tense. This is a CUTSCENE opening a new ' +
     'scene: FOUR sentences, 90 words at most. Hard limit - a fifth sentence is a failure, not a ' +
     'bonus. Carry the consequence forward, put the party somewhere concrete, and stop. ' +
-    'Never invent facts about named NPCs/items/places beyond the given ' +
-    'context. Never mention dice, rolls, checks, or game mechanics. Never presume the party\'s ' +
-    'motivation or feelings. Let the party members\' described traits, backgrounds, and quirks ' +
+    NARRATOR_RULES +
+    ' Let the party members\' described traits, backgrounds, and quirks ' +
     'color what each of them would notice or be drawn toward. ' +
     // NO MENU (2026-07-28). This used to ask for "an explicit in-fiction ask that telegraphs 1-3
     // concrete directions", and the player's options are ALREADY on screen as chips - so 8% of
@@ -1185,7 +1227,7 @@ const NARRATOR_SYSTEMS: Record<NarrationStyle, string> = {
     'The party\'s available actions are already displayed to them separately: NEVER list, ' +
     'enumerate, or hint at options, never write "you could... or you could...", and never end ' +
     'with "What do you do?". Make the situation demand an answer and trust the player to give ' +
-    'one. Output only narration text.' + NARRATOR_CONTEXT_KEY,
+    'one.',
 }
 
 /**
