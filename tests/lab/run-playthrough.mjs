@@ -56,7 +56,8 @@ const PARTY = [
 export async function executeRun(run) {
   const config = { ...DEFAULTS, ...(run.config ?? {}) }
   const logPath = `tests/lab/logs/${run.id}.jsonl`
-  const { log, timed, flush } = createRunLogger(run.id, logPath)
+  const { log, timed, flush, timings } = createRunLogger(run.id, logPath)
+  const startedAt = Date.now()
   await serviceRest('PATCH', `lab_runs?id=eq.${run.id}`, {
     status: 'running', started_at: new Date().toISOString(), log_path: logPath,
   })
@@ -402,11 +403,12 @@ export async function executeRun(run) {
     const lines = state?.dialogue?.lines ?? []
     const byType = {}
     events.forEach((e) => { byType[e.type] = (byType[e.type] ?? 0) + 1 })
-    const usage = await serviceRest('GET', `usage_log?adventure_id=eq.${advId}&select=agent_role,cost_usd`)
+    const usage = await serviceRest('GET', `usage_log?adventure_id=eq.${advId}&select=agent_role,cost_usd,latency_ms`)
     const byRole = {}
     usage.forEach((u) => {
-      byRole[u.agent_role] = byRole[u.agent_role] ?? { calls: 0, cost: 0 }
+      byRole[u.agent_role] = byRole[u.agent_role] ?? { calls: 0, cost: 0, ms: 0 }
       byRole[u.agent_role].calls++
+      byRole[u.agent_role].ms += Number(u.latency_ms) || 0
       byRole[u.agent_role].cost += Number(u.cost_usd) || 0
     })
     const totalSpend = await spentUsd()
@@ -443,6 +445,44 @@ export async function executeRun(run) {
       beatOpens: events.filter((e) => e.type === 'beat_opened').map((e) => e.payload),
       objectiveFails: events.filter((e) => e.type === 'objective_failed').map((e) => e.payload),
     })
+    // ---- WHERE THE TIME WENT ----------------------------------------------------------------
+    //
+    // Every number here already existed and nobody added it up, so "why does a 30-turn run take
+    // half an hour?" was answered by hand each time. `usage_log.latency_ms` has been recorded per
+    // agent call all along; the lab's own `timed()` wrappers have the HTTP wall time. The gap
+    // between them is everything that is NOT an LLM call - state I/O, edge cold starts, polling.
+    //
+    // Read it as three numbers: wall, how much of that was LLM, and which role owns the LLM half.
+    // Measured on run 13b7c386 (30 turns, 29.6 min): narrator 39 calls / 635s was 36% of the entire
+    // run on its own, and session.roll_pending averaged 37s per call - worse than a whole turn.
+    const labBy = {}
+    for (const entry of timings) {
+      labBy[entry.fn] = labBy[entry.fn] ?? { calls: 0, ms: 0 }
+      labBy[entry.fn].calls++
+      labBy[entry.fn].ms += entry.ms
+    }
+    const llmMs = Object.values(byRole).reduce((a, v) => a + v.ms, 0)
+    const wallMs = Date.now() - startedAt
+    summary.timing = {
+      wall_s: Math.round(wallMs / 1000),
+      llm_s: Math.round(llmMs / 1000),
+      llm_share: wallMs > 0 ? Math.round((llmMs / wallMs) * 100) : 0,
+      // Slowest first - the only ordering anyone reads this in.
+      by_role: Object.fromEntries(
+        Object.entries(byRole)
+          .map(([k, v]) => [k, { calls: v.calls, total_s: Math.round(v.ms / 1000), avg_ms: Math.round(v.ms / v.calls) }])
+          .sort((a, b) => b[1].total_s - a[1].total_s),
+      ),
+      by_step: Object.fromEntries(
+        Object.entries(labBy)
+          .map(([k, v]) => [k, { calls: v.calls, total_s: Math.round(v.ms / 1000), avg_ms: Math.round(v.ms / v.calls) }])
+          .sort((a, b) => b[1].total_s - a[1].total_s),
+      ),
+    }
+    log('analysis', 'run.timing',
+      `${summary.timing.wall_s}s wall, ${summary.timing.llm_s}s in LLM calls (${summary.timing.llm_share}%)`,
+      summary.timing)
+
     writeFileSync(`tests/lab/logs/${run.id}.summary.json`, JSON.stringify(summary, null, 2))
     for (const w of summary.invariants.warnings ?? []) log('analysis', 'invariant.warning', w, {})
     if (!summary.invariants.ok) {

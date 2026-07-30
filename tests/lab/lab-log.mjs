@@ -30,15 +30,29 @@ export function createRunLogger(runId, logPath) {
     return entry
   }
 
+  /**
+   * Every timed step, kept so the run can report where its wall clock went (2026-07-30).
+   *
+   * The durations were always logged and never added up, so "why does a 30-turn run take half an
+   * hour?" got answered by hand off the JSONL each time. Accumulating costs nothing and makes the
+   * rollup in run-playthrough.mjs possible without re-parsing the log we just wrote.
+   */
+  const timings = []
+
   /** Times an async step and logs it with its duration; rethrows after logging failures. */
   const timed = async (phase, fn, label, work, detail = {}) => {
     const started = Date.now()
     try {
       const result = await work()
-      log(phase, fn, label, { ...detail, ...(result?.logDetail ?? {}) }, Date.now() - started)
+      const ms = Date.now() - started
+      timings.push({ phase, fn, ms })
+      log(phase, fn, label, { ...detail, ...(result?.logDetail ?? {}) }, ms)
       return result
     } catch (err) {
-      log(phase, fn, `${label} FAILED`, { ...detail, error: describeError(err) }, Date.now() - started)
+      const ms = Date.now() - started
+      // Failures count too - a step that times out is exactly the kind of thing this exists to find.
+      timings.push({ phase, fn: `${fn} (failed)`, ms })
+      log(phase, fn, `${label} FAILED`, { ...detail, error: describeError(err) }, ms)
       throw err
     }
   }
@@ -46,5 +60,5 @@ export function createRunLogger(runId, logPath) {
   /** Awaited on shutdown so the tail of the stream lands before the run flips to done. */
   const flush = () => chain
 
-  return { log, timed, flush }
+  return { log, timed, flush, timings }
 }
