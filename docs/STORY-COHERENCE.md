@@ -518,6 +518,85 @@ verification.
 `PLACES` line reaching the narrator without an echo (F3/4/5), and whether any narration still
 describes a location before its `scene_travel`.
 
+# Shipped 2026-07-30, later half - all unverified on glm until run c87998c4
+
+The F1-F7 catalogue above covers the first half of the day. These landed after it, in order, and
+NONE had been exercised on the model we ship at the time of writing. Read the run before trusting
+any of them.
+
+| commit | what |
+|---|---|
+| `8aba987` | naming a different destination is not engaging this scene (`namesSamePlace`) |
+| `87cb12d` | every run reports where its wall clock went (`run.timing`) |
+| `a54cd5b` | per-step timing inside publishNarration (`narration_perf`) |
+| `8333dc5` | one shared rulebook, a length per style, and a concise `answer` voice |
+| `8226366` | one state read and one resolved-nodes read per request |
+| `dcb0a07` | a mid-request resolution busts the resolved-nodes cache |
+| `36bdf36` | NPC pronouns are authored, not inferred from the name |
+
+## The `answer` style, and why length is now per style
+
+`NARRATOR_BASE` carried the length in its first sentence, so any style wanting a different budget had
+to restate the whole brief - and `exposition`, the only one that did, quietly dropped the "a named
+character is never yours to kill" rule when it forked. The rules are now `NARRATOR_RULES` with no
+length in them, and each style states its own budget. `beat` and `outcome` recompose to the exact
+string they had before.
+
+Measured across four glm runs BEFORE the split, published length by style:
+
+| style | mean | target | over |
+|---|---|---|---|
+| `outcome` | 505 | ~420 | +20% |
+| `beat` | 528 | ~420 | +26% |
+| `exposition` | 602 | ~540 | +11% |
+
+Two readings. First, glm overshoots everywhere, and the style closest to target is the one with a
+self-contained brief and the words "hard limit" - so `answer` is written that way. Second, **answering
+a question used `outcome`**, meaning a LOOKUP got the same 70-word budget as narrating the aftermath
+of a kicked-over desk. `answer` is 1-2 sentences, 40 words, hard limit, and says "BE CONCISE"
+explicitly. The NPC agent also got a countable budget (50 words); "1-3 sentences" is the unbounded
+phrasing the 2026-07-27 note already found does not bind.
+
+## Timing: what a run costs and where it goes
+
+Both instruments aggregate data that already existed and nobody added up.
+
+Run 13b7c386 (30 turns, glm, 29.6 min): 65% of wall was LLM latency; **the narrator alone was 39
+calls / 635s, 36% of the entire run**; `session.roll_pending` averaged **37s per call - worse than a
+whole player turn**, still unexplained; `summarizer` made 96 calls for 30 turns (they are embeddings -
+`callEmbedding` bills as `agent_role: 'summarizer'`, which is worth knowing before reading that row
+as summarisation).
+
+One `publishNarration` is 3 API calls at floor (2 embeddings + the narrator), typically 4-5, worst
+realistic ~8. The claim check is gated by `suspectEntities` and mostly skips - 14 calls across 35
+narrations. 35 narrations for 30 turns means each extra one costs a full ~18s on glm, so **fixing the
+multi-narration turns is also the biggest speedup available.**
+
+## Caching: a modest win and one bug
+
+Honest accounting, because the headline numbers flatter it. State reads fell 5.7 -> 5.0 per request
+(~12%), NOT the 5.8 -> 1 projected: `commitDiffs` must bypass the cache and invalidate on every
+commit, and with ~2.2 commits per request the cache rarely survives. The 7x per-read latency drop in
+that run (185ms -> 26ms) is **environment variance, not the change** - a cache removes reads, it
+cannot make them faster. Do not quote it.
+
+It also shipped a real bug, found by re-reading rather than by a run: `resolvedNodes` was not
+invalidated when a resolution happened MID-request, which is the normal case. Fixed in `logEvent`.
+
+**Deliberately not done:** seeding the state cache from `applyAndBroadcast`'s return so it survives a
+commit. ~100ms of a 25s turn, against trusting the returned row is byte-identical to what landed and
+not aliased by the caller's builder. Not worth it on a path this central.
+
+## What to read in run c87998c4
+
+1. `trailing_label_stripped` - was 10 in 13b7c386, and `situation()` was the source. Expect 0.
+2. `style: answer` lengths against the old 505-char `outcome` mean.
+3. Pronoun stability for any ambiguously-named NPC, end to end.
+4. One death location for the victim, now that `GONE` carries the full description.
+5. A visited location staying put, now that `PLACES` keeps its authored detail.
+6. `staging_elsewhere_dropped` and an actual arrival spawn - neither has fired on glm.
+7. `narration_perf` marks: which of canon/roster/memories actually costs anything.
+
 # Traps: read before believing an instrument
 
 Four times in one session an instrument was wrong and the code was right. These are the ones that
