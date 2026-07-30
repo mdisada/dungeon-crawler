@@ -126,6 +126,7 @@ Rules:
 - placement.condition means ONE thing: this clue needs a PASSED SKILL CHECK to come out. Write it as the check ("successful DC 14 persuasion", "an insight check"), or leave it null. It is NOT a place to describe when the moment is right - "asked about the money", "once they trust her" - because the game reads any condition as a check requirement, and a clue conditioned on a conversation is locked behind a roll that a conversation never makes. If a clue should simply come out when the topic arises, leave condition null and let the NPC judge the moment.
 - ${ingredientMin}-${ingredientMax} ingredients for this chapter, each linked to ONE or TWO objectives by number (objective_numbers holds 1-2 entries, never more) and tagged with the pillars it serves ("combat", "social", "exploration").
 - Every scene's cast and places must exist: create the NPCs and locations the scene sketches imply. Mark the chapter's main villain (if present here) as role "boss".
+- "pronouns" is REQUIRED on every NPC: exactly one of "he/him", "she/her", "they/them", or "it/its" for a construct or creature. Write the pair and nothing else - not "male", not a sentence. The live narrator uses this and nothing else to refer to them, so a name that reads one way and pronouns that read another is a contradiction the players will see; pick deliberately and make the description agree with it.
 - "initial_state" is where the NPC stands when play BEGINS: "alive" (default), "dead", or "absent" (alive but not reachable yet). A murder victim, or anyone the premise says is already dead or missing, MUST NOT be "alive" - the live game will otherwise stage them and have them speak.
 - Reuse existing NPCs/locations by their key instead of duplicating them.
 - Every location needs "features": 3-5 things in it a player might point at and examine, each with the DETAIL they find on looking closely. This is the single most-used thing you will author: players spend most of their turns asking about and examining the room, and anything you do not write here the narrator has to invent on the spot - which is where contradictions come from. Write what is THERE and what it tells them ("the bellows: the leather is new, replaced within the month, though the foundry has cast nothing in a year"), never a puzzle solution and never a secret the chapter is saving.
@@ -144,7 +145,7 @@ ${coopRules}
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
 {
-  "npcs": [ { "key": "npc:...", "name": "...", "role": "npc"|"boss", "initial_state": "alive"|"dead"|"absent", "personality": { "traits": "...", "voice": "...", "wants": "..." }, "faction": "...", "description": "...", "image_prompt": "...", "combat": { "cr": "1/4", "archetype": "brute"|"skirmisher"|"sniper"|"caster"|"leader"|"minion", "skills": ["Perception"], "attack": "Rusty Cutlass" } } ],
+  "npcs": [ { "key": "npc:...", "name": "...", "role": "npc"|"boss", "pronouns": "he/him"|"she/her"|"they/them"|"it/its", "initial_state": "alive"|"dead"|"absent", "personality": { "traits": "...", "voice": "...", "wants": "..." }, "faction": "...", "description": "...", "image_prompt": "...", "combat": { "cr": "1/4", "archetype": "brute"|"skirmisher"|"sniper"|"caster"|"leader"|"minion", "skills": ["Perception"], "attack": "Rusty Cutlass" } } ],
   "locations": [ { "key": "loc:...", "name": "...", "description": "...", "image_prompt": "...",
                    "arrival_line": "...",
                    "features": [ { "name": "the bellows", "detail": "what a character finds on looking closely" } ] } ],
@@ -243,6 +244,7 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
   const c = new Check()
   const root = extracted.data
 
+  const PRONOUN_SETS = ['he/him', 'she/her', 'they/them', 'it/its']
   const npcs: NpcDraft[] = c.arr(root.npcs, '$.npcs', 0, 20).map((raw, i) => {
     const path = `$.npcs[${i}]`
     const n = c.obj(raw, path)
@@ -250,6 +252,12 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
       key: c.str(n.key, `${path}.key`),
       name: c.str(n.name, `${path}.name`),
       role: c.oneOf(n.role, `${path}.role`, ['npc', 'boss'] as const),
+      // Absent rather than guessed. Inferring a pronoun from a name in CODE would reproduce the
+      // exact failure this field exists to fix, so an omission renders nothing and the narrator
+      // falls back to the description, which is where it was reading from before.
+      pronouns: PRONOUN_SETS.includes(n.pronouns as string)
+        ? n.pronouns as NpcDraft['pronouns']
+        : '',
       // Default alive: an omitted state must never silently kill someone off.
       initialState: n.initial_state === undefined
         ? 'alive'

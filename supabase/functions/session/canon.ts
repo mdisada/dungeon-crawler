@@ -198,17 +198,21 @@ export async function presentCast(
   if (staged.size === 0) return []
   const { data } = await service
     .from('npcs')
-    .select('id, name, initial_state, description, personality')
+    .select('id, name, initial_state, description, personality, pronouns')
     .eq('adventure_id', adventureId)
     .in('id', [...staged])
   const npcStates = state.dm?.facts.npcStates ?? {}
   return ((data ?? []) as {
     id: string; name: string; initial_state: string; description: string; personality: unknown
+    pronouns: string | null
   }[])
     .filter((n) => n.name && (npcStates[n.id] ?? n.initial_state ?? 'alive') === 'alive')
     .map((n) => {
+      // Pronouns ride with the name here too - an NPC referring to another NPC needs them as much
+      // as the narrator does. See npcs.pronouns (migration 20260730170000).
+      const who = n.pronouns ? `${n.name} (${n.pronouns})` : n.name
       const identity = identityClause(n.description ?? '', n.personality)
-      return identity ? `${n.name} - ${identity}` : n.name
+      return identity ? `${who} - ${identity}` : who
     })
 }
 

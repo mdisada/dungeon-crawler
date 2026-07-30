@@ -294,6 +294,53 @@ describe('stage 3 (objectives + predicates)', () => {
   })
 })
 
+describe('stage 4 pronouns', () => {
+  const withNpc = (npc: Record<string, unknown>) => {
+    // No regex: the fence markers are fixed strings, and a code fence inside a template literal is
+    // exactly the kind of escaping that goes wrong silently.
+    const body = STAGE4_RESPONSE.split('```json').join('').split('```').join('').trim()
+    const parsed = JSON.parse(body)
+    // Patch the FIRST npc only - dropping the rest fails validateEntityCoverage, which has nothing
+    // to do with what is under test here.
+    parsed.npcs = (parsed.npcs as Record<string, unknown>[])
+      .map((n, i) => (i === 0 ? { ...n, ...npc } : n))
+    return parseStage4(JSON.stringify(parsed), STAGE4_CONTEXT)
+  }
+
+  it('keeps an authored pronoun pair', () => {
+    const r = withNpc({ pronouns: 'he/him' })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.data.npcs[0].pronouns).toBe('he/him')
+  })
+
+  it('accepts every pair in the closed set', () => {
+    for (const p of ['he/him', 'she/her', 'they/them', 'it/its'] as const) {
+      const r = withNpc({ pronouns: p })
+      expect(r.ok).toBe(true)
+      if (r.ok) expect(r.data.npcs[0].pronouns).toBe(p)
+    }
+  })
+
+  it('drops anything outside the set rather than passing prose through', () => {
+    // A model handed an open field eventually writes "male" or a whole sentence; either would be
+    // rendered verbatim into the narrator's roster as "Maren Foss (male)".
+    for (const bad of ['male', 'feminine', 'he', 'He/Him ', 42, null]) {
+      const r = withNpc({ pronouns: bad })
+      expect(r.ok).toBe(true)
+      if (r.ok) expect(r.data.npcs[0].pronouns).toBe('')
+    }
+  })
+
+  it('is absent, never guessed, when the author omitted it', () => {
+    // Inferring from the name in CODE would reproduce the exact bug the field exists to fix - a
+    // narrator reading "Maren" as female and switching pronouns mid-run.
+    const r = withNpc({ pronouns: undefined })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.data.npcs[0].pronouns).toBe('')
+  })
+})
+
 describe('stage 4 (ingredients + coop sets)', () => {
   it('parses the full output and resolves local keys', () => {
     const result = parseStage4(STAGE4_RESPONSE, STAGE4_CONTEXT)

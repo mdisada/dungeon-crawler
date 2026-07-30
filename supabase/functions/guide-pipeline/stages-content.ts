@@ -146,6 +146,8 @@ export async function runStage4(env: StageEnv, chapterId: string): Promise<void>
           name: n.name,
           role: n.role,
           initial_state: n.initialState,
+          // Empty stores as null so an unauthored pronoun and a legacy row read identically.
+          pronouns: n.pronouns || null,
           personality: n.personality,
           faction: n.faction,
           description: n.description,

@@ -251,7 +251,7 @@ async function rosterLines(
   const staged = stagedNpcIds(state)
   const { data } = await service
     .from('npcs')
-    .select('id, name, initial_state, description, personality, itinerary')
+    .select('id, name, initial_state, description, personality, itinerary, pronouns')
     .eq('adventure_id', adventureId)
   // WHERE THE CAST ARE (2026-07-28). `CAST` listed bare names, so the narrator knew who existed
   // and never where any of them were - it could not say "Pell is over at the Drowned Quarter"
@@ -272,12 +272,16 @@ async function rosterLines(
 
   const rows = ((data ?? []) as {
     id: string; name: string; initial_state: string; description: string; personality: unknown
-    itinerary: ItineraryStop[] | null
+    itinerary: ItineraryStop[] | null; pronouns: string | null
   }[])
     .filter((n) => n.name)
     .map((n) => ({
       id: n.id,
-      name: n.name,
+      // AUTHORED PRONOUNS, ATTACHED TO THE NAME (2026-07-30). Rendered as "Maren Foss (he/him)" so
+      // the narrator reads the pair at the moment it reads who they are, rather than inferring it
+      // from a pronoun buried inside the description - which is what let one NPC change sex at
+      // transcript #43 of run 13b7c386 and stay changed for forty entries.
+      name: n.pronouns ? `${n.name} (${n.pronouns})` : n.name,
       identity: identityClause(n.description ?? '', n.personality),
       // GONE needs the WHOLE authored sentence, not the first clause - see below.
       description: (n.description ?? '').trim(),

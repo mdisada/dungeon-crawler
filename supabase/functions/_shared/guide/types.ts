@@ -98,6 +98,23 @@ export interface NpcDraft {
   role: 'npc' | 'boss'
   /** State when play begins. A murder victim must be 'dead' or the NPC agent will voice them. */
   initialState: 'alive' | 'dead' | 'absent'
+  /**
+   * AUTHORED, BECAUSE THE MODEL GUESSES FROM THE NAME (owner, 2026-07-30).
+   *
+   * Gender used to exist only as whatever pronoun happened to sit inside `description`, and the live
+   * narrator inferred the rest. Run 13b7c386: Maren Foss is authored "Thin, grey-faced foreman with
+   * permanent salt-burn on HIS forearms" and the narration used he/him for 42 entries, then switched
+   * to she/her at #43 and never switched back - through #83, in the NPC the party talked to most.
+   *
+   * The word "his" WAS in the prompt, inside the identity clause. It lost to the name: "Maren" reads
+   * female to a model, and a pronoun buried mid-sentence is weak evidence against a strong prior. So
+   * this is a field rather than a hope - stated as a token the narrator cannot misread.
+   *
+   * A CLOSED SET, not free text: it has to be unambiguous at the point of use, and a model given a
+   * free string will eventually write "male" or "uses feminine pronouns" instead of a pronoun pair.
+   * Empty means unspecified, which renders nothing and behaves exactly as guides did before.
+   */
+  pronouns: 'he/him' | 'she/her' | 'they/them' | 'it/its' | ''
   personality: Record<string, Json>
   faction: string
   description: string
