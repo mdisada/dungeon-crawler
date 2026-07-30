@@ -13,10 +13,11 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import {
   buildManifest, createCombat, deriveResult, fightIsOver, manifestToSetup, runAutoTurn,
+  srdLookupNames,
 } from '../_shared/combat/index.ts'
 import type {
   Cell, CombatManifest, CombatResult, ManifestEnemyGroup, ManifestMapInput, ManifestNpcRow,
-  PartyMemberInput,
+  PartyMemberInput, SrdMonsterRow,
 } from '../_shared/combat/index.ts'
 import { deriveNpcStatBlock } from '../_shared/guide/npc-stats.ts'
 import type { NpcStatBlock } from '../_shared/guide/npc-stats.ts'
@@ -95,6 +96,40 @@ function toMapInput(row: BattleMapRow | null): ManifestMapInput {
     gridWidth: typeof row.grid_cols === 'number' ? row.grid_cols : OPEN_FIELD.gridWidth,
     gridHeight: typeof row.grid_rows === 'number' ? row.grid_rows : OPEN_FIELD.gridHeight,
   }
+}
+
+/**
+ * The `srd_monsters` rows that could stat this fight's enemy lines - each authored name and its
+ * head noun ("Vane's Hired Thug" -> "thug"), matched case-insensitively.
+ *
+ * Fetched by name rather than loaded whole: the table is the full SRD 5.2.1 set and each row
+ * carries a large `data` payload. A failed lookup is not an error - the initiator falls through to
+ * a CR-derived block exactly as before.
+ */
+async function loadSrdMonsters(
+  service: SupabaseClient,
+  enemies: ManifestEnemyGroup[],
+): Promise<SrdMonsterRow[]> {
+  const names = new Set<string>()
+  for (const group of enemies) {
+    // Commas and parentheses would break the PostgREST `or` filter's own syntax, and an authored
+    // name carrying them ("Tide-Walker (reskinned zombie)") never matches the SRD anyway.
+    for (const lookup of srdLookupNames(group.name)) {
+      if (!/[,()"']/.test(lookup)) names.add(lookup.toLowerCase())
+    }
+  }
+  if (names.size === 0) return []
+  // Prefix match, not exact: the SRD stats a variant where the guide writes the creature, so
+  // "Sahuagin" has to reach "Sahuagin Warrior". indexSrdMonsters decides which row wins.
+  const { data, error } = await service
+    .from('srd_monsters')
+    .select('name, armor_class, hit_points, data')
+    .or([...names].map((n) => `name.ilike.${n}*`).join(','))
+  if (error) {
+    console.error('srd_monsters load failed; falling back to derived blocks', error)
+    return []
+  }
+  return (data ?? []) as SrdMonsterRow[]
 }
 
 interface ObjectiveJoinRow {
@@ -185,6 +220,8 @@ async function buildLiveManifest(
     service.from('adventures').select('difficulty_setting').eq('id', adventureId).maybeSingle(),
   ])
 
+  const srdMonsters = await loadSrdMonsters(service, enemies)
+
   let battleMap: BattleMapRow | null = null
   if (battle.battle_map_id) {
     const { data } = await service
@@ -225,6 +262,7 @@ async function buildLiveManifest(
     encounterId: battle.id,
     enemies,
     npcs,
+    srdMonsters,
     party,
     map,
     // The boss the CALLER identified from the beat's authored cast. Without it a boss is marked

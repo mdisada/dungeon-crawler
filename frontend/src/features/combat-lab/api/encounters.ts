@@ -5,7 +5,8 @@
 // authored data; it never writes to a session (the Lab never invokes the spine).
 
 import { supabase } from '@/lib/supabase'
-import type { ManifestNpcRow, PartyMemberInput } from '@rules/combat'
+import { srdLookupNames } from '@rules/combat'
+import type { ManifestNpcRow, PartyMemberInput, SrdMonsterRow } from '@rules/combat'
 import type { NpcStatBlock } from '@rules/guide'
 
 export interface EnemyLine {
@@ -31,6 +32,26 @@ export interface AdventureCombatContext {
   boss: { id: string; name: string } | null
   party: PartyMemberInput[]
   baselinePreset: string
+}
+
+/**
+ * The `srd_monsters` rows that can stat a set of authored enemy names - the same third enemy
+ * source live play joins, so a replayed manifest matches the one a session would build.
+ */
+export async function loadSrdMonstersFor(enemyNames: string[]): Promise<SrdMonsterRow[]> {
+  const names = new Set(
+    enemyNames.flatMap((name) => srdLookupNames(name))
+      .filter((n) => !/[,()"']/.test(n))
+      .map((n) => n.toLowerCase()),
+  )
+  if (names.size === 0) return []
+  // Prefix match so "Sahuagin" reaches "Sahuagin Warrior"; the index picks the winner.
+  const { data, error } = await supabase
+    .from('srd_monsters')
+    .select('name, armor_class, hit_points, data')
+    .or([...names].map((n) => `name.ilike.${n}*`).join(','))
+  if (error) throw new Error(`SRD monsters load failed: ${error.message}`)
+  return (data ?? []) as SrdMonsterRow[]
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

@@ -22,6 +22,8 @@ export type {
 } from './manifest.ts'
 export { MONSTER_FIXTURES, monsterSetup } from './fixtures.ts'
 export type { MonsterFixture } from './fixtures.ts'
+export { indexSrdMonsters, srdLookupNames, srdMonsterToSetup } from './srd-monsters.ts'
+export type { SrdMonsterRow } from './srd-monsters.ts'
 export {
   blockedCells, cellKey, chebyshev, DEFAULT_BOUNDS, findPath, gridBounds, inBounds, lineOfSight,
   reachableCells,

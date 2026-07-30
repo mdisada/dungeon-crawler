@@ -5,10 +5,10 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { buildManifest } from '@rules/combat'
-import type { CombatManifest, DifficultySetting, ManifestMapInput } from '@rules/combat'
+import type { CombatManifest, DifficultySetting, ManifestMapInput, SrdMonsterRow } from '@rules/combat'
 
 import {
-  listCombatEncounters, loadAdventureCombatContext,
+  listCombatEncounters, loadAdventureCombatContext, loadSrdMonstersFor,
 } from '../api/encounters'
 import type { AdventureCombatContext, CombatEncounterOption } from '../api/encounters'
 
@@ -29,6 +29,7 @@ export function useEncounterReplay() {
 
   const [context, setContext] = useState<AdventureCombatContext | null>(null)
   const [contextStatus, setContextStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [srdMonsters, setSrdMonsters] = useState<SrdMonsterRow[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -68,6 +69,25 @@ export function useEncounterReplay() {
       cancelled = true
     }
   }, [adventureId])
+
+  // The SRD blocks for THIS encounter's enemy names - the same third source live play joins, so a
+  // replay is not statted differently from the session it rehearses. An empty list is fine: the
+  // initiator falls through to a CR-derived block, exactly as the server does.
+  useEffect(() => {
+    const names = all.find((e) => e.id === encounterId)?.enemies.map((e) => e.name) ?? []
+    if (names.length === 0) return
+    let cancelled = false
+    loadSrdMonstersFor(names)
+      .then((rows) => {
+        if (!cancelled) setSrdMonsters(rows)
+      })
+      .catch(() => {
+        if (!cancelled) setSrdMonsters([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [all, encounterId])
 
   const adventures = useMemo<AdventureGroup[]>(() => {
     const byId = new Map<string, AdventureGroup>()
@@ -115,6 +135,7 @@ export function useEncounterReplay() {
       encounterId: selectedEncounter.id,
       enemies: selectedEncounter.enemies,
       npcs: context.npcs,
+      srdMonsters,
       party: context.party,
       map,
       bossNpcId: includeBoss && context.boss ? context.boss.id : null,

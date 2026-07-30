@@ -13,6 +13,8 @@ import type { CombatSetup } from './engine.ts'
 import { monsterSetup, MONSTER_FIXTURES } from './fixtures.ts'
 import { inBounds } from './grid.ts'
 import type { Cell, GridBounds } from './grid.ts'
+import { indexSrdMonsters, srdLookupNames, srdMonsterToSetup } from './srd-monsters.ts'
+import type { SrdMonsterRow } from './srd-monsters.ts'
 import type { CombatantSetup, CombatEngineState, DifficultySetting } from './types.ts'
 import { deriveNpcStatBlock } from '../guide/npc-stats.ts'
 import type { NpcStatBlock } from '../guide/npc-stats.ts'
@@ -61,6 +63,8 @@ export interface BuildManifestInput {
   encounterId: string | null
   enemies: ManifestEnemyGroup[]
   npcs: ManifestNpcRow[]
+  /** `srd_monsters` rows for the authored enemy names; the caller fetches, the initiator matches. */
+  srdMonsters?: SrdMonsterRow[]
   party: PartyMemberInput[]
   map: ManifestMapInput
   /**
@@ -138,16 +142,29 @@ export function resolveDifficulty(preset: string | undefined, intensity = 0): Di
 
 function fixtureKeyByName(name: string): string | null {
   const n = name.trim().toLowerCase()
-  const f = MONSTER_FIXTURES.find((x) => x.name.toLowerCase() === n || x.key === n)
+  // A guide writes an enemy LINE, so it pluralizes ("Thugs", count 4); the fixture is singular.
+  const singular = n.endsWith('s') ? n.slice(0, -1) : n
+  const f = MONSTER_FIXTURES.find((x) => {
+    const fixtureName = x.name.toLowerCase()
+    return fixtureName === n || x.key === n || fixtureName === singular || x.key === singular
+  })
   return f ? f.key : null
 }
 
-/** One enemy combatant: authored stat block (name match) -> SRD fixture (name match) -> CR-derived. */
+/**
+ * One enemy combatant: authored stat block (name match) -> hand-tuned fixture (name match) ->
+ * `srd_monsters` row (name, then head noun) -> CR-derived last resort.
+ *
+ * Fixtures come before the SRD rows because they are tuned and carry spell kits the SRD payload
+ * does not convert (the Mage and Priest actually cast); the SRD table is what covers everything
+ * else, which measured at 185 of 224 authored enemy lines before it was read.
+ */
 function buildEnemy(
   name: string,
   cr: string,
   id: string,
   npcByName: Map<string, ManifestNpcRow>,
+  srdByName: Map<string, SrdMonsterRow>,
   warnings: string[],
 ): CombatantSetup {
   const npc = npcByName.get(name.trim().toLowerCase())
@@ -156,12 +173,20 @@ function buildEnemy(
       id, name: npc.name, side: 'enemy', refId: npc.id, imageUrl: npc.imageUrl ?? null, auto: true,
     })
   }
-  const key = fixtureKeyByName(name)
-  if (key) {
+  // The authored name, then its head noun: "Vane's Hired Thug" is a thug, and reskinning is what
+  // the guide does with almost every enemy line.
+  const lookups = srdLookupNames(name)
+  for (const lookup of lookups) {
+    const key = fixtureKeyByName(lookup)
     // Keep the authored name (a "Brine Raider" reskin of a bandit reads as authored, not generic).
-    return { ...monsterSetup(key, { id, side: 'enemy', auto: true }), name }
+    if (key) return { ...monsterSetup(key, { id, side: 'enemy', auto: true }), name }
   }
-  warnings.push(`No stat block or SRD fixture for "${name}" (CR ${cr}); derived a generic block.`)
+  for (const lookup of lookups) {
+    const row = srdByName.get(lookup.toLowerCase())
+    const setup = row ? srdMonsterToSetup(row, { id, name, side: 'enemy', auto: true }) : null
+    if (setup) return setup
+  }
+  warnings.push(`No stat block, fixture or SRD monster for "${name}" (CR ${cr}); derived a generic block.`)
   return npcStatBlockToSetup(deriveNpcStatBlock({ cr }, 'npc'), { id, name, side: 'enemy', refId: null, auto: true })
 }
 
@@ -175,6 +200,7 @@ function buildEnemy(
 export function buildManifest(input: BuildManifestInput): CombatManifest {
   const warnings: string[] = []
   const npcByName = new Map(input.npcs.map((n) => [n.name.trim().toLowerCase(), n]))
+  const srdByName = indexSrdMonsters(input.srdMonsters ?? [])
   const bossNpc = input.npcs.find((n) => n.role === 'boss') ?? null
 
   const enemies: CombatantSetup[] = []
@@ -182,7 +208,7 @@ export function buildManifest(input: BuildManifestInput): CombatManifest {
   for (const group of input.enemies) {
     const count = Math.max(1, Math.min(30, Math.round(group.count || 1)))
     for (let k = 0; k < count; k++) {
-      enemies.push(buildEnemy(group.name, group.cr, `e${ei++}`, npcByName, warnings))
+      enemies.push(buildEnemy(group.name, group.cr, `e${ei++}`, npcByName, srdByName, warnings))
     }
   }
 

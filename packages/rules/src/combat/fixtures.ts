@@ -47,6 +47,10 @@ export const MONSTER_FIXTURES: MonsterFixture[] = [
   { key: 'zombie', name: 'Zombie', hpMax: 22, ac: 8, speed: 4, dexMod: -2, attacks: [melee('Slam', 3, 1, 6, 1)], saves: { str: 1, dex: -2, con: 3, int: -4, wis: -2, cha: -3 } },
   { key: 'wolf', name: 'Wolf', hpMax: 11, ac: 13, speed: 8, dexMod: 2, attacks: [melee('Bite', 4, 2, 4, 2)], saves: { str: 1, dex: 2, con: 1, int: -4, wis: 1, cha: -2 }, morale: 0.25 },
   { key: 'bandit', name: 'Bandit', hpMax: 11, ac: 12, speed: 6, dexMod: 1, attacks: [melee('Scimitar', 3, 1, 6, 1), ranged('Light Crossbow', 3, 1, 8, 1, 16, 64)], saves: { str: 0, dex: 1, con: 1, int: 0, wis: 0, cha: 0 }, morale: 0.3 },
+  // The single most-authored enemy across 224 lines (38 of them) and the one name SRD 5.2.1 does
+  // not carry - the 2024 revision dropped the Thug, so the database cannot stat it. SRD 5.1 stats,
+  // like the rest of this file; without it every thug in every guide gets a CR-derived generic.
+  { key: 'thug', name: 'Thug', hpMax: 32, ac: 11, speed: 6, dexMod: 0, attacks: [melee('Mace', 4, 1, 6, 2), ranged('Heavy Crossbow', 2, 1, 10, 0, 20, 80)], saves: { str: 2, dex: 0, con: 2, int: 0, wis: 0, cha: 0 }, morale: 0.3 },
   { key: 'orc', name: 'Orc', hpMax: 15, ac: 13, speed: 6, dexMod: 1, attacks: [melee('Greataxe', 5, 1, 12, 3), ranged('Javelin', 5, 1, 6, 3, 6, 24)], saves: { str: 3, dex: 1, con: 3, int: -2, wis: 0, cha: 0 }, morale: 0.1 },
   { key: 'ogre', name: 'Ogre', hpMax: 59, ac: 11, speed: 8, dexMod: -1, attacks: [melee('Greatclub', 6, 2, 8, 4), ranged('Javelin', 6, 2, 6, 4, 6, 24)], saves: { str: 4, dex: -1, con: 3, int: -3, wis: -2, cha: -2 }, morale: 0.15 },
   // Casters - come with a spell kit so spells are testable straight from the picker.
