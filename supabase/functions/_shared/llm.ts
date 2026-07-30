@@ -227,11 +227,22 @@ export async function callAgentTextWithMeta(call: AgentTextCall): Promise<AgentT
   // must emit every required key, nulls included, so schema'd calls run materially longer than
   // the prose ones whose budgets were set before schemas existed.
   const truncated = json.choices?.[0]?.finish_reason === 'length'
-  if (!content || truncated) {
+  // finish_reason 'error' means the upstream generation DIED MID-STREAM. OpenRouter still answers
+  // 200 with whatever text had arrived and a zeroed usage block, so a half-written reply is
+  // indistinguishable from a finished one to anyone reading `content` alone - and this branch,
+  // keyed only on 'length', let it straight through. Live 2026-07-30, guide stage 4 on
+  // gemini-2.5-flash-lite: JSON cut off mid-word, reported to the user as "does not parse ... at
+  // position 7416". Reproduced 2/2 on a long response, at 2808 and 62 chars.
+  //
+  // A dead call cannot be fixed with more tokens, so retry at the SAME cap - the conclusion
+  // session/agents.ts reached for the play path on 2026-07-23, applied here so every caller gets it.
+  const providerFailed = json.choices?.[0]?.finish_reason === 'error'
+  if (!content || truncated || providerFailed) {
     // Empty completion (seen live with mimo-v2.5 on structured-output calls): the model spent
     // the whole budget on reasoning tokens despite reasoning-off. Retry once with double the
     // budget so the actual content fits; only then give up.
-    const retry = await post(reasoningOff, maxTokens * 2, schemaOn)
+    const retryCap = providerFailed ? maxTokens : maxTokens * 2
+    const retry = await post(reasoningOff, retryCap, schemaOn)
     if (retry.res.ok) {
       await logUsage(retry.json)
       // Keep the retry only if it actually said something. A truncated first reply is useless
@@ -240,7 +251,7 @@ export async function callAgentTextWithMeta(call: AgentTextCall): Promise<AgentT
       if (retryContent) {
         content = retryContent
         chosen = retry.json
-        chosenCap = maxTokens * 2
+        chosenCap = retryCap
       }
     }
   }

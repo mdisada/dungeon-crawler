@@ -3,7 +3,7 @@
 // edge runtime's wall clock; failures pause the queue (F04 SS2) until the user retries.
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
-import { AgentCallError, callAgentText } from '../_shared/llm.ts'
+import { AgentCallError, callAgentTextWithMeta } from '../_shared/llm.ts'
 import { charsetError } from '../_shared/guide/charset.ts'
 import type { ParseResult } from '../_shared/guide/types.ts'
 import type { StageEnv, StagePrompt } from './stage-env.ts'
@@ -23,6 +23,9 @@ const MAX_ATTEMPTS = 3
 // Past this much elapsed invocation time, don't start a second LLM call - fail fast and let the
 // requeue give it a fresh invocation.
 const FEEDBACK_RETRY_BUDGET_MS = 45 * 1000
+// Marks a failure the model provider caused, not the model: it must never be quoted back as
+// schema feedback, and it must never count as the "identical failure repeated" that stops retries.
+const PROVIDER_DIED = 'finish_reason: error'
 
 export type RunResult = 'ran' | 'busy' | 'idle' | 'failed'
 
@@ -114,7 +117,10 @@ export async function processNextJob(
     //
     // Deliberately exact-match: anything fuzzier risks abandoning a genuinely different failure
     // that a retry could have cleared, and a wasted retry is much cheaper than a lost guide.
-    const repeated = priorError !== null && priorError === message.slice(0, 2000)
+    // ...and a provider death is exempt for the same reason: it is the transient failure this rule
+    // was never about, and two identical upstream errors say nothing about whether a third try works.
+    const repeated = priorError !== null && priorError === message.slice(0, 2000) &&
+      !message.includes(PROVIDER_DIED)
     const requeue = job.attempts + 1 < MAX_ATTEMPTS && !repeated
     if (repeated) {
       console.error(`guide-pipeline stage ${job.stage}: identical failure repeated - not retrying`)
@@ -172,7 +178,7 @@ export async function generateParsed<T>(
   priorError: string | null = null,
 ): Promise<T> {
   const call = (user: string, maxTokens: number = prompt.maxTokens) =>
-    callAgentText({
+    callAgentTextWithMeta({
       serviceClient: db,
       openRouterApiKey,
       userId: adventure.creator_id,
@@ -190,17 +196,40 @@ export async function generateParsed<T>(
   const invocationStart = Date.now()
   // A cold re-run after a validation failure carries the prior errors into the first call, so the
   // fresh invocation doesn't just repeat the same mistake (the in-invocation retry it lost).
-  const firstUser = priorError
-    ? `${prompt.user}\n\nYour previous attempt was rejected by the schema validator:\n${priorError.slice(0, 1500)}\n\nFix exactly these problems. Respond with ONLY the corrected JSON object.`
+  // A prior failure the PROVIDER caused is excluded: it says nothing about the prompt, and quoting
+  // it as "the schema validator rejected you" asks the model to fix an answer it never got wrong.
+  const priorModelError = priorError && !priorError.includes(PROVIDER_DIED) ? priorError : null
+  const firstUser = priorModelError
+    ? `${prompt.user}\n\nYour previous attempt was rejected by the schema validator:\n${priorModelError.slice(0, 1500)}\n\nFix exactly these problems. Respond with ONLY the corrected JSON object.`
     : prompt.user
   const first = await call(firstUser)
-  const parsed = checkCharset(first, parse(first))
+  const parsed = checkCharset(first.text, parse(first.text))
   if (parsed.ok) return parsed.data
 
   // No wall-clock budget left for a second call in THIS invocation - fail now so the runner's
   // requeue gives the retry a fresh invocation instead of getting killed mid-call.
   if (Date.now() - invocationStart > FEEDBACK_RETRY_BUDGET_MS) {
     throw new AgentCallError(`stage output failed validation (no time budget for an in-invocation retry): ${parsed.errors.slice(0, 8).join('; ')}`)
+  }
+
+  // A REPLY THE PROVIDER KILLED IS NOT A MODEL MISTAKE (2026-07-30).
+  //
+  // finish_reason 'error' - the upstream generation dies mid-stream and OpenRouter returns 200
+  // with the fragment that arrived. llm.ts has already spent one same-cap retry on it by now, so
+  // this fragment is what survived two attempts. Every correction below is wrong for it: the model
+  // wrote no bad character, so echoing its own half-finished draft back as "the schema validator
+  // rejected this" invites it to continue a broken object, and a token-cap raise treats an upstream
+  // fault as a budget. Ask again, plainly, with the original prompt.
+  if (first.finishReason === 'error') {
+    const again = await call(firstUser)
+    const retried = checkCharset(again.text, parse(again.text))
+    if (retried.ok) return retried.data
+    if (again.finishReason === 'error') {
+      throw new AgentCallError(
+        `the model provider ended this generation early (${PROVIDER_DIED}) on every attempt - the reply arrived cut off mid-sentence, so there was nothing to parse. This is upstream flakiness, not a bad prompt: retry the stage, or pick a different model for this role in Settings.`,
+      )
+    }
+    throw new AgentCallError(`stage output failed validation after retry: ${retried.errors.slice(0, 8).join('; ')}`)
   }
 
   // A reply that was CUT OFF cannot be repaired by asking again at the same length - it just gets
@@ -222,7 +251,7 @@ export async function generateParsed<T>(
   const parseError = parsed.ok ? undefined : parsed.errors.find((e) => e.includes('does not parse'))
   const offset = Number(parseError?.match(/at position (\d+)/)?.[1] ?? NaN)
   const truncated = Boolean(parseError) &&
-    (!Number.isFinite(offset) || offset >= first.length * 0.9)
+    (!Number.isFinite(offset) || offset >= first.text.length * 0.9)
   const feedback = `${prompt.user}
 
 Your previous response was rejected by the schema validator:
@@ -231,12 +260,12 @@ ${truncated
     // Echoing a truncated draft back spends input tokens re-reading a broken object and invites
     // the model to continue it rather than write a complete one.
     ? '\nThat response was CUT OFF before it finished. Write the whole object again, and keep every description to one short sentence so it fits.\n'
-    : `\nPrevious response (for reference):\n${first.slice(0, 6000)}\n`}
+    : `\nPrevious response (for reference):\n${first.text.slice(0, 6000)}\n`}
 Respond again with ONLY the corrected JSON object.`
   // Bounded, not doubled: these budgets are sized against the 150s edge-invocation kill, so an
   // unbounded raise would trade a parse failure for a killed invocation - the worse of the two.
   const second = await call(feedback, truncated ? Math.min(prompt.maxTokens * 2, 6000) : prompt.maxTokens)
-  const reparsed = checkCharset(second, parse(second))
+  const reparsed = checkCharset(second.text, parse(second.text))
   if (reparsed.ok) return reparsed.data
   throw new AgentCallError(`stage output failed validation after retry: ${reparsed.errors.slice(0, 8).join('; ')}`)
 }
