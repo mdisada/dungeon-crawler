@@ -16,7 +16,7 @@ import { runClaimCheck, runConsistency, runObjectiveJudge } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { ensureSpineLoop, loadLoops, planAndOpenBeat } from './beats.ts'
 import { graphDecision, inPlayNodeKey, loadObjectiveNodes } from './graph-read.ts'
-import { establishedSoFar } from './canon.ts'
+import { establishedSoFar, nodePull } from './canon.ts'
 import { recordSceneLedger } from './ledger.ts'
 import { applyMilestones } from './milestones.ts'
 import { narrationBeat } from './narration.ts'
@@ -235,11 +235,27 @@ async function completeObjective(
     return true
   }
 
+  const nextPull = next
+    ? await nodePull(service, env.adventureId, next.id, null).catch(() => '')
+    : ''
   await narrationBeat(
     service, env, sessionId,
     `The party just achieved "${completed.title}".` +
+      // NEVER QUOTE THE NEXT OBJECTIVE'S TITLE (2026-07-30). This said `let the next thread surface
+      // naturally: "${next.title}". Do not state it as a task` - the same instruction at war with
+      // its own input that made `GOAL <title>` leak, handed to the same model. Run c839c674 shipped
+      // "Recover Ondric's hidden records." as the closing sentence of four published passages, and
+      // this is the only path that put that string in front of the narrator: `goalLine` had already
+      // been switched to the authored PULL, and replay confirms the pull was available (neither
+      // route node of that objective had resolved).
+      //
+      // `nextPull` is the same authored situation the narrator's PULL line carries. When the guide
+      // never authored one the thread is left unnamed rather than named as a task - an unmentioned
+      // next objective is a smaller defect than a quest string in the prose.
       (next
-        ? ` Narrate the accomplishment briefly, then let the next thread surface naturally: "${next.title}". Do not state it as a task - surface it in the fiction.`
+        ? nextPull
+          ? ` Narrate the accomplishment briefly, then let what comes next surface in the fiction: ${nextPull}`
+          : ' Narrate the accomplishment briefly, then leave them facing what is still unresolved.'
         : ' Narrate the accomplishment.') +
       ' End at a concrete decision point.',
     'Objective complete',

@@ -632,8 +632,14 @@ export async function publishNarration(
     const pasted = TRAILING_LABEL_CHECK === 'off' ? null : trailingLabel(text, labels)
     if (pasted) {
       const cut = text.trim().slice(0, text.trim().toLowerCase().lastIndexOf(pasted.toLowerCase().slice(0, 8))).trim()
+      // `pull_present` is the field that would have saved a paid run (2026-07-30). After c839c674
+      // still shipped four of these, nothing in the log could distinguish "the pull was empty so
+      // goalLine fell back to the title" from "the pull was supplied and the title arrived by some
+      // other path" - and those want opposite fixes. It took a replay against the story_nodes rows
+      // to rule the first one out. Log the discriminator instead of reconstructing it.
       await logEvent(service, env.adventureId, sessionId, 'incident', {
         kind: 'trailing_label_stripped', label: pasted, style,
+        pull_present: pull.length > 0,
         enforced: TRAILING_LABEL_CHECK === 'enforce' && cut.length >= 40,
       }).catch(() => {})
       if (TRAILING_LABEL_CHECK === 'enforce' && cut.length >= 40) text = cut
