@@ -33,13 +33,13 @@ function rawNode(over: Record<string, unknown> = {}): Record<string, unknown> {
 }
 
 describe('parseNodeSpec', () => {
-  it('parses a well-formed node and derives the chip label', () => {
+  it('parses a well-formed node and shows the authored hint as the chip', () => {
     const result = parseNodeSpec(rawNode(), ctx)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.node.encounter.onSuccess).toEqual(['ward_lowered'])
     expect(result.node.encounter.onFailure).toEqual(['guards_alerted'])
-    expect(result.node.affordances[0].label).toBe('Attempt: time the pulses and cross')
+    expect(result.node.affordances[0].label).toBe('time the pulses and cross')
   })
 
   it('drops an outcome atom off the objective+local menu', () => {
@@ -81,9 +81,25 @@ describe('parseNodeSpec', () => {
 })
 
 describe('affordanceLabel', () => {
-  it('prefixes a code-owned verb by kind', () => {
-    expect(affordanceLabel('social', 'reason with the warden')).toBe('Talk: reason with the warden')
+  it('shows the authored hint verbatim', () => {
+    expect(affordanceLabel('social', 'reason with the warden')).toBe('reason with the warden')
+  })
+
+  it('never doubles a verb the author already wrote', () => {
+    // 13% of 1193 authored chips shipped as "Attempt: Attempt to..." while code owned the prefix.
+    for (const [kind, hint] of [
+      ['skill_challenge', 'Attempt to sever the ledger from the leviathan'],
+      ['combat', 'attempt to stop the signal'],
+      ['puzzle', 'Attempt to create a new entry on the spot'],
+      ['social', 'Attempt to intimidate Corl'],
+    ] as const) {
+      expect(affordanceLabel(kind, hint)).toBe(hint)
+    }
+  })
+
+  it('still guarantees a chip says something when the hint is missing', () => {
     expect(affordanceLabel('puzzle', '')).toBe('Work out')
+    expect(affordanceLabel('social', '   ')).toBe('Talk')
   })
 })
 

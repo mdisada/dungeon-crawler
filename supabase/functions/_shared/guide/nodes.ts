@@ -31,8 +31,8 @@ export type TransitionTier = (typeof TRANSITION_TIERS)[number]
 export interface NodeAffordance {
   /** Stable slug the chip and the closed-menu entry mapper key off. */
   key: string
-  /** Player-facing chip text. Mechanical half is CODE-derived (affordanceLabel); the model
-   *  authors only the flavor half, so a chip can never contradict the spec it sits on. */
+  /** Player-facing chip text - the authored hint, verbatim. See affordanceLabel for why code no
+   *  longer prefixes the scene's verb. */
   label: string
   /** One-line hint - the authored flavor. */
   hint: string
@@ -139,9 +139,28 @@ const KIND_VERB: Record<NodeKind, string> = {
   combat: 'Fight',
 }
 
+/**
+ * THE HINT IS THE CHIP (owner decision, 2026-07-30).
+ *
+ * This used to return `${KIND_VERB[kind]}: ${hint}` so the mechanical half was code-owned and a chip
+ * could never contradict the spec it sat on. The cost of that guarantee turned out to be higher than
+ * the guarantee: the model writes hints that already begin with a verb, so 158 of 1193 authored chips
+ * (13%) reached the player doubled -
+ *
+ *   "Attempt: Attempt to sever the ledger's connection to the leviathan."
+ *   "Fight: attempt to stop the signal"
+ *   "Work out: Attempt to create a new, true entry on the spot."
+ *
+ * Stripping a leading verb was considered and rejected as too error-prone to run on player-facing
+ * text. Removing the prefix is the simpler correct move: nothing parses the "Verb: " format - the
+ * entry mapper matches on `key`, the UI renders the string as-is - so it was presentation only, and
+ * the fix belongs in the authoring prompt where the phrasing is decided.
+ *
+ * KIND_VERB stays as the empty-hint fallback, which is the one case that still needs code to
+ * guarantee a chip says something.
+ */
 export function affordanceLabel(kind: NodeKind, hint: string): string {
-  const flavor = hint.trim()
-  return flavor ? `${KIND_VERB[kind]}: ${flavor}` : KIND_VERB[kind]
+  return hint.trim() || KIND_VERB[kind]
 }
 
 /** Reads the authored `{win, loss}` pair, tolerating absence - an omitted outcome is thin, not
