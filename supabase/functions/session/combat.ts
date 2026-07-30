@@ -68,20 +68,32 @@ function parseEnemies(spec: unknown): ManifestEnemyGroup[] {
   })
 }
 
-/** locations.map jsonb -> ManifestMapInput, tolerating the legacy flat-spawn shape + missing grid. */
-function toMapInput(locationId: string | null, rawMap: unknown): ManifestMapInput {
-  const m = asRecord(rawMap)
+/** The mapless floor: an empty 32x32 field. The initiator's free-column scan deploys both sides. */
+const OPEN_FIELD: ManifestMapInput = {
+  mapId: null, obstacles: [], spawns: { party: [], enemy: [] }, gridWidth: 32, gridHeight: 32,
+}
+
+/**
+ * The encounter's assigned `battle_maps` row -> ManifestMapInput (F09 SS3.4).
+ *
+ * Before this, the map came from `locations.map` jsonb - a column NOTHING has ever written, so
+ * every engine-resolved fight ran on OPEN_FIELD with both sides on the fallback columns. The
+ * assignment now lives on the encounter (stage 5, tag match) and the painted obstacles/spawns and
+ * authored grid come from the map itself.
+ */
+function toMapInput(row: BattleMapRow | null): ManifestMapInput {
+  if (!row) return OPEN_FIELD
   const cells = (v: unknown): Cell[] => (Array.isArray(v) ? v.filter(isCell) : [])
-  const rawSpawns = m.spawns
+  const rawSpawns = row.spawns
   const spawns = Array.isArray(rawSpawns)
     ? { party: cells(rawSpawns), enemy: [] } // legacy flat spawns -> party side
     : { party: cells(asRecord(rawSpawns).party), enemy: cells(asRecord(rawSpawns).enemy) }
   return {
-    mapId: locationId,
-    obstacles: cells(m.obstacles),
+    mapId: row.id,
+    obstacles: cells(row.obstacles),
     spawns,
-    gridWidth: typeof m.gridCols === 'number' ? m.gridCols : 32,
-    gridHeight: typeof m.gridRows === 'number' ? m.gridRows : 32,
+    gridWidth: typeof row.grid_cols === 'number' ? row.grid_cols : OPEN_FIELD.gridWidth,
+    gridHeight: typeof row.grid_rows === 'number' ? row.grid_rows : OPEN_FIELD.gridHeight,
   }
 }
 
@@ -96,6 +108,15 @@ interface BattleRow {
   type: string
   spec: Json
   location_id: string | null
+  battle_map_id: string | null
+}
+
+interface BattleMapRow {
+  id: string
+  grid_cols: number
+  grid_rows: number
+  obstacles: Json
+  spawns: Json
 }
 
 interface NpcJoinRow {
@@ -109,9 +130,11 @@ interface PartyRow {
   id: string
   name: string
   level: number
+  class_key: string | null
   abilities: PartyMemberInput['abilities']
   ability_bonuses: PartyMemberInput['abilityBonuses']
   hp_max: number | null
+  hp_current: number | null
 }
 
 /**
@@ -124,6 +147,7 @@ async function buildLiveManifest(
   adventureId: string,
   state: GameState,
   beatSpec: BeatSpecInput,
+  bossNpcId: string | null,
 ): Promise<{ manifest: CombatManifest; boss: { id: string; name: string } | null } | null> {
   const objectiveId = state.objectives?.currentId ?? null
   if (!objectiveId) return null
@@ -138,14 +162,17 @@ async function buildLiveManifest(
 
   const { data: battleRows } = await service
     .from('encounters')
-    .select('id, type, spec, location_id')
+    .select('id, type, spec, location_id, battle_map_id')
     .in('id', encounterIds)
     .eq('type', 'battle')
-  const battles = (battleRows ?? []) as BattleRow[]
+  // Sorted by id so a multi-battle objective picks the SAME fight on every run - PostgREST makes
+  // no ordering promise for `.in()`, so "the first row" was previously whatever came back.
+  const battles = ((battleRows ?? []) as BattleRow[]).sort((a, b) => a.id.localeCompare(b.id))
   if (battles.length === 0) return null
-  // Disambiguate by where the party stands; else the sole row; else the first.
+  // Disambiguate by where the party stands; else the sole row; else the lowest id.
   const locId = state.scene?.locationId ?? null
-  const battle = battles.find((b) => b.location_id && b.location_id === locId) ?? battles[0]
+  const here = battles.filter((b) => b.location_id && b.location_id === locId)
+  const battle = here[0] ?? battles[0]
   const enemies = parseEnemies(battle.spec)
   if (enemies.length === 0) return null
 
@@ -154,18 +181,33 @@ async function buildLiveManifest(
 
   const [{ data: npcRows }, { data: partyRows }, { data: adventure }] = await Promise.all([
     service.from('npcs').select('id, name, role, stat_block').eq('adventure_id', adventureId).not('stat_block', 'is', null),
-    service.from('characters').select('id, name, level, abilities, ability_bonuses, hp_max').in('id', pcIds),
+    service.from('characters').select('id, name, level, class_key, abilities, ability_bonuses, hp_max, hp_current').in('id', pcIds),
     service.from('adventures').select('difficulty_setting').eq('id', adventureId).maybeSingle(),
   ])
 
-  let locationMap: unknown = null
-  if (locId) {
-    const { data: location } = await service.from('locations').select('map').eq('id', locId).maybeSingle()
-    locationMap = (location as { map?: unknown } | null)?.map ?? null
+  let battleMap: BattleMapRow | null = null
+  if (battle.battle_map_id) {
+    const { data } = await service
+      .from('battle_maps')
+      .select('id, grid_cols, grid_rows, obstacles, spawns')
+      .eq('id', battle.battle_map_id)
+      .maybeSingle()
+    battleMap = (data as BattleMapRow | null) ?? null
   }
 
+  // class_key is load-bearing, not decoration: without it every PC drops to unarmoured 10 + DEX,
+  // and characterToSetup measures each point of AC at roughly +8 points of party win rate. The
+  // live path omitted it while the Lab passed it, so a fighter fought the same encounter at AC 11
+  // in a session and AC 18 in rehearsal. hp_current (not hp_max) so a party carrying damage into a
+  // fight brings it - today nothing writes it, and the fallback keeps that a no-op.
   const party: PartyMemberInput[] = ((partyRows ?? []) as PartyRow[]).map((c) => ({
-    id: c.id, name: c.name, level: c.level, abilities: c.abilities, abilityBonuses: c.ability_bonuses, hpMax: c.hp_max,
+    id: c.id,
+    name: c.name,
+    level: c.level,
+    classKey: c.class_key,
+    abilities: c.abilities,
+    abilityBonuses: c.ability_bonuses,
+    hpMax: c.hp_current ?? c.hp_max,
   }))
   if (party.length === 0) return null
 
@@ -177,7 +219,7 @@ async function buildLiveManifest(
   }))
 
   const preset = asRecord((adventure as { difficulty_setting?: unknown } | null)?.difficulty_setting).preset
-  const map = toMapInput(locId, locationMap)
+  const map = toMapInput(battleMap)
 
   const manifest = buildManifest({
     encounterId: battle.id,
@@ -185,10 +227,29 @@ async function buildLiveManifest(
     npcs,
     party,
     map,
+    // The boss the CALLER identified from the beat's authored cast. Without it a boss is marked
+    // only when a role='boss' npc happens to be named in spec.enemies, so a climax could be won
+    // with bossOutcome 'none' and no npcStates write - the 2026-07-24 regression, on the path that
+    // replaced the placeholder that caused it.
+    bossNpcId: bossNpcId ?? null,
     baselinePreset: typeof preset === 'string' ? preset : 'standard',
+    // F09 SS7.1 per-encounter intensity is not authored anywhere yet; the baseline preset is the
+    // only difficulty signal that exists. Left explicit so it reads as unimplemented, not omitted.
     intensity: 0,
     beatSpec,
   })
+
+  if (!battleMap) {
+    manifest.warnings.push(battle.battle_map_id
+      ? 'Assigned battle map could not be loaded; fought on an open field.'
+      : 'No battle map assigned to this encounter; fought on an open field.')
+  }
+  if (here.length > 1 || (here.length === 0 && battles.length > 1)) {
+    manifest.warnings.push(
+      `${battles.length} battle encounters share this objective; picked ${battle.id} by ` +
+        `${here.length > 0 ? 'location then id' : 'id'}.`,
+    )
+  }
 
   // Boss (if any) is auto-marked by buildManifest when a role='boss' npc is named in spec.enemies.
   const bossSetup = manifest.bossRef ? manifest.enemies.find((e) => e.id === manifest.bossRef) : null
@@ -217,8 +278,9 @@ export async function resolveLiveCombat(
   env: { adventureId: string },
   state: GameState,
   beatSpec: BeatSpecInput,
+  opts?: { bossNpcId?: string | null },
 ): Promise<LiveCombatResult | null> {
-  const built = await buildLiveManifest(service, env.adventureId, state, beatSpec)
+  const built = await buildLiveManifest(service, env.adventureId, state, beatSpec, opts?.bossNpcId ?? null)
   if (!built) return null
   const { result, seed, rounds } = resolveManifest(built.manifest)
   return { result, boss: built.boss, encounterId: built.manifest.encounterId, seed, rounds, warnings: built.manifest.warnings }

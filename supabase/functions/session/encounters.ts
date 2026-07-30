@@ -37,7 +37,7 @@ import { commitDiffs, loadState, logEvent } from './util.ts'
 import { bossNpcStateForOutcome } from '../_shared/combat/index.ts'
 import { resolveLiveCombat } from './combat.ts'
 import type { LiveCombatResult } from './combat.ts'
-import { applyNpcState, bossReferencedBy } from './npc-state.ts'
+import { applyNpcState, bossAmongNpcIds, bossReferencedBy } from './npc-state.ts'
 
 export function activeEncounter(state: GameState): EncounterState | null {
   return state.encounter ?? null
@@ -463,9 +463,17 @@ export async function runCombatPlaceholderEncounter(
   // authored enemies, empty party) or engine error, fall back to the historical auto-win so a live
   // session can never break. The resolution is a marker event, NOT a narration line - the story
   // AROUND the fight (lead-in above, aftermath below) is what OUR narration carries.
+  // The beat's authored cast is where a climax names its antagonist; combat.ts stays spine-free,
+  // so the npcs lookup happens here and the id is handed across the boundary.
+  const castNpcIds = Array.isArray(spec.params.npc_ids)
+    ? (spec.params.npc_ids as Json[]).filter((v): v is string => typeof v === 'string')
+    : []
+  const castBoss = await bossAmongNpcIds(service, env.adventureId, castNpcIds)
+
   const live: LiveCombatResult | null = await resolveLiveCombat(
     service, env, (await loadState(service, env.adventureId)).state,
     { label: spec.label, stakes: spec.stakes, onSuccess: spec.onSuccess, onPartial: spec.onPartial, onFailure: spec.onFailure },
+    { bossNpcId: castBoss?.id ?? null },
   ).catch((err: unknown) => {
     console.error('combat resolve failed; using placeholder auto-win', err)
     return null

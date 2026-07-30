@@ -47,10 +47,14 @@ async function pinModels(userId, model, overrides) {
   if (model && Object.values(row?.model_map ?? {}).some((m) => m !== model)) throw new Error('model pin failed')
 }
 
+// class_key is not decoration here: combat derives AC from the class's starting kit (see
+// CLASS_ARMOR in packages/rules/src/combat/convert.ts), and a null class means unarmoured 10 + DEX
+// for every PC. Every fight this harness has ever measured was fought by a party at AC 10-13,
+// which is a property of the fixture and not of the game - a fighter belongs at 18.
 const PARTY = [
-  { name: 'Bram', abilities: { str: 12, dex: 14, con: 12, int: 14, wis: 14, cha: 10 }, skills: ['investigation', 'perception', 'insight'] },
-  { name: 'Kestrel', abilities: { str: 10, dex: 16, con: 12, int: 12, wis: 10, cha: 16 }, skills: ['persuasion', 'stealth', 'acrobatics'] },
-  { name: 'Dain', abilities: { str: 16, dex: 10, con: 14, int: 10, wis: 14, cha: 8 }, skills: ['athletics', 'insight', 'survival'] },
+  { name: 'Bram', classKey: 'srd-2024_wizard', abilities: { str: 12, dex: 14, con: 12, int: 14, wis: 14, cha: 10 }, skills: ['investigation', 'perception', 'insight'] },
+  { name: 'Kestrel', classKey: 'srd-2024_rogue', abilities: { str: 10, dex: 16, con: 12, int: 12, wis: 10, cha: 16 }, skills: ['persuasion', 'stealth', 'acrobatics'] },
+  { name: 'Dain', classKey: 'srd-2024_fighter', abilities: { str: 16, dex: 10, con: 14, int: 10, wis: 14, cha: 8 }, skills: ['athletics', 'insight', 'survival'] },
 ]
 
 export async function executeRun(run) {
@@ -183,7 +187,7 @@ export async function executeRun(run) {
     // ---- Lobby -> session ----
     for (const m of members) {
       const [char] = await serviceRest('POST', 'characters', {
-        user_id: m.userId, name: m.name, level: 1, is_complete: true,
+        user_id: m.userId, name: m.name, level: 1, is_complete: true, class_key: m.classKey,
         abilities: m.abilities, skill_proficiencies: m.skills, hp_max: 11, hp_current: 11,
       })
       m.charId = char.id

@@ -416,17 +416,23 @@ function CombatLab({ userId }: { userId: string }) {
   }
 
   function handleLoadEncounter() {
-    // The map comes from the Lab's current selection (or a blank field); buildManifest takes it as
-    // input, so the manifest shape stays identical to what live play builds (F09 SS11.1).
+    // The encounter's ASSIGNED map (stage 5, F09 SS3.4) is what live play will fight on, so the
+    // replay adopts it; the Lab's current selection is the fallback for an unassigned fight or a
+    // map this user cannot see. buildManifest takes the map as input either way, so the manifest
+    // stays identical to production's (F09 SS11.1).
+    const assigned = replay.selectedEncounter?.battleMapId
+      ? mapsApi.maps.find((m) => m.id === replay.selectedEncounter!.battleMapId) ?? null
+      : null
+    const map = assigned ?? lab.map
     const mapInput: ManifestMapInput = {
-      mapId: lab.map?.id ?? null,
-      obstacles: lab.map?.obstacles ?? [],
-      spawns: lab.map?.spawns ?? { party: [], enemy: [] },
-      gridWidth: lab.map?.gridCols ?? lab.gridCols,
-      gridHeight: lab.map?.gridRows ?? lab.gridRows,
+      mapId: map?.id ?? null,
+      obstacles: map?.obstacles ?? [],
+      spawns: map?.spawns ?? { party: [], enemy: [] },
+      gridWidth: map?.gridCols ?? lab.gridCols,
+      gridHeight: map?.gridRows ?? lab.gridRows,
     }
     const manifest = replay.assembleManifest(mapInput)
-    if (manifest) lab.loadManifest(manifest, lab.map)
+    if (manifest) lab.loadManifest(manifest, map)
   }
 
   const startBlocker: string | null = !lab.gridOn

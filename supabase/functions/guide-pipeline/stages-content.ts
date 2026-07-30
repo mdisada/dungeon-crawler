@@ -10,6 +10,8 @@ import type { Stage5NodesContext, Stage5NodesOutput } from '../_shared/guide/sta
 import type { StoryNodeSpec } from '../_shared/guide/nodes.ts'
 import type { GuaranteedRoute } from '../_shared/guide/guaranteed-route.ts'
 import { minimalSatisfyingAtoms } from '../_shared/guide/guaranteed-route.ts'
+import { pickBattleMap } from '../_shared/guide/map-match.ts'
+import type { MapCandidate } from '../_shared/guide/map-match.ts'
 import { canonicalizeAtomSlug } from '../_shared/story/index.ts'
 import type { EntityRef, Json } from '../_shared/guide/types.ts'
 import { enqueueJob, type StageEnv } from './stage-env.ts'
@@ -248,6 +250,66 @@ export async function runStage4(env: StageEnv, chapterId: string): Promise<void>
   await enqueueJob(env.db, env.adventure.id, 5, chapterId)
 }
 
+interface EncounterMapTarget {
+  id: string
+  type: string
+  summary: string
+  location: { name: string; description?: string } | null
+}
+
+/**
+ * Assign each battle encounter the map it will be fought on (F09 SS3.4). The fiction matched
+ * against is the encounter summary plus its location's name and description - the text that
+ * actually states where the fight happens.
+ *
+ * Candidates are the creator's own maps first, then the public starter library, so a hand-made map
+ * wins a tie against a starter (pickBattleMap breaks ties on order). Nothing here invents a map:
+ * an unmatched fight keeps `battle_map_id` null and is resolved on the open field, with a warning
+ * so the gap is visible in the guide editor instead of silently floored.
+ */
+async function assignBattleMaps(
+  env: StageEnv,
+  encounters: EncounterMapTarget[],
+): Promise<{ targetId: string; message: string }[]> {
+  const battles = encounters.filter((e) => e.type === 'battle')
+  if (battles.length === 0) return []
+
+  const { data: mapRows, error } = await env.db
+    .from('battle_maps')
+    .select('id, name, tags, user_id, is_public')
+    .or(`user_id.eq.${env.adventure.creator_id},is_public.is.true`)
+    .order('created_at')
+  assertOk(error, 'battle maps load failed')
+  const rows = (mapRows ?? []) as { id: string; name: string; tags: string[] | null; user_id: string }[]
+  const candidates: MapCandidate[] = [
+    ...rows.filter((m) => m.user_id === env.adventure.creator_id),
+    ...rows.filter((m) => m.user_id !== env.adventure.creator_id),
+  ].map((m) => ({ id: m.id, name: m.name, tags: m.tags ?? [] }))
+
+  const warnings: { targetId: string; message: string }[] = []
+  for (const battle of battles) {
+    const fiction = [battle.summary, battle.location?.name ?? '', battle.location?.description ?? ''].join(' ')
+    const match = pickBattleMap(fiction, candidates)
+    if (!match.mapId) {
+      warnings.push({
+        targetId: battle.id,
+        message: candidates.length === 0
+          ? 'No battle map assigned: the map library is empty. Upload and tag maps at /maps; this fight resolves on an open field.'
+          : `No battle map matched this fight${battle.location ? ` at ${battle.location.name}` : ''}. ` +
+            'Tag a map with the ground it depicts (dungeon, cave, crypt, forest, ...) or assign one by hand; ' +
+            'until then it resolves on an open field.',
+      })
+      continue
+    }
+    const { error: updateError } = await env.db
+      .from('encounters')
+      .update({ battle_map_id: match.mapId })
+      .eq('id', battle.id)
+    assertOk(updateError, 'battle map assignment failed')
+  }
+  return warnings
+}
+
 export async function runStage5(env: StageEnv, chapterId: string): Promise<void> {
   const chapter = await loadChapter(env, chapterId)
   const objectives = await loadChapterObjectives(env, chapterId)
@@ -260,7 +322,9 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
   assertOk(npcError, 'npcs load failed')
   const { data: chapterLocations, error: locError } = await env.db
     .from('locations')
-    .select('id, name')
+    // `description` is not shown to the encounter designer - it feeds the battle-map tag match,
+    // where "a flooded undercroft beneath the chapel" is what names the ground.
+    .select('id, name, description')
     .eq('chapter_id', chapterId)
     .order('created_at')
   assertOk(locError, 'locations load failed')
@@ -332,6 +396,16 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
     assertOk(error, 'objective encounter_ids update failed')
   }
 
+  const mapWarnings = await assignBattleMaps(
+    env,
+    output.encounters.map((e, i) => ({
+      id: inserted![i].id,
+      type: e.type,
+      summary: e.spec.summary,
+      location: e.locationKey ? locationKeys.byKey.get(e.locationKey) ?? null : null,
+    })),
+  )
+
   const budgetWarnings = output.encounters
     .map((e, i) => ({ e, id: inserted![i].id }))
     .filter(({ e }) => e.budget && e.budget.verdict !== 'within')
@@ -349,6 +423,23 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
       })),
     )
     assertOk(error, 'budget warnings insert failed')
+  }
+
+  if (mapWarnings.length > 0) {
+    const { error } = await env.db.from('guide_warnings').insert(
+      mapWarnings.map((w) => ({
+        adventure_id: env.adventure.id,
+        stage: 5,
+        target_table: 'encounters',
+        target_id: w.targetId,
+        message: w.message,
+        // A fight without a map still runs (open field), so this is a call to author or tag a
+        // map, not a blocker. Logged rather than silently floored: a thin starter library must
+        // not read as full coverage (F09 SS12).
+        kind: 'info',
+      })),
+    )
+    assertOk(error, 'battle map warnings insert failed')
   }
 
   // Deterministic trims made by the parser (an unsurvivable encounter cut down to size) are

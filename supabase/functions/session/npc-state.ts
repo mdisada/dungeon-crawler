@@ -169,6 +169,30 @@ async function createCorpseProp(
 }
 
 /**
+ * The boss among a beat's AUTHORED cast (`encounter_spec.params.npc_ids`), if it names one.
+ *
+ * The precise counterpart to `bossReferencedBy`: ids from a closed, authored vocabulary rather
+ * than a name match on free text. Combat uses this to mark the manifest's boss, and precision is
+ * the whole point - an explicit boss is ADDED to the fight if the enemy lines did not already
+ * field it, so a loose match would drop the campaign antagonist into a routine patrol.
+ */
+export async function bossAmongNpcIds(
+  service: SupabaseClient,
+  adventureId: string,
+  npcIds: string[],
+): Promise<{ id: string; name: string } | null> {
+  if (npcIds.length === 0) return null
+  const { data } = await service
+    .from('npcs')
+    .select('id, name')
+    .eq('adventure_id', adventureId)
+    .eq('role', 'boss')
+    .in('id', npcIds)
+  const rows = ((data ?? []) as { id: string; name: string }[]).filter((r) => r.name)
+  return rows.sort((a, b) => a.id.localeCompare(b.id))[0] ?? null
+}
+
+/**
  * The boss NPC a free-text combat label refers to, if any. Name containment both ways, so
  * "The Whispering Maw's Manifestation" resolves to the boss "The Whispering Maw". The
  * placeholder-combat paths use it to tell an ad-hoc boss clash from a fight with ordinary foes.

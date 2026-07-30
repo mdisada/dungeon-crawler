@@ -21,6 +21,8 @@ export interface CombatEncounterOption {
   summary: string
   enemies: EnemyLine[]
   outcomeAtoms: string[]
+  /** The map stage 5 assigned this fight; the Lab replays on it so the manifest matches live play. */
+  battleMapId: string | null
 }
 
 export interface AdventureCombatContext {
@@ -55,6 +57,7 @@ interface EncounterRow {
   adventure_id: string
   spec: unknown
   outcome_atoms: unknown
+  battle_map_id: string | null
 }
 
 /**
@@ -63,7 +66,7 @@ interface EncounterRow {
  */
 export async function listCombatEncounters(): Promise<CombatEncounterOption[]> {
   const [encRes, advRes] = await Promise.all([
-    supabase.from('encounters').select('id, adventure_id, spec, outcome_atoms').eq('type', 'battle'),
+    supabase.from('encounters').select('id, adventure_id, spec, outcome_atoms, battle_map_id').eq('type', 'battle'),
     supabase.from('adventures').select('id, title'),
   ])
   if (encRes.error) throw new Error(`Encounters load failed: ${encRes.error.message}`)
@@ -81,6 +84,7 @@ export async function listCombatEncounters(): Promise<CombatEncounterOption[]> {
       outcomeAtoms: Array.isArray(row.outcome_atoms)
         ? (row.outcome_atoms as unknown[]).filter((a): a is string => typeof a === 'string')
         : [],
+      battleMapId: row.battle_map_id,
     }))
     .filter((e) => e.enemies.length > 0)
 }

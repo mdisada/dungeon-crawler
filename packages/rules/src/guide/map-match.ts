@@ -1,0 +1,149 @@
+// Battle-map assignment (F09 SS3.4): pick the map an authored fight is resolved on by matching
+// the encounter's fiction against a map's tags. Pure data in, a map id out - no I/O, no LLM call.
+//
+// Code owns this rather than the encounter designer for the same reason code owns outcome atoms
+// (MAIN-SPEC SS1.1(2a)): "which map fits a crypt ambush" is a lookup over a closed vocabulary, and
+// a model asked to re-pick it would only add drift between regenerations. Deterministic also means
+// two runs of one guide fight on the same ground.
+//
+// No match returns null, NOT an arbitrary map: the initiator already floors a mapless fight on an
+// open field, and an open field contradicts nothing - a tavern interior standing in for an open
+// harbour is a fiction error the table can see. The caller logs the miss as a guide warning so a
+// thin starter library never reads as full coverage (F09 SS12).
+
+/** The tag vocabulary the starter library is authored against (frontend MAP_TAG_SUGGESTIONS). */
+export const MAP_TAGS = [
+  'dungeon', 'cave', 'crypt', 'forest', 'interior', 'street', 'tavern', 'wilderness',
+  'ship', 'temple', 'ruins', 'camp',
+] as const
+
+export type MapTag = (typeof MAP_TAGS)[number]
+
+/**
+ * Words in the fiction that call for each tag. Singulars only - the tokenizer also tries each
+ * token with a trailing "s" removed, so "caverns" reaches "cavern".
+ */
+const TAG_KEYWORDS: Record<MapTag, string[]> = {
+  dungeon: ['dungeon', 'vault', 'cell', 'cellar', 'catacomb', 'oubliette', 'prison', 'keep', 'lair', 'undercroft'],
+  cave: ['cave', 'cavern', 'grotto', 'tunnel', 'mine', 'shaft', 'burrow', 'chasm'],
+  crypt: ['crypt', 'tomb', 'mausoleum', 'graveyard', 'cemetery', 'ossuary', 'barrow', 'sepulchre', 'necropolis'],
+  forest: ['forest', 'wood', 'woodland', 'grove', 'thicket', 'glade', 'copse', 'canopy'],
+  interior: ['hall', 'room', 'chamber', 'manor', 'house', 'office', 'warehouse', 'library', 'workshop', 'kitchen', 'parlour', 'study', 'attic'],
+  street: ['street', 'alley', 'square', 'plaza', 'market', 'road', 'bridge', 'courtyard', 'dock', 'quay', 'wharf', 'harbour', 'harbor', 'gate'],
+  tavern: ['tavern', 'inn', 'alehouse', 'taproom', 'brewery'],
+  wilderness: ['moor', 'hill', 'plain', 'field', 'meadow', 'ridge', 'valley', 'marsh', 'swamp', 'bog', 'fen', 'tundra', 'desert', 'cliff', 'river', 'ford'],
+  ship: ['ship', 'boat', 'deck', 'vessel', 'barge', 'galley', 'hold', 'schooner', 'hull'],
+  temple: ['temple', 'shrine', 'chapel', 'cathedral', 'sanctum', 'sanctuary', 'altar', 'monastery', 'abbey'],
+  ruins: ['ruin', 'rubble', 'derelict', 'crumbling', 'razed', 'abandoned', 'husk'],
+  camp: ['camp', 'campsite', 'encampment', 'tent', 'bivouac', 'campfire', 'stockade'],
+}
+
+/**
+ * Nearest-tag fallback (F09 SS3.4): tags that read as the same KIND of ground. A crypt fight on a
+ * dungeon map is a loose match a table accepts; the same fight on a tavern map is not.
+ */
+const TAG_NEIGHBOURS: Record<MapTag, MapTag[]> = {
+  dungeon: ['cave', 'crypt', 'ruins'],
+  cave: ['dungeon', 'crypt', 'ruins'],
+  crypt: ['dungeon', 'cave', 'ruins', 'temple'],
+  forest: ['wilderness', 'camp'],
+  interior: ['tavern', 'temple', 'dungeon'],
+  street: ['interior', 'camp', 'ruins'],
+  tavern: ['interior'],
+  wilderness: ['forest', 'camp', 'street'],
+  ship: ['interior', 'street'],
+  temple: ['interior', 'ruins', 'crypt'],
+  ruins: ['dungeon', 'crypt', 'wilderness'],
+  camp: ['wilderness', 'forest'],
+}
+
+/** A `battle_maps` row reduced to what the match needs. */
+export interface MapCandidate {
+  id: string
+  name: string
+  tags: string[]
+}
+
+/** How well the chosen map fits: an authored tag, a nearest-tag fallback, or nothing fit. */
+export type MapMatchQuality = 'tag' | 'neighbour' | 'none'
+
+export interface MapMatch {
+  mapId: string | null
+  quality: MapMatchQuality
+  /** The fiction tags that drove the pick - what a guide warning or an editor tooltip shows. */
+  matchedTags: MapTag[]
+}
+
+const NO_MATCH: MapMatch = { mapId: null, quality: 'none', matchedTags: [] }
+
+function tokenize(text: string): Set<string> {
+  const tokens = new Set<string>()
+  // Split CamelCase before lowercasing: the whole starter library is named "OldGraveyardPublic",
+  // "DesertMineEntrancePublic" - one token each, and every genre word in them invisible.
+  for (const raw of text.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z]+/)) {
+    if (raw.length < 3) continue
+    tokens.add(raw)
+    if (raw.endsWith('s')) tokens.add(raw.slice(0, -1))
+  }
+  return tokens
+}
+
+/** The tags a piece of fiction asks for, in MAP_TAGS order (deterministic). */
+export function tagsForFiction(fiction: string): MapTag[] {
+  const tokens = tokenize(fiction)
+  return MAP_TAGS.filter((tag) =>
+    tokens.has(tag) || TAG_KEYWORDS[tag].some((keyword) => tokens.has(keyword)))
+}
+
+/**
+ * A candidate's effective tags: its authored tags plus any the map's own NAME states. An untagged
+ * "Sunken Crypt" upload is still a crypt map, and the starter library was uploaded before the tags
+ * column existed.
+ */
+function candidateTags(candidate: MapCandidate): Set<MapTag> {
+  const tags = new Set<MapTag>()
+  for (const raw of candidate.tags) {
+    const tag = raw.trim().toLowerCase()
+    if ((MAP_TAGS as readonly string[]).includes(tag)) tags.add(tag as MapTag)
+  }
+  for (const tag of tagsForFiction(candidate.name)) tags.add(tag)
+  return tags
+}
+
+/**
+ * Pick the best map for a fight, or null when nothing fits.
+ *
+ * `fiction` is the encounter summary plus its location name/description - whatever text states
+ * where the fight happens. Candidates are scored on exact tag overlap first, nearest-tag overlap
+ * second; ties break on candidate order, so the CALLER controls preference (own maps before
+ * public starters) by the order it passes them in.
+ */
+export function pickBattleMap(fiction: string, candidates: MapCandidate[]): MapMatch {
+  const wanted = tagsForFiction(fiction)
+  if (wanted.length === 0 || candidates.length === 0) return NO_MATCH
+
+  const wantedSet = new Set<MapTag>(wanted)
+  const neighbours = new Set<MapTag>()
+  for (const tag of wanted) {
+    for (const near of TAG_NEIGHBOURS[tag]) {
+      if (!wantedSet.has(near)) neighbours.add(near)
+    }
+  }
+
+  let best: MapMatch = NO_MATCH
+  let bestScore = 0
+  for (const candidate of candidates) {
+    const tags = candidateTags(candidate)
+    const exact = wanted.filter((tag) => tags.has(tag))
+    const near = [...neighbours].filter((tag) => tags.has(tag))
+    const score = exact.length * 3 + near.length
+    if (score <= bestScore) continue
+    bestScore = score
+    best = {
+      mapId: candidate.id,
+      quality: exact.length > 0 ? 'tag' : 'neighbour',
+      matchedTags: exact.length > 0 ? exact : MAP_TAGS.filter((tag) => near.includes(tag)),
+    }
+  }
+  return best
+}
