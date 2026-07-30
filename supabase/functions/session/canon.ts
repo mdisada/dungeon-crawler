@@ -192,6 +192,58 @@ export async function presentCast(
 }
 
 /**
+ * THE PLACES THIS STORY HAS, AND WHICH ONES THE PARTY HAS ACTUALLY BEEN TO (2026-07-30).
+ *
+ * `hereFeatures` carries the CURRENT location only, and nothing carried the rest - yet the narrator
+ * is asked about other places constantly, because an NPC's exposition is mostly about elsewhere. With
+ * no authored fact in front of it, it invented, and the invention then collided with the guide.
+ *
+ * Run d3f20788, all three from this one gap:
+ *   - #4  "They pulled him from Lock 3 three nights ago" - while Lock 3's authored arrival line reads
+ *         "a dead man lies at the bottom with water still dripping from his clothes" and an
+ *         ingredient reads "Edren Hoss is dead - the body is here to be examined". Written at the
+ *         saltworks, about a place the narrator had been told nothing about.
+ *   - #20 "a dead man bobs in a dry chamber" - the same invention, plus an impossible verb.
+ *   - #42/#46 the same authored arrival narrated twice, four entries apart, because nothing recorded
+ *         that the party had already been there.
+ *
+ * So each place travels with its authored one-liner AND whether it has been reached. The visited
+ * flag is what makes this safe to hand over: the accompanying instruction is that an unreached place
+ * may be REFERRED to but never described as though seen, which is the line #20 crossed.
+ *
+ * Visited is read from `scene_travel` plus wherever the party is standing now.
+ */
+export async function placeLines(
+  service: SupabaseClient,
+  adventureId: string,
+  currentLocationId: string | null,
+): Promise<string> {
+  const [locResult, travelResult] = await Promise.all([
+    service.from('locations').select('id, name, arrival_line').eq('adventure_id', adventureId),
+    service.from('event_log').select('id:payload->>location_id')
+      .eq('adventure_id', adventureId).eq('type', 'scene_travel'),
+  ])
+  const rows = (locResult.data ?? []) as { id: string; name: string; arrival_line: string | null }[]
+  if (rows.length === 0) return ''
+  const visited = new Set(
+    ((travelResult.data ?? []) as { id: string | null }[]).map((e) => e.id ?? ''),
+  )
+  if (currentLocationId) visited.add(currentLocationId)
+
+  // Trimmed hard. This is orientation, not a second canon block - and an arrival line is a whole
+  // sentence, so eight of them unabridged would outweigh everything else the narrator is holding.
+  const clip = (text: string) => (text.length > 110 ? `${text.slice(0, 108).replace(/[,;:.\s]+$/, '')}...` : text)
+  const parts = rows.slice(0, 8).map((l) => {
+    const name = (l.name ?? '').trim()
+    if (!name) return ''
+    if (visited.has(l.id)) return `${name} (been there)`
+    const line = (l.arrival_line ?? '').trim()
+    return line ? `${name} (not reached) - ${clip(line)}` : `${name} (not reached)`
+  }).filter(Boolean)
+  return parts.length > 0 ? parts.join('; ') : ''
+}
+
+/**
  * WHAT IS IN THIS ROOM, as the guide wrote it (2026-07-29).
  *
  * 72% of folded player inputs are questions and examinations - "what's the pounding", "what's in
@@ -266,6 +318,51 @@ export async function nodePull(
   // is the right answer only when nothing else is left.
   const next = unplayed.find((n) => n.role === 'route') ?? unplayed[0]
   const pull = next?.pull
+  return typeof pull === 'string' ? pull.trim() : ''
+}
+
+/**
+ * The next objective's pull, but ONLY when the party is already standing where that node happens
+ * (2026-07-30).
+ *
+ * `nodePull` is right for the narrator's PULL line, which is orientation - naming somewhere the
+ * party is heading is exactly its job. It is wrong for the objective-COMPLETION narration, which
+ * renders as present-tense scene description.
+ *
+ * That distinction is a bug I shipped earlier today and this run caught. Replacing the quoted
+ * `"${next.title}"` with the next node's pull stopped the completion narration leaking a quest
+ * string and started it leaking a PLACE: run d3f20788 #68 published "The ledger rests against the
+ * control panel inside Lock 3's housing ... Fenn Carrow's breathing is ragged somewhere in that
+ * maze" while the party was still at Hoss cottage, one event before the scene_travel that took them
+ * there. Same root as F4/F5 - describing a place nobody has reached.
+ *
+ * So: same place, use it. Different place, return '' and let the caller leave the thread unnamed,
+ * which reads as a smaller defect than either a quest title or a room the party cannot see.
+ */
+export async function nextPullIfHere(
+  service: SupabaseClient,
+  adventureId: string,
+  objectiveId: string | null,
+  partyLocationId: string | null,
+): Promise<string> {
+  if (!objectiveId) return ''
+  const [nodesResult, eventsResult] = await Promise.all([
+    service.from('story_nodes').select('key, index, role, pull, location_id')
+      .eq('adventure_id', adventureId).eq('objective_id', objectiveId).order('index'),
+    service.from('event_log').select('key:payload->>node_key')
+      .eq('adventure_id', adventureId).eq('type', 'encounter_resolved'),
+  ])
+  const resolved = new Set(
+    ((eventsResult.data ?? []) as { key: string | null }[]).map((e) => e.key ?? ''),
+  )
+  const rows = (nodesResult.data ?? []) as
+    { key: string; index: number; role: string; pull: string | null; location_id: string | null }[]
+  const unplayed = rows.filter((n) => !resolved.has(n.key))
+  const next = unplayed.find((n) => n.role === 'route') ?? unplayed[0]
+  if (!next) return ''
+  // A node with no authored location is "wherever the party is", so it can never be elsewhere.
+  if (next.location_id && next.location_id !== partyLocationId) return ''
+  const pull = next.pull
   return typeof pull === 'string' ? pull.trim() : ''
 }
 
@@ -457,6 +554,7 @@ export async function buildCanon(
   // are sent once instead of re-explained on every call.
   const established = await establishedSoFar(service, adventureId)
   const features = await hereFeatures(service, adventureId, state.scene.locationId ?? null)
+  const places = await placeLines(service, adventureId, state.scene.locationId ?? null)
   const story = [
     // The authored contents of the room the party is standing in. Ahead of everything else because
     // it is what a player is most likely to ask about next.
@@ -465,6 +563,12 @@ export async function buildCanon(
     // The authored record of what has already happened, ahead of the flag list below: a sentence
     // the guide wrote beats a de-slugged fragment every time.
     established.length > 0 ? `STORY  ${established.join(' ')}` : '',
+    // Where everything is, and what is true at the places they have NOT been - so exposition about
+    // elsewhere is a lookup instead of an invention. See placeLines.
+    places
+      ? `PLACES ${places} - a place marked "not reached" may be spoken ABOUT, never described as ` +
+        'though the party can see it, and what is written here is already true there.'
+      : '',
     // WHAT A FORCE IS, not just its name (2026-07-28). The fact-checker above is told that these
     // "are not people and never speak"; the narrator was handed the bare list and left to work it
     // out. It did not, and could not reasonably be expected to.

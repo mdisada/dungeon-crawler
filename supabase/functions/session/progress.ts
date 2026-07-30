@@ -16,7 +16,7 @@ import { runClaimCheck, runConsistency, runObjectiveJudge } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
 import { ensureSpineLoop, loadLoops, planAndOpenBeat } from './beats.ts'
 import { graphDecision, inPlayNodeKey, loadObjectiveNodes } from './graph-read.ts'
-import { establishedSoFar, nodePull } from './canon.ts'
+import { establishedSoFar, nextPullIfHere, nodePull } from './canon.ts'
 import { recordSceneLedger } from './ledger.ts'
 import { applyMilestones } from './milestones.ts'
 import { narrationBeat } from './narration.ts'
@@ -235,8 +235,12 @@ async function completeObjective(
     return true
   }
 
+  // Only when the party is already there - see nextPullIfHere for the leak this closes.
   const nextPull = next
-    ? await nodePull(service, env.adventureId, next.id, null).catch(() => '')
+    ? await nextPullIfHere(
+        service, env.adventureId, next.id,
+        (await loadState(service, env.adventureId)).state.scene.locationId ?? null,
+      ).catch(() => '')
     : ''
   await narrationBeat(
     service, env, sessionId,

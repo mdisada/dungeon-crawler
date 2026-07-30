@@ -162,3 +162,36 @@ export function resolveNpcNames(
   }
   return { ids: ids.slice(0, limit), unresolved }
 }
+
+/**
+ * Is this NPC authored to be somewhere OTHER than where the party is standing? (2026-07-30)
+ *
+ * Run d3f20788: Mira Hoss is authored `obj0 = Hoss cottage` with no Lock 3 stop. The party finished
+ * at the cottage, travelled to Lock 3, and the SAME npc_id was immediately re-staged there -
+ *
+ *     t26  social_ended    npc_ids:[Mira]
+ *     t26  scene_travel -> Lock 3
+ *     t26  social_started  npc_ids:[Mira]
+ *     t28  npc_action {type:'join_combat'} npc_id:Mira
+ *
+ * She then spoke twice at Lock 3, giving tactical orders in a scene she is not in, four entries
+ * after the narration had explicitly left her at the cottage packing a trunk. Both LLMs behaved
+ * correctly: state said she was present, so the NPC agent voiced her and the narrator described her.
+ * `startSocial` guards the DM, the count, groups and the dead - and never asked where anyone was.
+ *
+ * DELIBERATELY CONSERVATIVE, because a false refusal is worse than the bug this fixes: refusing to
+ * stage is what killed the Maren beat, and the party paid a setback for a scene nobody saw. So the
+ * answer is "no" on every uncertainty -
+ *   - no authored stop yet for this objective (`npcLocationAt` returns null): unconstrained, allow.
+ *     Edren Hoss has an empty itinerary and must never be blocked by this.
+ *   - the party's location is unknown: nothing to compare, allow.
+ * Only a KNOWN mismatch of two known places blocks, and callers drop that one NPC rather than
+ * failing the whole staging call.
+ */
+export function stagedElsewhere(
+  authoredLocationId: string | null | undefined,
+  partyLocationId: string | null | undefined,
+): boolean {
+  if (!authoredLocationId || !partyLocationId) return false
+  return authoredLocationId !== partyLocationId
+}

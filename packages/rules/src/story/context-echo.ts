@@ -29,7 +29,7 @@
 // NEW is the narrator's own invention-reporting line (see introduced.ts). takeIntroduced
 // removes it first; this is the second line of defence, so a missed strip still cannot reach a
 // player.
-const HARD_LABELS = ['SCENE', 'GOAL', 'PULL', 'CAST', 'PARTY', 'SOFAR', 'KNOWN', 'NEW']
+const HARD_LABELS = ['SCENE', 'GOAL', 'PULL', 'CAST', 'PARTY', 'PLACES', 'SOFAR', 'KNOWN', 'NEW']
 /** Labels that are also ordinary words - only stripped as part of a run. */
 const SOFT_LABELS = ['LAST', 'EARLIER']
 

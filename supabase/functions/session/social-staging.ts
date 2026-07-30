@@ -4,6 +4,9 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
+import { npcLocationAt } from '../_shared/guide/npc-itinerary.ts'
+import type { ItineraryStop } from '../_shared/guide/npc-itinerary.ts'
+import { stagedElsewhere } from '../_shared/story/index.ts'
 import type { Json, SpeakerSlot } from '../_shared/state/index.ts'
 import { runGenericNpc, runInteractionSummary } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
@@ -63,6 +66,48 @@ async function speakerSlot(service: SupabaseClient, npc: NpcRow, side: 'left' | 
 }
 
 /** DM/creator launcher (F10 SS2): stage 1-3 NPCs and enter roleplay mode. */
+/**
+ * Splits a requested cast into those standing where the party is and those authored elsewhere.
+ *
+ * The comparison is `npcLocationAt(itinerary, currentObjectiveIndex)` against the scene's location -
+ * the same derivation the narrator's CAST line already uses to say "Pell is over at the Drowned
+ * Quarter". Conservative by construction: `npcLocationAt` returns null before an NPC's first stop
+ * and for an empty itinerary, and `stagedElsewhere` treats every null as "allow".
+ */
+async function filterToHere(
+  service: SupabaseClient,
+  adventureId: string,
+  npcs: readonly NpcRow[],
+): Promise<{
+  here: NpcRow[]
+  elsewhere: { id: string; name: string; authoredLocationId: string | null; partyLocationId: string | null }[]
+}> {
+  const state = (await loadState(service, adventureId)).state
+  const partyLocationId = state.scene.locationId ?? null
+  if (!partyLocationId) return { here: [...npcs], elsewhere: [] }
+
+  const { data: objectiveRows } = await service
+    .from('objectives').select('id, index').eq('adventure_id', adventureId)
+  const objectiveIndex = ((objectiveRows ?? []) as { id: string; index: number }[])
+    .find((o) => o.id === state.objectives?.currentId)?.index ?? -1
+
+  const { data: itineraryRows } = await service
+    .from('npcs').select('id, itinerary').eq('adventure_id', adventureId)
+    .in('id', npcs.map((n) => n.id))
+  const byId = new Map(((itineraryRows ?? []) as { id: string; itinerary: ItineraryStop[] | null }[])
+    .map((r) => [r.id, r.itinerary ?? []]))
+
+  const here: NpcRow[] = []
+  const elsewhere: { id: string; name: string; authoredLocationId: string | null; partyLocationId: string | null }[] = []
+  for (const npc of npcs) {
+    const authoredLocationId = npcLocationAt(byId.get(npc.id) ?? [], objectiveIndex)
+    if (stagedElsewhere(authoredLocationId, partyLocationId)) {
+      elsewhere.push({ id: npc.id, name: npc.name, authoredLocationId, partyLocationId })
+    } else here.push(npc)
+  }
+  return { here, elsewhere }
+}
+
 export async function startSocial(service: SupabaseClient, adventureId: string, userId: string, npcIds: string[]) {
   const ctx = await loadContext(service, adventureId, userId)
   if (!ctx?.isDm) return { status: 403, body: { error: 'Only the DM (or creator in Full-AI) can start a scene' } }
@@ -92,9 +137,29 @@ export async function startSocial(service: SupabaseClient, adventureId: string, 
     }
     npcs.push(npc)
   }
+  // NOBODY IS STAGED SOMEWHERE THEY ARE NOT (2026-07-30). The guards above ask who someone is and
+  // whether they are alive; none ever asked WHERE they are. See `stagedElsewhere` for the run where
+  // Mira Hoss - authored at Hoss cottage, explicitly left there packing a trunk - was re-staged at
+  // Lock 3 after the party travelled, then voiced tactical orders in a scene she was not in.
+  //
+  // FILTERED, NOT REFUSED. Returning 409 here would fail the whole staging call and take the scene
+  // with it, which is how refusing killed the Maren beat and charged the party a setback for a scene
+  // nobody saw. Dropping the one person who does not belong leaves the scene to open with whoever
+  // does. Only a KNOWN mismatch of two known places drops anyone; every uncertainty stages.
+  const staged = await filterToHere(service, adventureId, npcs)
+  for (const dropped of staged.elsewhere) {
+    await logEvent(service, adventureId, null, 'incident', {
+      kind: 'staging_elsewhere_dropped', npc_id: dropped.id, name: dropped.name,
+      authored_at: dropped.authoredLocationId, party_at: dropped.partyLocationId,
+    }).catch(() => {})
+  }
+  if (staged.here.length === 0) {
+    return { status: 409, body: { error: 'Nobody in that group is where the party is standing' } }
+  }
+
   const speakers: SpeakerSlot[] = []
-  for (let i = 0; i < npcs.length; i++) {
-    speakers.push(await speakerSlot(service, npcs[i], i % 2 === 0 ? 'right' : 'left'))
+  for (let i = 0; i < staged.here.length; i++) {
+    speakers.push(await speakerSlot(service, staged.here[i], i % 2 === 0 ? 'right' : 'left'))
   }
 
   const after = await commitDiffs(service, adventureId, () => [

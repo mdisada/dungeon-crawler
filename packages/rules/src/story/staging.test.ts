@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { addressedNpcId, isStageable, npcStateOf, resolveAddressed, resolveNpcNames, stageableNpcs } from './staging'
+import { addressedNpcId, isStageable, npcStateOf, resolveAddressed, resolveNpcNames, stagedElsewhere, stageableNpcs } from './staging'
 import type { NpcStageRow } from './staging'
 
 const cast: NpcStageRow[] = [
@@ -143,5 +143,25 @@ describe('resolveAddressed - naming someone who is not here (2026-07-27)', () =>
   it('does not match a name inside a longer word', () => {
     expect(resolveAddressed('I check the vestibule', staged, [{ name: 'Vest' }]))
       .toEqual({ kind: 'unclear' })
+  })
+})
+
+describe('stagedElsewhere', () => {
+  it('blocks a known mismatch - the Mira-at-Lock-3 case', () => {
+    expect(stagedElsewhere('hoss-cottage', 'lock-3')).toBe(true)
+  })
+
+  it('allows an NPC standing where the party is', () => {
+    expect(stagedElsewhere('lock-3', 'lock-3')).toBe(false)
+  })
+
+  it('allows every uncertainty - a false refusal costs more than the bug', () => {
+    // No authored stop yet (npcLocationAt returns null before an NPC's first stop), an empty
+    // itinerary like Edren Hoss's, or a party whose location is unknown.
+    expect(stagedElsewhere(null, 'lock-3')).toBe(false)
+    expect(stagedElsewhere(undefined, 'lock-3')).toBe(false)
+    expect(stagedElsewhere('hoss-cottage', null)).toBe(false)
+    expect(stagedElsewhere(null, null)).toBe(false)
+    expect(stagedElsewhere('', 'lock-3')).toBe(false)
   })
 })

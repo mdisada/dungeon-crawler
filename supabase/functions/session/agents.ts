@@ -1086,7 +1086,10 @@ const NARRATOR_CONTEXT_KEY =
   'it, and never close a passage on it. GOAL: the same thing as a bare task title - orientation ' +
   'ONLY, never stated, echoed, or used as a closing line. HERE: who is in this scene and who they ' +
   'ARE - hold every detail true, their role and their gender included. CAST: exist, but elsewhere. ' +
-  'GONE: discuss freely, never stage or voice. FORCES: proper nouns that exist in this world - ' +
+  'PLACES: every location and whether the party has been there. One marked "not reached" may be ' +
+  'named and discussed, never described as though seen - and what is listed for it is already ' +
+  'true, so never contradict it. GONE: discuss freely, never stage or voice. ' +
+  'FORCES: proper nouns that exist in this world - ' +
   'you may NAME one, and you do not know what any of them mean: never explain, define, or ' +
   'attach workings to one. DONE/CLOCK/PROPS: established - build on, never redefine. Spell ' +
   'names EXACTLY. SOFAR: the story so far, oldest first - already told, never retell. LAST: the ' +
