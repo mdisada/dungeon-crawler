@@ -319,18 +319,52 @@ on turn 7, so no chips exist to see. The fix cannot be credited for those.
 **`trailing_label_stripped` 4 -> 0** independently confirms that progress.ts quoting `"${next.title}"`
 was the real second source, not a still-empty pull.
 
-## The new top constraint: `engage_before_arrival`
+## RETRACTED: `engage_before_arrival` is not a bottleneck. It is the fix, working.
 
-Giving the player chips did not remove the affordance problem - it made it legible. Three hits, and
-now unambiguously causal, because the player is reading the chips it is being offered:
+Written an hour earlier on this page as "the measured bottleneck" off three log lines, without
+checking what the guard does. It does this (entry.ts ~455-492): commits the travel with `setScene`,
+logs `scene_travel {via: 'engage_before_arrival'}`, narrates the journey using the node's authored
+`arrivalLine`, and returns `resolved: 'travelled'`. It explicitly does NOT refuse - the comment says
+why, because refusing once killed a beat and charged the party a setback for a scene nobody saw.
 
-    party_at "Greymire Saltworks"  scene_at "Lock 3"
-    party_at "Lock 3"              scene_at "Hoss cottage"
-    party_at "the company store"   scene_at "Hoss cottage"
+So a chip for a scene elsewhere costs ONE travel turn and then works. That is correct DM behaviour,
+not waste. Three incidents, three `travelled` turns, no failures. **Do not "fix" this.**
 
-Chips for nodes at OTHER locations are published to a party standing somewhere else, and the party
-now acts on them. That is open item 3 (affordance lifecycle steps 2-4, the missing `PULLED ->
-PRESENT` transition) promoted from a known gap to the measured bottleneck.
+## What the per-objective cost actually is
+
+Decomposed from d3f20788's spine timeline:
+
+| | |
+|---|---|
+| t1-t6 | no beat exists; every turn folds |
+| t7 | offer accepted -> first beat opens |
+| t7 -> t14 | **objective 1 complete: 7 turns** |
+| t14 -> t26 | **objective 2 complete: 12 turns** |
+| t26 -> t30 | objective 3 in progress when the run ended |
+
+**7 and 12 turns per objective once the machinery is engaged.** A 3-objective adventure therefore
+needs roughly 30 + opening; a 4-objective one roughly 40 + opening. Against a 30-50 turn
+calibration that fits, marginally. **There is no pacing crisis.** The 22.1 figure was the blind
+harness, and the alarm raised off it - including the reveal-gate hunt - was chasing an artifact.
+
+The 12-turn objective is not a stall either: t19-t26 was an open social encounter with a
+mixed-quality party spending turns on "I look at Mira", "what is ostvik" and "I check my weapon".
+Persona noise inside a live scene, which is what a real table looks like.
+
+## The one genuine remaining cost: the opening
+
+t1-t6, and a median of 3 turns across 28 runs (max 18). It is structural, not a bug: **no beat opens
+until the quest offer is accepted, so no affordances exist, so the party can only fold.** The
+`entry_mapped` payloads say it plainly - `had_offer: false` on every one of those turns, which is
+accurate rather than broken, because `had_offer` means "a scene is on offer" and none was.
+
+The director does press (`offer_pressure` at t3, "offer unanswered for 3 turns") and a `reveal` rung
+fired at t8. The machinery is awake; there is simply nothing authored for the party to engage with
+before they say yes.
+
+That is 10-20% of a 30-turn budget, and it is the cheapest remaining win on this page. The shape of
+a fix - open the first beat at session start rather than on acceptance, or publish its affordances
+alongside the offer - is a design decision, not a repair.
 
 ## Do this first, in order
 
@@ -339,7 +373,8 @@ PRESENT` transition) promoted from a known gap to the measured bottleneck.
    run against the 22.1 blind average, so the old figure was inflated but the budget is still tight:
    a median 3-objective adventure needs ~45 turns against a 30-50 calibration. Do NOT retune
    thresholds on n=1; gather two or three sighted runs first.
-3. **Close the affordance lifecycle** (item 3). Now the measured bottleneck, not a theoretical one.
+3. **The opening**, not the affordance lifecycle - see the retraction above. Steps 2-4 of item 3 may
+   still be worth doing on their own merits, but they are not what is costing turns.
 4. Leave the reveal gate alone as a pacing fix. Clean up the unparsed condition separately, on its
    own merits, or drop the field.
 
