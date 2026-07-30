@@ -1,0 +1,128 @@
+// Strict JSON Schema for the stage-4 reply.
+//
+// WHY THIS EXISTS (2026-07-31). Stage 4 is the largest response in the pipeline - ~20k characters
+// per call - and it was generated free-form, with the shape described in prose and every rule
+// enforced only after the fact by parseStage4. Four consecutive generations of one adventure died
+// there, each on a different symptom of the same thing:
+//
+//   response JSON does not parse: Expected ':' after property name at position 13383   (of ~19k)
+//   $.coop_sets[0].reveals: expected a non-empty string
+//   $.ingredients: expected an array of length 4-12                                    (14 came back)
+//   ... and a cut-off reply the provider killed mid-stream
+//
+// Constrained decoding forecloses the syntax and the missing-field failures outright: the JSON
+// cannot be malformed, a required key cannot be absent, and an enum field cannot hold prose.
+//
+// NO LENGTH BOUNDS ON THE FOUR POOLS, deliberately (objective_numbers, two entries at most, is
+// small enough to survive). minItems/maxItems is what a schema is FOR here, and
+// Google refuses to serve a schema carrying them - "the specified schema produces a constraint
+// that has too many states for serving", 400, verified against gemini-2.5-flash-lite while
+// removing them one kind at a time (2026-07-31). A schema only one of the two seats can run is
+// worth less than one both can, and counts are the one failure parseStage4 can already repair by
+// itself: it trims an over-generous pool and fails only an under-supplied one.
+//
+// Measured on the chapter that had failed four times, same prompt, three runs:
+//   z-ai/glm-5.2                 94s   5736 tokens   parsed
+//   google/gemini-2.5-flash-lite 14s   4770 tokens   parsed
+//   (and 75s / 3759 tokens on glm-5.2 with the bounded schema, before Google rejected it)
+//
+// Semantics stay in parseStage4 - a schema-conformant reply can still place a clue on a
+// nonexistent npc_key, contradict an earlier chapter, or leave every NPC dead. Shape is all this
+// buys, and shape is what was breaking.
+//
+// Strict mode requires additionalProperties:false and EVERY property listed in `required`, so
+// optional fields are expressed as nullable types rather than by omission.
+
+const str = { type: 'string' } as const
+const nullableStr = { type: ['string', 'null'] } as const
+
+const CR_VALUES = ['0', '1/8', '1/4', '1/2', '1', '2', '3', '4', '5']
+const ARCHETYPES = ['brute', 'skirmisher', 'sniper', 'caster', 'leader', 'minion']
+
+function obj(properties: Record<string, unknown>) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: Object.keys(properties),
+    properties,
+  }
+}
+
+const NPC = obj({
+  key: str,
+  name: str,
+  role: { type: 'string', enum: ['npc', 'boss'] },
+  pronouns: { type: 'string', enum: ['he/him', 'she/her', 'they/them', 'it/its'] },
+  initial_state: { type: 'string', enum: ['alive', 'dead', 'absent'] },
+  personality: obj({ traits: str, voice: str, wants: str }),
+  faction: nullableStr,
+  description: str,
+  image_prompt: str,
+  combat: obj({
+    cr: { type: 'string', enum: CR_VALUES },
+    archetype: { type: 'string', enum: ARCHETYPES },
+    skills: { type: 'array', items: str },
+    attack: nullableStr,
+  }),
+})
+
+const LOCATION = obj({
+  key: str,
+  name: str,
+  description: str,
+  image_prompt: str,
+  arrival_line: str,
+  features: { type: 'array', items: obj({ name: str, detail: str }) },
+})
+
+const COOP_SET = obj({
+  key: str,
+  kind: { type: 'string', enum: ['split_knowledge', 'complementary_obstacle'] },
+  reveals: str,
+})
+
+/**
+ * The affinity slot carries all three keys with two nulls, because strict mode cannot express
+ * "exactly one of these". parseAffinity ignores the nulls and still rejects a reply naming two.
+ */
+const AFFINITY = {
+  type: ['object', 'null'],
+  additionalProperties: false,
+  required: ['class', 'skill', 'background_tag'],
+  properties: { class: nullableStr, skill: nullableStr, background_tag: nullableStr },
+}
+
+function ingredient(objectiveCount: number) {
+  return obj({
+    type: { type: 'string', enum: ['clue', 'secret', 'event', 'item', 'rumor'] },
+    content: obj({ text: str }),
+    placement: obj({ location_key: nullableStr, npc_key: nullableStr, condition: nullableStr }),
+    reveals: str,
+    pillar_tags: { type: 'array', items: { type: 'string', enum: ['combat', 'social', 'exploration'] } },
+    reveals_to: AFFINITY,
+    coop_set_key: nullableStr,
+    objective_numbers: {
+      type: 'array',
+      minItems: 1,
+      // Never more than the chapter HAS: an objective_number the chapter cannot honour is a
+      // parseStage4 error, and the schema is the only place it can be made unwritable.
+      maxItems: Math.min(2, Math.max(1, objectiveCount)),
+      // No minimum/maximum. Google refuses to serve a schema that bounds an integer - "too many
+      // states for serving", verified 2026-07-31 against gemini-2.5-flash-lite - and a schema only
+      // one of the two seats can run is worth less than the range check parseStage4 already does.
+      items: { type: 'integer' },
+    },
+  })
+}
+
+export function stage4Schema(objectiveCount: number): { name: string; schema: Record<string, unknown> } {
+  return {
+    name: 'stage4_chapter_content',
+    schema: obj({
+      npcs: { type: 'array', items: NPC },
+      locations: { type: 'array', items: LOCATION },
+      coop_sets: { type: 'array', items: COOP_SET },
+      ingredients: { type: 'array', items: ingredient(objectiveCount) },
+    }),
+  }
+}

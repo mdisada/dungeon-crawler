@@ -187,6 +187,9 @@ export async function generateParsed<T>(
       system: prompt.system,
       user,
       maxTokens,
+      // Constrained decoding where the stage has a schema. llm.ts peels it off and retries as
+      // prose if a provider rejects it, so this can only ever help.
+      schema: prompt.schema,
       // This runner budgets its own wall clock (FEEDBACK_RETRY_BUDGET_MS) and owns the truncation
       // retry below, so llm.ts must not spend a silent doubled call on top of it.
       lengthRetry: false,

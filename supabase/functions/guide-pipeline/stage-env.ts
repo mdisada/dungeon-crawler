@@ -10,6 +10,15 @@ export interface StagePrompt {
   system: string
   user: string
   maxTokens: number
+  /**
+   * Strict JSON Schema for the reply, when the stage has one. Constrained decoding is the only
+   * thing that makes a long document's SYNTAX someone else's problem: stage 4 hand-wrote ~20k
+   * characters per call and broke its own JSON mid-document at position 13383 of 19k (live
+   * 2026-07-31), on top of an omitted field and an out-of-range count the week before - three
+   * failures a schema forecloses outright. llm.ts drops the schema and retries as prose if a
+   * provider rejects it, so a stage that supplies one is never worse off than one that does not.
+   */
+  schema?: { name: string; schema: Record<string, unknown> }
 }
 
 export interface StageEnv {

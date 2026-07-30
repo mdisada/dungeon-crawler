@@ -4,6 +4,7 @@
 // density guardrail (checked by validateCoopConformance below - also used by tests).
 
 import { Check, extractJsonObject } from '../json.ts'
+import { stage4Schema } from './stage4-schema.ts'
 import type { NpcStatSeed } from '../npc-stats.ts'
 import type {
   AdventureSeed,
@@ -90,7 +91,12 @@ export function maxCoopDemanding(objectiveCount: number): number {
   return Math.floor(objectiveCount / 3)
 }
 
-export function buildStage4Prompt(ctx: Stage4Context): { system: string; user: string; maxTokens: number } {
+export function buildStage4Prompt(ctx: Stage4Context): {
+  system: string
+  user: string
+  maxTokens: number
+  schema: { name: string; schema: Record<string, unknown> }
+} {
   const coopRules =
     ctx.seed.minPlayers > 1
       ? `
@@ -212,7 +218,11 @@ ${existing ? `\n${existing}` : ''}`
   //
   // A cap is a ceiling, not a spend: flash-lite writes this stage in ~3300 tokens and pays nothing
   // for the headroom. What the low cap bought was a guaranteed second call.
-  return { system, user, maxTokens: 7000 }
+  //
+  // The schema guarantees SHAPE - valid JSON, every required key present, enums honoured. Counts
+  // stay with the prompt above and the trim/floor in parseStage4, because a schema carrying array
+  // bounds is one Google will not serve (see stage4-schema.ts).
+  return { system, user, maxTokens: 7000, schema: stage4Schema(ctx.objectives.length) }
 }
 
 /**
@@ -234,7 +244,10 @@ function parseCombatSeed(value: unknown): NpcStatSeed {
 function parseAffinity(c: Check, value: unknown, path: string): AffinityRef | null {
   if (value === null || value === undefined) return null
   const o = c.obj(value, path)
-  const keys = Object.keys(o)
+  // Under the strict schema every slot is present with two nulls, because strict mode cannot say
+  // "exactly one of these"; a free-form reply sends the single key it means. Both arrive here.
+  const keys = Object.keys(o).filter((k) => o[k] !== null && o[k] !== undefined && o[k] !== '')
+  if (keys.length === 0) return null
   const allowed = ['class', 'skill', 'background_tag']
   if (keys.length !== 1 || !allowed.includes(keys[0])) {
     c.errors.push(`${path}: expected exactly one of {"class"|"skill"|"background_tag": string}`)
