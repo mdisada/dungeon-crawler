@@ -289,13 +289,58 @@ tuning against an artifact.
   before that acceptance there is no beat, so there are no affordances to publish either. The first
   `beat_opened` in c839c674 carried `trigger: quest_accepted`.
 
+## RESULT of doing that: measured 2026-07-30, run d3f20788
+
+Same plot text, fresh guide, same models, 30 turns. (Reuse of the *identical* guide was tried first
+and correctly refused with a 409 - that adventure already had a completed objective, resolved nodes
+and discovered clues, so it would have compared a sighted player on a half-finished story against a
+blind player on a fresh one. Worse confounding than a new guide. Cost $0 to learn.)
+
+| metric | blind (c839c674) | sighted (d3f20788) |
+|---|---|---|
+| objectives completed | 1 | **2** |
+| `folded_in` | 20 of 30 (67%) | **10 of 30 (33%)** |
+| first `encounter_entered` | turn 17 | **turn 11** |
+| `trailing_label_stripped` | 4 | **0** |
+| `engage_before_arrival` | 2 | 3 |
+| cost | $0.31 | $0.25 |
+
+**Chip-paste rate 25%** (4 of 16 mapped entries submitted a chip unedited). That is the number that
+makes the rest trustworthy: the agent is treating chips as suggestions, not a menu. The personas held
+- `poor` still typed "i look around" and "idk what to do", `probe` still asked "REACH: what does the
+foreman's shed supposedly have?", while `good` turns produced concrete reworded actions ("I gently
+pry the key from Mira's hand"). Had this been near 100% the harness would simply be over-measuring in
+the other direction and the figures would be equally worthless.
+
+Caveats, stated so nobody over-reads it: n=1 per arm, and the guides differ (same plot text, separate
+generation). Turns 1-6 still folded exactly as predicted - no beat exists until the offer is accepted
+on turn 7, so no chips exist to see. The fix cannot be credited for those.
+
+**`trailing_label_stripped` 4 -> 0** independently confirms that progress.ts quoting `"${next.title}"`
+was the real second source, not a still-empty pull.
+
+## The new top constraint: `engage_before_arrival`
+
+Giving the player chips did not remove the affordance problem - it made it legible. Three hits, and
+now unambiguously causal, because the player is reading the chips it is being offered:
+
+    party_at "Greymire Saltworks"  scene_at "Lock 3"
+    party_at "Lock 3"              scene_at "Hoss cottage"
+    party_at "the company store"   scene_at "Hoss cottage"
+
+Chips for nodes at OTHER locations are published to a party standing somewhere else, and the party
+now acts on them. That is open item 3 (affordance lifecycle steps 2-4, the missing `PULLED ->
+PRESENT` transition) promoted from a known gap to the measured bottleneck.
+
 ## Do this first, in order
 
-1. **Give the lab player the chips.** Pass `suggestedChoices` into `generatePlayerTurn`. Until then
-   the lab cannot measure pacing, and it is the cheapest change on this page.
-2. Re-measure turns/objective against a sighted player. Only then decide whether thresholds or
-   objective counts need to move.
-3. Leave the reveal gate alone as a pacing fix. Clean up the unparsed condition separately, on its
+1. ~~Give the lab player the chips.~~ DONE 2026-07-30 (abf08ab).
+2. ~~Re-measure against a sighted player.~~ DONE - see the table above. 15 turns/objective on this
+   run against the 22.1 blind average, so the old figure was inflated but the budget is still tight:
+   a median 3-objective adventure needs ~45 turns against a 30-50 calibration. Do NOT retune
+   thresholds on n=1; gather two or three sighted runs first.
+3. **Close the affordance lifecycle** (item 3). Now the measured bottleneck, not a theoretical one.
+4. Leave the reveal gate alone as a pacing fix. Clean up the unparsed condition separately, on its
    own merits, or drop the field.
 
 # Traps: read before believing an instrument
