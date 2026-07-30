@@ -314,6 +314,9 @@ export async function executeRun(run) {
       const player = await timed('play', 'player_agent.generate', `${actor.name} (${quality})`, async () => {
         const out = await generatePlayerTurn({
           model: config.model, quality, characterName: actor.name, lines, pendingOffer: offer,
+          // What a real player can SEE beside the input box. Withholding these is what made every
+          // pacing figure this harness produced an upper bound - see generatePlayerTurn's header.
+          suggestedChoices: state?.dialogue?.suggestedChoices ?? [],
         })
         playerSpend.usd += out.costUsd
         playerSpend.tokens += out.tokens

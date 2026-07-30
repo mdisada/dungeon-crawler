@@ -173,7 +173,29 @@ function pickStress(rng) {
  * usage accounting so the lab's spend guard sees player-agent spend too, not just the
  * system's usage_log rows.
  */
-export async function generatePlayerTurn({ model, quality, characterName, lines, pendingOffer }) {
+/**
+ * `suggestedChoices` is NOT optional decoration (2026-07-30).
+ *
+ * This agent got the transcript and the pending offer and nothing else, while a real player ALSO
+ * sees the authored affordance chips beside the input box - `state.dialogue.suggestedChoices`,
+ * written by graph-navigator.ts and rendered by intent-input-row.tsx. So the lab was measuring a
+ * player who could not see what the game was offering, and every pacing number it produced was
+ * wrong in the same direction.
+ *
+ * Measured cost of that blindness, across 26 healthy runs: 22.1 turns per objective completion, 34%
+ * of all turns folding as colour, 27% of runs finishing zero objectives. Run c839c674 folded 16 of
+ * its first 17 turns with the agent typing "idk what to do" on turn 8 - not because the story had
+ * nothing to offer, but because nobody told it what was on offer.
+ *
+ * Passed as SUGGESTIONS, deliberately, in the words the state type already uses. The chips must not
+ * become a menu the agent dutifully clicks: that would over-measure progression exactly as hard as
+ * hiding them under-measured it, and the harness would lose its ability to reproduce a lost player
+ * at all. Each persona decides for itself - `good` will usually take one, `hostile` and `stall`
+ * will not, and `poor` will half-ignore them, which is the distribution we actually want.
+ */
+export async function generatePlayerTurn({
+  model, quality, characterName, lines, pendingOffer, suggestedChoices = [],
+}) {
   const transcript = lines
     .slice(-10)
     .map((l) => `${l.speaker ?? 'DM'}: ${l.text}`)
@@ -185,6 +207,17 @@ export async function generatePlayerTurn({ model, quality, characterName, lines,
     { role: 'user', content:
       `Recent game transcript:\n${transcript}\n` +
       (pendingOffer ? `\nThe party has an open quest offer: "${pendingOffer}".\n` : '') +
+      (suggestedChoices.length > 0
+        ? '\nThe game is showing these suggestions beside your input box:\n' +
+          // `affordanceLabel` builds the label AS "Talk: <hint>", so the two are usually the same
+          // sentence twice. Only add the hint when it is actually saying something new.
+          suggestedChoices.map((c) => {
+            const extra = c.hint && !c.label.toLowerCase().includes(c.hint.toLowerCase())
+            return `- ${c.label}${extra ? ` (${c.hint})` : ''}`
+          }).join('\n') +
+          '\nThey are suggestions, not a menu. Take one, reword it, or ignore them and type ' +
+          'something else - whichever your character would actually do.\n'
+        : '') +
       '\nYour next message:' },
   ]
 
