@@ -562,7 +562,7 @@ export async function runCombatPlaceholderEncounter(
  * input row, and an engine without a scene to read it is the state the map has been missing since
  * F06 - a partial write here is a dead table, not a slower one.
  */
-async function openInteractiveCombat(
+export async function openInteractiveCombat(
   service: SupabaseClient,
   env: AgentEnv,
   sessionId: string,

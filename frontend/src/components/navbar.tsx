@@ -4,6 +4,7 @@ import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { isAdventureLabUser } from '@/features/adventure-lab'
 import { isAssetsLabUser } from '@/features/assets-lab'
 import { SignOutButton, useSession } from '@/features/auth'
+import { isReplayUser } from '@/features/replay'
 import { useAiCredit, useUserSettings, useWorkerStatus } from '@/features/settings'
 
 const WORKER_STATUS_DOT = {
@@ -65,6 +66,14 @@ export function Navbar() {
               className="text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
               Assets
+            </Link>
+          )}
+          {isReplayUser(session?.user.email) && (
+            <Link
+              to="/replay"
+              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Replay
             </Link>
           )}
           <Link

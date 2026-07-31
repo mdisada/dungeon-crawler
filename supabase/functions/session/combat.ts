@@ -251,8 +251,11 @@ async function buildLiveManifest(
   state: GameState,
   beatSpec: BeatSpecInput,
   bossNpcId: string | null,
+  objectiveIdOverride?: string | null,
 ): Promise<BuiltManifest | null> {
-  const objectiveId = state.objectives?.currentId ?? null
+  // The override exists for the replay sandbox (dev-only), which names the objective to fight
+  // from instead of inheriting whichever one the story happens to be standing on.
+  const objectiveId = objectiveIdOverride ?? state.objectives?.currentId ?? null
   if (!objectiveId) return null
 
   const { data: objective } = await service
@@ -445,9 +448,11 @@ export async function startLiveCombat(
   env: { adventureId: string },
   state: GameState,
   beatSpec: BeatSpecInput,
-  opts?: { bossNpcId?: string | null },
+  opts?: { bossNpcId?: string | null; objectiveId?: string | null },
 ): Promise<StartedCombat | null> {
-  const built = await buildLiveManifest(service, env.adventureId, state, beatSpec, opts?.bossNpcId ?? null)
+  const built = await buildLiveManifest(
+    service, env.adventureId, state, beatSpec, opts?.bossNpcId ?? null, opts?.objectiveId ?? null,
+  )
   if (!built) return null
 
   const seed = Math.floor(Math.random() * 0x7fffffff)

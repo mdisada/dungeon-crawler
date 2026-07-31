@@ -21,6 +21,7 @@ import { reviewDecide } from './npc-dialogue.ts'
 import { createGenericNpc, endEncounter, startSocial } from './social-staging.ts'
 import { decideProposal } from './proposals.ts'
 import { claimAssist, resolvePending, rollPending } from './prompts.ts'
+import { replayControl } from './replay.ts'
 import { demoStep, moveIntent, resync, setScene } from './state.ts'
 import { loadState, resetRequestCaches, takeStatePerf } from './util.ts'
 
@@ -252,6 +253,11 @@ Deno.serve(async (req) => {
         break
       case 'lab_inspect':
         result = requireAdventure() ?? (await labInspect(service, adventureId, userData.user.email ?? ''))
+        break
+      case 'replay_control':
+        result =
+          requireAdventure() ??
+          (await replayControl(service, adventureId, userId, userData.user.email ?? '', body))
         break
       case 'decide_proposal':
         result =
