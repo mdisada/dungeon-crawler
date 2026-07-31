@@ -54,7 +54,13 @@ Look for:
 - Dead-end knowledge: information the players can never plausibly reach. Each ingredient says
   where it sits: one "held by" a person comes out in conversation with them, one "found in" a
   place is discovered by searching there, and one marked PLACED NOWHERE can never be found at all.
-  An NPC marked [dead] or [absent] is never staged, so nothing they hold can ever be prised out.
+  A clue "held by X, also findable in Y" has two doors and needs only one of them to work.
+- [absent] means NOT REACHABLE YET, not never. A villain the party corners in the finale is
+  correctly absent at the start, and scenes that confront them are describing the moment they
+  ARE reached. Flag it only when something the party meets EARLY depends on that person being
+  there - never merely because a later scene has them present. [dead] is the permanent one: a
+  corpse is never staged and never speaks, so a clue whose only door is a dead person's
+  conversation can never open.
 - Timeline impossibilities (an NPC in two places, an event before its cause).
 - Spoiling titles: objective titles that give away a twist their hidden description relies on.
 - Scene (node) prose that contradicts another scene, its objective, or the meta loop: two scenes

@@ -72,7 +72,10 @@ async function measure(adventureId) {
 
   // Live play surfaces a clue two ways and no others: searching the room it sits in
   // (discovery.ts) or talking to the person holding it (npc-dialogue.ts).
-  const clues = { total: ingredients.length, unplaced: 0, onNpc: 0, inRoom: 0, onUnreachableNpc: 0 }
+  // `stranded` is the one that matters: a clue whose ONLY door is a person who is dead or not yet
+  // reachable. One that also sits in a searchable room has a second door and is fine - counting
+  // those together overstated the first guide measured this way by 4x.
+  const clues = { total: ingredients.length, unplaced: 0, onNpc: 0, inRoom: 0, stranded: 0, alsoInRoom: 0 }
   const cluesByNpc = new Map()
   const cluesByLocation = new Map()
   for (const ing of ingredients) {
@@ -82,7 +85,10 @@ async function measure(adventureId) {
     if (npcId) {
       clues.onNpc++
       cluesByNpc.set(npcId, (cluesByNpc.get(npcId) ?? 0) + 1)
-      if (!present(npcById.get(npcId))) clues.onUnreachableNpc++
+      if (!present(npcById.get(npcId))) {
+        if (locationId) clues.alsoInRoom++
+        else clues.stranded++
+      }
     }
     if (locationId) {
       clues.inRoom++
@@ -179,7 +185,8 @@ function printReport(r) {
   console.log(`${pad('  cast')}${c.npcs} NPCs (${c.living} present), ${c.locations} locations`)
   console.log(`${pad('  clues')}${r.clues.total} total - ${r.clues.onNpc} on people, ${r.clues.inRoom} in rooms`)
   console.log(`${pad('  UNPLACED clues')}${r.clues.unplaced}${r.clues.unplaced > 0 ? '  <- unreachable in play' : ''}`)
-  console.log(`${pad('  clues on dead/absent')}${r.clues.onUnreachableNpc}${r.clues.onUnreachableNpc > 0 ? '  <- never released' : ''}`)
+  console.log(`${pad('  STRANDED clues')}${r.clues.stranded}${r.clues.stranded > 0 ? '  <- only door is someone dead/unreachable' : ''}`)
+  console.log(`${pad('  on dead/absent + a room')}${r.clues.alsoInRoom}${r.clues.alsoInRoom > 0 ? '  (searchable, fine)' : ''}`)
   console.log(`${pad('  clue-holders unstaged')}${list(r.unstagedHolders)}`)
   console.log(`${pad('  clue rooms unvisited')}${list(r.unvisitedClueRooms)}`)
   console.log(`${pad('  NPCs never staged')}${list(r.neverStaged)}`)
@@ -200,6 +207,7 @@ function printRow(r) {
   const { adventure: a } = r
   const bad = [
     r.clues.unplaced > 0 ? `${r.clues.unplaced} unplaced` : '',
+    r.clues.stranded > 0 ? `${r.clues.stranded} stranded` : '',
     r.unstagedHolders.length > 0 ? `${r.unstagedHolders.length} holder(s) unstaged` : '',
     (r.kindCount.combat ?? 0) < 1 ? 'no combat' : '',
     r.entry && r.entry.state !== 'alive' ? `giver ${r.entry.state}` : '',

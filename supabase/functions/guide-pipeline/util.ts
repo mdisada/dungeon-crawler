@@ -177,7 +177,12 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
     const placement = (ing.placement ?? {}) as Record<string, unknown>
     const held = typeof placement.npc_id === 'string' ? npcNameById.get(placement.npc_id) : undefined
     const room = typeof placement.location_id === 'string' ? locationNameById.get(placement.location_id) : undefined
-    const where = held ? `held by ${held}` : room ? `found in ${room}` : 'PLACED NOWHERE'
+    // BOTH, when both are set. Showing only the holder made a clue that ALSO sits in a searchable
+    // room read as obtainable solely from its owner - and when that owner is dead, as unreachable.
+    // Three of the ten majors on the first guide to carry life states were exactly that (2026-07-31).
+    const where = held && room
+      ? `held by ${held}, also findable in ${room}`
+      : held ? `held by ${held}` : room ? `found in ${room}` : 'PLACED NOWHERE'
     digest.ingredients.set(handle, `${ing.type} (${where}): ${clip(text, 140)}`)
     refs.set(handle, { table: 'ingredients', id: ing.id })
   })
