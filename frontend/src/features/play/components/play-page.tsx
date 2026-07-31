@@ -178,7 +178,7 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
       return <RoleplayView scene={state.scene} dialogue={state.dialogue} players={state.players} />
     }
     if (state.scene.mode === 'downtime') return <DowntimeView dialogue={state.dialogue} />
-    return <NarrationView scene={state.scene} />
+    return <NarrationView scene={state.scene} dialogue={state.dialogue} players={state.players} />
   }
 
   return (

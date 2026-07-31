@@ -51,7 +51,7 @@ function scene(state: GameState) {
       connection="live"
       fx={[]}
     >
-      <NarrationView scene={state.scene} />
+      <NarrationView scene={state.scene} dialogue={state.dialogue} players={state.players} />
     </PlayProvider>
   )
 }

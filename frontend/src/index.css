@@ -213,6 +213,12 @@ h1 {
 .ken-burns {
   animation: ken-burns 45s ease-in-out infinite;
 }
+/* A slow drift across a static plate is exactly the motion that makes some people ill. */
+@media (prefers-reduced-motion: reduce) {
+  .ken-burns {
+    animation: none;
+  }
+}
 
 @keyframes fx-float {
   0% { transform: translateY(0); opacity: 0; }
