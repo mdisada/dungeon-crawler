@@ -9,6 +9,7 @@ import { isDebugUser } from '../debug'
 import { useCharacterSheet } from '../hooks/use-character-sheet'
 import type { CharacterSheet } from '../hooks/use-character-sheet'
 import { useIntents } from '../hooks/use-intents'
+import { usePartyPortraits } from '../hooks/use-party-portraits'
 import { usePlay } from '../hooks/use-play-context'
 import { DebugTab } from './debug-tab'
 import { SidebarIconTab } from './sidebar-icon-tab'
@@ -79,13 +80,7 @@ export function PlayerSidebar() {
 
       {sheetState.status === 'ready' && me && (
         <footer className="flex items-center gap-3 border-t p-3">
-          {sheetState.sheet.imageUrl ? (
-            <img src={sheetState.sheet.imageUrl} alt={sheetState.sheet.name} className="h-10 w-10 rounded-full object-cover" />
-          ) : (
-            <div aria-hidden className="flex h-10 w-10 items-center justify-center rounded-full bg-muted font-semibold">
-              {sheetState.sheet.name.charAt(0)}
-            </div>
-          )}
+          <SheetAvatar characterId={me.characterId} name={sheetState.sheet.name} />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium">{sheetState.sheet.name}</p>
             <p className="truncate text-xs text-muted-foreground">
@@ -105,6 +100,30 @@ export function PlayerSidebar() {
         </footer>
       )}
     </div>
+  )
+}
+
+/**
+ * The sheet's own face. characters.images holds private-bucket Storage paths, not URLs, so the
+ * token has to come back signed - the party bar's fetch already does that for the whole table,
+ * and asking it for one id reuses the same cached round trip.
+ */
+function SheetAvatar({ characterId, name }: { characterId: string; name: string }) {
+  const portraits = usePartyPortraits([characterId])
+  const [brokenUrl, setBrokenUrl] = useState<string | null>(null)
+  const tokenUrl = portraits[characterId]?.token ?? null
+  const url = tokenUrl && tokenUrl !== brokenUrl ? tokenUrl : null
+
+  if (!url) {
+    return (
+      <div aria-hidden className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted font-semibold">
+        {name.charAt(0)}
+      </div>
+    )
+  }
+  // Decorative: the name sits beside it, so alt stays empty.
+  return (
+    <img src={url} alt="" onError={() => setBrokenUrl(url)} className="size-10 shrink-0 rounded-full object-cover" />
   )
 }
 

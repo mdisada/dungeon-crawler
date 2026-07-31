@@ -219,30 +219,29 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
             {game.endedCard && <SessionEndedCard card={game.endedCard} onDismiss={game.dismissEndedCard} />}
           </main>
 
-          {/* Sidebar: fixed column >=1024px, slide-over drawer below (F06 SS2). Collapsible on
-              both roles via a shared rail so DM and player panels behave identically. */}
+          {/* Sidebar: fixed column >=1024px, slide-over drawer below (F06 SS2). Collapsing is a
+              handle on the column's outer edge - a header row would cost the panels a whole
+              band of height just to hold one chevron. Collapsed means width 0, not a stub rail:
+              the handle is the only thing left, floating over the scene. */}
           <aside
             className={cn(
-              'shrink-0 border-l bg-card lg:static lg:block',
-              sidebarCollapsed ? 'w-12' : 'w-80',
-              drawerOpen ? 'fixed inset-y-0 right-0 z-50 block shadow-2xl' : 'hidden',
+              'relative shrink-0 bg-card transition-[width] duration-200 ease-out lg:relative lg:block',
+              sidebarCollapsed ? 'w-0' : 'w-80 border-l',
+              drawerOpen ? 'fixed inset-y-0 right-0 z-50 block w-80 border-l shadow-2xl' : 'hidden',
             )}
           >
-            <div className="flex h-full flex-col">
-              <div className="flex shrink-0 items-center justify-end border-b p-1">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                  aria-expanded={!sidebarCollapsed}
-                  onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
-                >
-                  {sidebarCollapsed ? <ChevronLeft className="size-4" /> : <ChevronRight className="size-4" />}
-                </Button>
-              </div>
-              <div className={cn('min-h-0 flex-1', sidebarCollapsed && 'hidden')}>
-                {showDmUi ? <DmSidebar /> : <PlayerSidebar />}
-              </div>
+            <button
+              type="button"
+              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              aria-expanded={!sidebarCollapsed}
+              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+              className="absolute -left-4 top-1/2 z-40 hidden h-12 w-4 -translate-y-1/2 items-center justify-center rounded-l-md border border-r-0 bg-card text-muted-foreground shadow-sm transition-colors hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none lg:flex"
+            >
+              {sidebarCollapsed ? <ChevronLeft className="size-3" /> : <ChevronRight className="size-3" />}
+            </button>
+            <div className={cn('h-full min-h-0', sidebarCollapsed && !drawerOpen && 'hidden')}>
+              {showDmUi ? <DmSidebar /> : <PlayerSidebar />}
             </div>
           </aside>
           <Button

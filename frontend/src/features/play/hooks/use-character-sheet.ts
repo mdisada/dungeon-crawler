@@ -26,7 +26,6 @@ export interface CharacterSheet {
   personality: Record<string, string>
   freeformText: string
   proficiencies: string[]
-  imageUrl: string | null
 }
 
 type SheetState =
@@ -78,17 +77,6 @@ export function useCharacterSheet(characterId: string | null): SheetState {
       const equipment = ((row.equipment ?? []) as ({ name?: string } | string)[]).map((item) =>
         typeof item === 'string' ? item : (item.name ?? ''),
       )
-      const images = (row.images ?? {}) as Record<string, unknown>
-      const imageCandidate =
-        images.portraitUrl ??
-        images.portrait ??
-        images.avatarUrl ??
-        images.avatar ??
-        images.baseUrl ??
-        images.originalUrl ??
-        images.fullbodyUrl ??
-        null
-
       const sheet: CharacterSheet = {
         id: row.id,
         name: row.name,
@@ -116,7 +104,6 @@ export function useCharacterSheet(characterId: string | null): SheetState {
         personality: (row.personality ?? {}) as Record<string, string>,
         freeformText: row.freeform_text ?? '',
         proficiencies: [...((row.skill_proficiencies ?? []) as string[]), ...((row.tool_proficiencies ?? []) as string[])],
-        imageUrl: typeof imageCandidate === 'string' ? imageCandidate : null,
       }
       if (!cancelled) setState({ status: 'ready', sheet })
     }
