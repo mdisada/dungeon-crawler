@@ -66,30 +66,39 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   // and wrote 38 thin beats; glm-5.2 broke it 0 times in 23 denser ones, held per-character
   // continuity across beats, and stopped falsely declaring quests resolved. Progression was
   // identical (1 objective each), so this buys prose, not pacing. ~+$0.045 per 26-turn session.
-  narrator: 'z-ai/glm-5.2',
-  npc_agent: 'z-ai/glm-5.2',
-  story_director: 'z-ai/glm-5.2',
+  //
+  // SEAT MOVED to openai/gpt-5.6-luna (2026-07-31, owner's choice). Note what that A/B does and
+  // does not cover: it establishes that this seat needs a strong model, NOT that any particular
+  // strong model fills it. gpt-5.6-luna has not been measured here - no A/B, no per-token cost
+  // recorded, no read of its prose against the narrator contract. Treat the quality and spend of
+  // the primary seat as UNKNOWN until a run says otherwise.
+  narrator: 'openai/gpt-5.6-luna',
+  npc_agent: 'openai/gpt-5.6-luna',
+  story_director: 'openai/gpt-5.6-luna',
   // Not in MAIN-SPEC SS4.7's table (a gap - the Ingredient Generator agent exists in SS4 but was
   // never given a row); grouped with the other guide-generation creative roles. Added Phase 3b.
   // Authors the entire cast and the clue pool: one call per chapter, enormous blast radius.
-  ingredient_generator: 'z-ai/glm-5.2',
+  ingredient_generator: 'openai/gpt-5.6-luna',
   // Hooks, the entry contract, and the personal-stake slots - the connective tissue the whole
   // guide hangs off. Two calls per guide.
-  hook_weaver: 'z-ai/glm-5.2',
+  hook_weaver: 'openai/gpt-5.6-luna',
   // Antagonist turns and, critically, the CLIMAX author - the prose the player reads as the
   // ending. Rare calls, and the last thing anyone experiences.
-  meta_loop_steward: 'z-ai/glm-5.2',
+  meta_loop_steward: 'openai/gpt-5.6-luna',
 }
 
 /**
- * Two models, on purpose (2026-07-26). Every role is either "code validates this" (flash-lite) or
- * "nothing downstream can fix this" (glm-5.2); a middle tier only blurred that line. An override
- * stored in `user_settings.model_map` still resolves even if it names a model absent here - this
- * list is the picker's menu, not a whitelist.
+ * Two SEATS, on purpose (2026-07-26) - the menu may hold more entries than seats. Every role is
+ * either "code validates this" (secondary) or "nothing downstream can fix this" (primary); a middle
+ * TIER only blurred that line, but offering more than two CHOICES does not, because which model
+ * occupies a seat moves with price and availability. An override stored in `user_settings.model_map`
+ * still resolves even if it names a model absent here - this list is the picker's menu, not a
+ * whitelist.
  */
 export const CURATED_TEXT_MODELS = [
   'google/gemini-2.5-flash-lite',
   'z-ai/glm-5.2',
+  'openai/gpt-5.6-luna',
 ] as const
 
 export function isAgentRole(value: string): value is AgentRole {

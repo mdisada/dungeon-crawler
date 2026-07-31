@@ -44,28 +44,30 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
 // NOTE: `gemini-2.5-flash` (no -lite) is NOT the cheap one - $0.300/$2.500 per M, a higher output
 // price than the premium glm-5.2 seat. The cheap tier is flash-LITE at $0.100/$0.400.
 export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
-  narrator: 'z-ai/glm-5.2',
-  npc_agent: 'z-ai/glm-5.2',
+  narrator: 'openai/gpt-5.6-luna',
+  npc_agent: 'openai/gpt-5.6-luna',
   adjudicator: 'google/gemini-2.5-flash-lite',
   loop_classifier: 'google/gemini-2.5-flash-lite',
   encounter_designer: 'google/gemini-2.5-flash-lite',
   npc_tactician: 'google/gemini-2.5-flash-lite',
-  story_director: 'z-ai/glm-5.2',
-  ingredient_generator: 'z-ai/glm-5.2',
+  story_director: 'openai/gpt-5.6-luna',
+  ingredient_generator: 'openai/gpt-5.6-luna',
   beat_planner: 'google/gemini-2.5-flash-lite',
-  hook_weaver: 'z-ai/glm-5.2',
-  meta_loop_steward: 'z-ai/glm-5.2',
+  hook_weaver: 'openai/gpt-5.6-luna',
+  meta_loop_steward: 'openai/gpt-5.6-luna',
   consistency_checker: 'google/gemini-2.5-flash-lite',
   summarizer: 'google/gemini-2.5-flash-lite',
   user_direct: 'google/gemini-2.5-flash-lite',
 }
 
-// Two models, on purpose: every role is either "code validates this" (flash-lite) or "nothing
-// downstream can fix this" (glm-5.2). This is the picker's menu, not a whitelist - a stored
-// override naming another model still resolves.
+// Two SEATS, on purpose - the menu may hold more entries than that. Every role is either "code
+// validates this" (secondary) or "nothing downstream can fix this" (primary); which model occupies
+// each seat is a choice that moves with price and availability. This is the picker's menu, not a
+// whitelist - a stored override naming a model absent here still resolves.
 export const CURATED_TEXT_MODELS = [
   'google/gemini-2.5-flash-lite',
   'z-ai/glm-5.2',
+  'openai/gpt-5.6-luna',
 ] as const
 
 /**
@@ -73,7 +75,7 @@ export const CURATED_TEXT_MODELS = [
  * entry occupies, so the tier of a role can be DERIVED from the default map rather than tracked
  * in a second list that would drift the first time a role changed tier.
  */
-export const PRIMARY_MODEL = 'z-ai/glm-5.2'
+export const PRIMARY_MODEL = 'openai/gpt-5.6-luna'
 export const SECONDARY_MODEL = 'google/gemini-2.5-flash-lite'
 
 export type ModelTier = 'primary' | 'secondary'
