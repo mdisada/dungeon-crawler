@@ -26,7 +26,8 @@ import {
   parseStage3,
 } from './stage3.ts'
 import {
-  buildStage4CastPrompt, buildStage4IngredientsPrompt, entityNameMatches, maxCoopDemanding, parseStage4, parseStage4Cast,
+  buildStage4CastPrompt, buildStage4IngredientsPrompt, entityNameMatches, maxCoopDemanding,
+  MAX_LOCATIONS_PER_CHAPTER, MAX_NPCS_PER_CHAPTER, parseStage4, parseStage4Cast,
   parseStage4Ingredients, validateCoopConformance,
   validateEntityCoverage,
 } from './stage4.ts'
@@ -491,6 +492,44 @@ describe('stage 4 (ingredients + coop sets)', () => {
     const result = parseStage4(JSON.stringify(doc), STAGE4_CONTEXT)
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.data.warnings.some((w) => w.includes('kind'))).toBe(true)
+  })
+
+  describe('bounds the parser enforces are bounds the prompt states (2026-07-31 audit)', () => {
+    // Three times in one day a chapter was discarded for exceeding a cap it had never been told
+    // about. These are the remaining ones, found by walking every c.arr bound in this package.
+    it('states the cast ceilings it enforces', () => {
+      const { system } = buildStage4CastPrompt(STAGE4_CONTEXT)
+      expect(system).toContain(`AT MOST ${MAX_NPCS_PER_CHAPTER} npcs`)
+      expect(system).toContain(`${MAX_LOCATIONS_PER_CHAPTER} locations`)
+    })
+
+    it('trims an over-large cast instead of discarding the chapter', () => {
+      const doc = JSON.parse(STAGE4_RESPONSE)
+      const spare = doc.npcs[0]
+      doc.npcs = [...doc.npcs, ...Array.from({ length: 25 }, (_, i) => ({ ...spare, key: `npc:extra-${i}`, name: `Extra ${i}` }))]
+      const result = parseStage4(JSON.stringify(doc), STAGE4_CONTEXT)
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.data.npcs).toHaveLength(MAX_NPCS_PER_CHAPTER)
+      expect(result.data.warnings.some((w) => w.includes('were dropped'))).toBe(true)
+    })
+
+    it('keeps a location whose features overflow, rather than failing on the seventh', () => {
+      const doc = JSON.parse(STAGE4_RESPONSE)
+      doc.locations[0].features = Array.from({ length: 9 }, (_, i) => ({ name: `f${i}`, detail: `d${i}` }))
+      const result = parseStage4(JSON.stringify(doc), STAGE4_CONTEXT)
+      expect(result.ok).toBe(true)
+      if (result.ok) expect(result.data.locations[0].features.length).toBeLessThanOrEqual(6)
+    })
+
+    it('does not fail a chapter over a missing image_prompt', () => {
+      const doc = JSON.parse(STAGE4_RESPONSE)
+      delete doc.npcs[0].image_prompt
+      delete doc.locations[0].image_prompt
+      const result = parseStage4(JSON.stringify(doc), STAGE4_CONTEXT)
+      expect(result.ok).toBe(true)
+      if (result.ok) expect(result.data.npcs[0].imagePrompt).toBe('')
+    })
   })
 
   it('rejects unknown placement / coop keys', () => {

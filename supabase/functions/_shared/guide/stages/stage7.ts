@@ -42,6 +42,9 @@ export function validateRegistryCoverage(
   return warnings
 }
 
+/** Reported findings kept per pass. Stated in the prompt below, and trimmed rather than rejected. */
+export const MAX_WARNINGS = 40
+
 export function buildStage7Prompt(
   digest: GuideDigest,
   metaLoopArc: string,
@@ -108,6 +111,8 @@ Rate each finding's severity honestly:
 - "major": a contradiction, an impossibility, unreachable content, or something that would break play - a creator MUST look at it.
 - "minor": clarity, polish, or could-be-tighter observations - worth recording, not worth interrupting anyone.
 
+Report at most ${MAX_WARNINGS} findings; past that only the first ${MAX_WARNINGS} are kept, so lead with the ones that would break play.
+
 Respond with ONLY a JSON object, no prose, in exactly this shape:
 { "warnings": [ { "target": "obj#3" | "npc#1" | null, "severity": "major"|"minor", "message": "one-sentence problem statement" } ] }`
 
@@ -144,7 +149,11 @@ export function parseStage7(raw: string, digest: GuideDigest): ParseResult<Warni
     ...(digest.nodes?.keys() ?? []),
   ])
 
-  const warnings: WarningDraft[] = c.arr(extracted.data.warnings ?? [], '$.warnings', 0, 40).map((raw, i) => {
+  // A CONSISTENCY PASS MUST NEVER FAIL FOR FINDING TOO MUCH (2026-07-31 audit). The cap was
+  // enforced here and stated nowhere, so a genuinely messy guide - the case this stage exists for -
+  // could be rejected at 41 findings and take the generation down with it. Trimmed instead.
+  const reported = c.arr(extracted.data.warnings ?? [], '$.warnings', 0)
+  const warnings: WarningDraft[] = reported.slice(0, MAX_WARNINGS).map((raw, i) => {
     const path = `$.warnings[${i}]`
     const w = c.obj(raw, path)
     let targetHandle: string | null = null

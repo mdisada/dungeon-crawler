@@ -77,6 +77,9 @@ export const INGREDIENTS_PER_CHAPTER = { min: 4, max: 12, defaultMin: 6, default
 export const PILLAR_TAGS = ['combat', 'social', 'exploration'] as const
 export const INGREDIENT_TYPES = ['clue', 'secret', 'event', 'item', 'rumor'] as const
 export const COOP_KINDS = ['split_knowledge', 'complementary_obstacle'] as const
+/** Cast ceilings, stated in the prompt AND enforced here - see the trim at the parse site. */
+export const MAX_NPCS_PER_CHAPTER = 20
+export const MAX_LOCATIONS_PER_CHAPTER = 15
 
 /**
  * A `placement.condition` the RUNTIME can actually satisfy. `filterReveals` gates a conditioned
@@ -152,6 +155,7 @@ Rules:
 - Every location needs "features": 3-5 things in it a player might point at and examine, each with the DETAIL they find on looking closely. This is the single most-used thing you will author: players spend most of their turns asking about and examining the room, and anything you do not write here the narrator has to invent on the spot - which is where contradictions come from. Write what is THERE and what it tells them ("the bellows: the leather is new, replaced within the month, though the foundry has cast nothing in a year"), never a puzzle solution and never a secret the chapter is saving.
 - Every location needs an "arrival_line": one or two sentences for the moment the party gets here, written so it works whether they walked, were sent, or arrived in a hurry. THIS IS WHERE A DISCOVERY BELONGS - the warmth rising from a cellar floor, the salt crust undisturbed since dawn. Only the party ever reads it.
 - A location's "description" is the OPPOSITE: what the place IS to anyone who lives in this world, in one plain sentence ("a timber records building near the centre of the saltworks, where the wage ledgers are kept"). NPCs are given these so they can answer "what's the tallyhouse" instead of stonewalling or inventing, so a description must never contain something the party is meant to discover. If it is a secret, it goes in the arrival_line, never here.
+- AT MOST ${MAX_NPCS_PER_CHAPTER} npcs and ${MAX_LOCATIONS_PER_CHAPTER} locations in this chapter, and far fewer is normal - anything past those is discarded. A chapter is carried by a handful of people the party can actually get to know, not by a directory.
 - Keys are short lowercase slugs unique in this response, e.g. "npc:volgarth", "loc:sunken-chapel". The clue-writing call places its clues on these exact keys, so they must be stable and self-explanatory.
 - image_prompt fields describe the visual for later image generation (style-neutral, concrete).
 - Every NPC gets a lightweight "combat" block so it can appear in combat: pick an "archetype"
@@ -347,7 +351,18 @@ function parseSections(
   const root = extracted.data
 
   const PRONOUN_SETS = ['he/him', 'she/her', 'they/them', 'it/its']
-  const npcs: NpcDraft[] = !sections.cast ? providedCast.npcs : c.arr(root.npcs, '$.npcs', 0, 20).map((raw, i) => {
+  // THE CAST CAPS WERE ENFORCED AND NEVER STATED (2026-07-31 audit). 20 npcs and 15 locations are
+  // parser bounds the prompt has never mentioned, so a chapter with a large registry could be
+  // discarded for writing a 21st person. Trimmed instead - and the required-entity coverage check
+  // below is what decides whether the trim mattered: drop somebody the registry demanded and it
+  // fails with their name, which is a message a retry can act on.
+  const castWarnings: string[] = []
+  const trimCast = <T>(rows: T[], cap: number, what: string): T[] => {
+    if (rows.length <= cap) return rows
+    castWarnings.push(`${rows.length} ${what} were authored for this chapter; the last ${rows.length - cap} were dropped (cap ${cap}).`)
+    return rows.slice(0, cap)
+  }
+  const npcs: NpcDraft[] = !sections.cast ? providedCast.npcs : trimCast(c.arr(root.npcs, '$.npcs', 0), MAX_NPCS_PER_CHAPTER, 'NPCs').map((raw, i) => {
     const path = `$.npcs[${i}]`
     const n = c.obj(raw, path)
     return {
@@ -367,19 +382,23 @@ function parseSections(
       personality: c.obj(n.personality ?? {}, `${path}.personality`) as NpcDraft['personality'],
       faction: c.str(n.faction ?? '', `${path}.faction`, { allowEmpty: true }),
       description: c.str(n.description, `${path}.description`),
-      imagePrompt: c.str(n.image_prompt, `${path}.image_prompt`),
+      // THIN, NOT FATAL (2026-07-31 audit). It feeds later image generation; nothing in play reads
+      // it. One omitted media field on one of thirteen rows used to discard the whole chapter,
+      // while `features` and `arrival_line` - which the narrator DOES read - were already lenient.
+      imagePrompt: typeof n.image_prompt === 'string' ? n.image_prompt.trim() : '',
       combat: parseCombatSeed(n.combat),
     }
   })
 
-  const locations: LocationDraft[] = !sections.cast ? providedCast.locations : c.arr(root.locations, '$.locations', 0, 15).map((raw, i) => {
+  const locations: LocationDraft[] = !sections.cast ? providedCast.locations : trimCast(c.arr(root.locations, '$.locations', 0), MAX_LOCATIONS_PER_CHAPTER, 'locations').map((raw, i) => {
     const path = `$.locations[${i}]`
     const l = c.obj(raw, path)
     // Features and arrival line are THIN, NOT FATAL - the same treatment narration_seed gets.
     // A guide that ships without them behaves exactly as guides did before 2026-07-29; failing a
     // paid generation over an omitted field is the worse outcome, and the pattern this file
     // already follows everywhere else.
-    const features = c.arr(l.features ?? [], `${path}.features`, 0, 6).flatMap((f, fi) => {
+    // Asked for 3-5; a sixth or seventh is not worth a discarded chapter, so the overflow is cut.
+    const features = c.arr(l.features ?? [], `${path}.features`, 0).slice(0, 6).flatMap((f, fi) => {
       const feat = c.obj(f, `${path}.features[${fi}]`)
       const name = typeof feat.name === 'string' ? feat.name.trim() : ''
       const detail = typeof feat.detail === 'string' ? feat.detail.trim() : ''
@@ -389,7 +408,7 @@ function parseSections(
       key: c.str(l.key, `${path}.key`),
       name: c.str(l.name, `${path}.name`),
       description: c.str(l.description, `${path}.description`),
-      imagePrompt: c.str(l.image_prompt, `${path}.image_prompt`),
+      imagePrompt: typeof l.image_prompt === 'string' ? l.image_prompt.trim() : '',
       features,
       arrivalLine: typeof l.arrival_line === 'string' ? l.arrival_line.trim() : '',
     }
@@ -603,6 +622,7 @@ function parseSections(
     coopSets: repaired.coopSets,
     ingredients,
     warnings: [
+      ...castWarnings,
       ...flawWarnings,
       ...unreachableWarnings,
       ...repaired.warnings,
