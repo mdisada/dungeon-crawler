@@ -22,6 +22,7 @@ import { FxLayer } from './fx-layer'
 import { LobbyModal } from './lobby-modal'
 import { NarrationView } from './narration-view'
 import { OfferBanner } from './offer-banner'
+import { PlayerObjectivesPanel } from './player-objectives-panel'
 import { PlayerSidebar } from './player-sidebar'
 import { PlayHeader } from './play-header'
 import type { VolumeLevels } from './play-header'
@@ -177,7 +178,7 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
       return <RoleplayView scene={state.scene} dialogue={state.dialogue} players={state.players} />
     }
     if (state.scene.mode === 'downtime') return <DowntimeView dialogue={state.dialogue} />
-    return <NarrationView scene={state.scene} dialogue={state.dialogue} />
+    return <NarrationView scene={state.scene} />
   }
 
   return (
@@ -205,8 +206,10 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
             {state.scene.mode !== 'battle' && !inLobby && <EncounterBanner encounter={state.encounter} />}
             {/* Open quest offers pin top-center for everyone (F08 SS2.1). */}
             {state.scene.mode !== 'battle' && !inLobby && <OfferBanner offers={state.objectives.offers} />}
-            {/* Objectives + players pinned upper-left for the DM (F06 SS2). */}
+            {/* Upper-left overlay: the DM gets objectives + players (F06 SS2), everyone else
+                gets their own objectives/quests/stake. Only one of the two ever renders. */}
             {showDmUi && !inLobby && <DmOverviewPanel />}
+            {!showDmUi && !inLobby && <PlayerObjectivesPanel />}
             {/* Live input overlay (Phase 5); battle keeps token-drag as its input until F09. */}
             {state.scene.mode !== 'battle' && !inLobby && <IntentInputRow />}
             <FxLayer fx={game.fx} />

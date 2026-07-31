@@ -113,9 +113,12 @@ orchestration surface it changed.
   button per option; `roll_pending` accepts the chosen skill (validated against the offer;
   modifier per pick; skill challenges carry per-option escalated DCs). Questions probing hidden
   info spec a check; only plain-sight questions stay free (`flags.talk`).
-- **Visible dice:** every rolled check prints a transcript line — `Kestrel rolls investigation:
-  7 (d20 5 +2) - failure` — on solo/group/assist/auto rolls (advantage/disadvantage and
-  picked-vs-primary noted). The DC stays the DM's secret.
+- **Visible dice, hidden verdict:** every rolled check prints a transcript line — `Kestrel rolls
+  investigation: 7 (d20 5 +2)` — on solo/group/assist/auto rolls (advantage/disadvantage and
+  picked-vs-primary noted). The DC stays the DM's secret, and since 2026-07-31 so does the
+  success/failure verdict: the line used to end in `- failure`, which announced the outcome
+  before the narration could. The verdict still reaches the event log and the DM's ruling
+  console; players learn how it went from what the DM narrates.
 - **"DM is thinking" covers the whole chain:** the client shows the indicator from the instant
   Send is pressed (its own in-flight state), and `evaluateStoryProgress` holds the server-side
   typing flag for the entire story-progress pass (beat re-plans, Encounter Designer, ending

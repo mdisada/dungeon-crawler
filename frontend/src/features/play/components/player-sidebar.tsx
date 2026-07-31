@@ -15,9 +15,12 @@ import { SidebarIconTab } from './sidebar-icon-tab'
 import { StoryLogTab } from './story-log-tab'
 
 /**
- * F06 SS4: objective header, tabbed sheet (Ability & Skills / Combat / Background), persistent
+ * F06 SS4: tabbed sheet (Ability & Skills / Combat / Background / Story log) over a persistent
  * character strip. Combat tab auto-becomes primary when scene.mode='battle'; a manual pick is
  * respected until the mode changes again.
+ *
+ * Objectives, quests and the personal stake are NOT here - they live in PlayerObjectivesPanel,
+ * pinned upper-left over the scene, so the sheet gets the whole column.
  */
 export function PlayerSidebar() {
   const { state, userId } = usePlay()
@@ -35,72 +38,8 @@ export function PlayerSidebar() {
   const tab = tabState.tab
   const setTab = (next: string) => setTabState({ isBattle, tab: next })
 
-  const currentObjective = state.objectives.list.find((o) => o.id === state.objectives.currentId)
-  const { offers, quests } = state.objectives
-
   return (
     <div className="flex h-full flex-col">
-      <header className="border-b p-3">
-        <div className="flex items-baseline justify-between gap-2">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Current objective</p>
-          <p className="shrink-0 text-xs font-medium tabular-nums" aria-label="Party gold">
-            {state.players.gold} gp
-          </p>
-        </div>
-        <p className="text-sm font-medium">{currentObjective?.title ?? 'None yet'}</p>
-        {/* Minimal quest journal (F08 SS2.2): accepted terms stay visible at a glance. */}
-        {quests.length > 0 && (
-          <div className="mt-2">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">Quests</p>
-            <ul className="mt-0.5 flex flex-col gap-0.5">
-              {quests.map((quest) => (
-                <li key={quest.id} className="text-xs">
-                  <span
-                    className={cn(
-                      'font-medium',
-                      (quest.status === 'completed' || quest.status === 'failed') &&
-                        'text-muted-foreground line-through',
-                    )}
-                  >
-                    {quest.label}
-                  </span>
-                  <span className="text-muted-foreground">
-                    {' '}- {quest.giverName}
-                    {quest.gold > 0 ? `, ${quest.gold} gp` : ''}
-                    {quest.status === 'suspended' ? ' (paused)' : ''}
-                    {quest.status === 'failed' ? ' (failed)' : ''}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {/* Your stake (2026-07-26): the personal arc bound to this character at session start.
-            Reward-only by construction - it never gates the party's story. */}
-        {me?.personal?.objectiveLabel && (
-          <div className="mt-2">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">Your stake</p>
-            <p className="text-xs">
-              <span
-                className={cn(
-                  'font-medium',
-                  me.personal.status === 'completed' && 'text-muted-foreground line-through',
-                  me.personal.status === 'failed' && 'text-muted-foreground',
-                )}
-              >
-                {me.personal.objectiveLabel}
-              </span>
-              {me.personal.reward && <span className="text-muted-foreground"> - {me.personal.reward}</span>}
-            </p>
-          </div>
-        )}
-        {offers.length > 0 && (
-          <p className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400">
-            Awaiting your answer: {offers.map((o) => o.label).join('; ')}
-          </p>
-        )}
-      </header>
-
       <div className="flex min-h-0 flex-1 flex-col">
         {sheetState.status === 'loading' && <p className="p-3 text-sm text-muted-foreground">Loading sheet…</p>}
         {sheetState.status === 'error' && <p className="p-3 text-sm text-muted-foreground">{sheetState.message}</p>}

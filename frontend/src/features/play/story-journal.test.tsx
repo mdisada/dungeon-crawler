@@ -1,6 +1,7 @@
 // F08 SS2.1/SS2.2 journal surfaces: the offer banner renders from broadcast state alone, and
 // journal diffs flow through the same merge-patch pipeline every other domain uses.
 import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
 
 afterEach(cleanup)
@@ -19,11 +20,27 @@ const offer: OfferBannerView = {
 }
 
 describe('OfferBanner', () => {
-  it('renders label, giver, gold, and stakes for each open offer', () => {
+  it('renders the terms, and holds the stakes line until the player asks for it', async () => {
+    const user = userEvent.setup()
     render(<OfferBanner offers={[offer]} />)
     expect(screen.getByText(/Escort Maren to the coast/)).toBeTruthy()
     expect(screen.getByText(/Elder Maren, 50 gp/)).toBeTruthy()
+    expect(screen.queryByText('The village fades, one dreamer at a time.')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Show the next line of the offer' }))
     expect(screen.getByText('The village fades, one dreamer at a time.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Show the next line of the offer' })).toBeNull()
+  })
+
+  it('queues a second offer behind the first', async () => {
+    const user = userEvent.setup()
+    const second: OfferBannerView = { ...offer, id: 'offer-2', label: 'Guard the mill', stakes: '' }
+    render(<OfferBanner offers={[offer, second]} />)
+    expect(screen.queryByText(/Guard the mill/)).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Show the next line of the offer' }))
+    await user.click(screen.getByRole('button', { name: 'Show the next line of the offer' }))
+    expect(screen.getByText(/Guard the mill/)).toBeTruthy()
   })
 
   it('omits the gold clause when nothing is promised', () => {

@@ -100,9 +100,10 @@ export interface DialogueState {
   addressedCharacterId: string | null
   /**
    * The open story node's authored affordances (2026-07-26) - shown as choice chips beside the
-   * free-text box. SUGGESTIONS, never the only input: clicking one prefills the input so the
-   * player can edit or ignore it, which keeps play a declaration rather than a menu selection and
-   * keeps every player on equal footing (the reason the VN-style Continue button was rejected).
+   * free-text box. Suggestions, never the only input: the free-text box always stays open, so a
+   * player can ignore every chip and declare something the author never listed. Clicking one
+   * sends it as-is (2026-07-31) - it used to prefill the box for editing, but a chip the player
+   * still had to Send read as a two-step menu.
    */
   suggestedChoices?: SuggestedChoice[]
 }

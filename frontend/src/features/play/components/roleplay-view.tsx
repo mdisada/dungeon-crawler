@@ -17,18 +17,18 @@ interface RoleplayViewProps {
  * highlighted, F10 SS3.7), and the name-plated text box. The Say/Do/Roll input row is the
  * play page's IntentInputRow overlay.
  *
- * The line is delivered one sentence at a time and the player clicks to advance, same as the
- * narration renderer - so each advance is also where F12 starts that sentence's audio. Nothing
- * here signals generation: the input row's "DM is thinking" indicator owns that, and only once
- * the player has caught up.
+ * The line is delivered a chunk at a time - whole sentences, capped so the box never overflows -
+ * and the player clicks to advance, same as the narration renderer, so each advance is also
+ * where F12 starts that chunk's audio. Nothing here signals generation: the input row's "DM is
+ * thinking" indicator owns that, and only once the player has caught up.
  */
 export function RoleplayView({ scene, dialogue, players }: RoleplayViewProps) {
   const { reveal } = usePlay()
-  const active = dialogue.lines.find((l) => l.id === dialogue.activeLineId) ?? null
+  // The revealed line, not dialogue.activeLineId: the party's own utterances never take the box.
+  const { line: active, chunks, visibleCount, isRevealing, advance } = reveal
   const speakingNpcId = active?.npcId ?? null
-  const { sentences, visibleCount, isRevealing, advance } = reveal
 
-  const current = visibleCount > 0 ? sentences[visibleCount - 1] : ''
+  const current = visibleCount > 0 ? chunks[visibleCount - 1] : ''
 
   const left = dialogue.speakers.filter((s) => s.side === 'left')
   const right = dialogue.speakers.filter((s) => s.side === 'right')
@@ -99,29 +99,31 @@ export function RoleplayView({ scene, dialogue, players }: RoleplayViewProps) {
         className={cn('absolute inset-0', isRevealing ? 'cursor-pointer' : 'cursor-default')}
       />
 
-      <div className="relative mx-auto mb-16 w-full max-w-4xl px-4">
+      {/* mb clears the input row and its suggestion chips, which overlay the bottom. */}
+      <div className="relative mx-auto mb-24 w-full max-w-4xl px-4">
         <div className="rounded-xl border border-white/10 bg-black/75 p-4 backdrop-blur">
           {active?.speaker && (
             <span className="mb-1 inline-block rounded bg-primary/80 px-2 py-0.5 text-xs font-semibold text-primary-foreground">
               {active.speaker}
             </span>
           )}
-          <p className="min-h-12 text-base leading-relaxed text-white" aria-live="polite">
-            {current || '…'}
-          </p>
-          {isRevealing && (
-            <div className="mt-1 flex justify-end">
+          {/* The chevron rides beside the text, not under it - stacking it there sandwiched it
+              against the input row below. */}
+          <div className="flex items-end gap-3">
+            <p className="min-h-12 flex-1 text-base leading-relaxed text-white" aria-live="polite">
+              {current || '…'}
+            </p>
+            {isRevealing && (
               <button
                 type="button"
                 onClick={advance}
-                aria-label="Show the next sentence"
-                className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+                aria-label="Show more of this line"
+                className="shrink-0 text-white/70 transition-colors hover:text-white"
               >
-                Next
-                <ChevronRight className="size-4" />
+                <ChevronRight className="size-9" />
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </div>

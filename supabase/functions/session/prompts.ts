@@ -35,7 +35,11 @@ function currentStash(state: GameState): Stash | null {
 
 /**
  * The table sees every die (2026-07-20 playtest): a transcript line per rolled check -
- * "Kestrel rolls investigation: 7 (d20 5 +2) - failure". The DC stays the DM's secret.
+ * "Kestrel rolls investigation: 7 (d20 5 +2)". The DC stays the DM's secret, and so does the
+ * verdict (2026-07-31): the line used to end in "- success"/"- failure", which told the player
+ * how it went before the narration did and made the narration a formality. The roll is the die;
+ * what it meant is the DM's to say. The verdict is still on the CheckResult, the event log and
+ * the DM's ruling console - it just does not go in the shared transcript.
  */
 function rollLine(
   name: string,
@@ -48,8 +52,7 @@ function rollLine(
   const adv = advDis === 'advantage' ? ', advantage' : advDis === 'disadvantage' ? ', disadvantage' : ''
   return newLine(
     null, null,
-    `${name} rolls ${skill}: ${result.total} (d20 ${result.d20} ${sign}${result.modifier}${adv})${suffix} - ` +
-      `${result.success ? 'success' : 'failure'}`,
+    `${name} rolls ${skill}: ${result.total} (d20 ${result.d20} ${sign}${result.modifier}${adv})${suffix}`,
   )
 }
 

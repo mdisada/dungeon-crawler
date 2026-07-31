@@ -38,3 +38,33 @@ export function splitSentences(text: string): string[] {
   if (start < text.length) parts.push(text.slice(start))
   return parts
 }
+
+/**
+ * How much text one click may put in the box. Sized to the narration subtitle box and the
+ * roleplay name-plated box (~3 lines at their widths), so a chunk never overflows either.
+ */
+export const REVEAL_MAX_CHARS = 240
+
+/**
+ * Groups a line into the pieces the renderers reveal one click at a time: as many whole
+ * sentences as fit the budget, never a partial one. A single sentence longer than the budget
+ * stands alone - splitting it would show the player half a thought.
+ *
+ * Lossless like `splitSentences`: the chunks rejoin into the original text.
+ */
+export function chunkSentences(text: string, maxChars: number = REVEAL_MAX_CHARS): string[] {
+  const chunks: string[] = []
+  let current = ''
+
+  for (const sentence of splitSentences(text)) {
+    if (current && (current + sentence).trimEnd().length > maxChars) {
+      chunks.push(current)
+      current = sentence
+      continue
+    }
+    current += sentence
+  }
+
+  if (current) chunks.push(current)
+  return chunks
+}

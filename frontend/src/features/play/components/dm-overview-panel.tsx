@@ -7,6 +7,7 @@ import { listLobbyMembers } from '../api/lobby'
 import { admitMember } from '../api/session'
 import { usePlay } from '../hooks/use-play-context'
 import type { LobbyMember } from '../types'
+import { PanelSection } from './panel-section'
 
 /**
  * Objectives + players, pinned to the upper-left of the DM's window as a collapsible
@@ -51,7 +52,7 @@ export function DmOverviewPanel() {
       <div className="pointer-events-auto flex max-h-[calc(100vh-8rem)] flex-col gap-2 overflow-y-auto rounded-lg border bg-card/95 p-3 text-sm shadow-lg backdrop-blur">
         {error && <p className="text-destructive">{error}</p>}
 
-        <Section title="Objectives" count={objectives.length}>
+        <PanelSection title="Objectives" count={objectives.length}>
           {objectives.length === 0 ? (
             <p className="text-xs text-muted-foreground">No objectives yet.</p>
           ) : (
@@ -67,9 +68,9 @@ export function DmOverviewPanel() {
               ))}
             </ul>
           )}
-        </Section>
+        </PanelSection>
 
-        <Section title="Quests" count={offers.length + quests.length}>
+        <PanelSection title="Quests" count={offers.length + quests.length}>
           {offers.length === 0 && quests.length === 0 ? (
             <p className="text-xs text-muted-foreground">No offers or quests yet.</p>
           ) : (
@@ -102,9 +103,9 @@ export function DmOverviewPanel() {
             </ul>
           )}
           <p className="mt-1 text-xs text-muted-foreground">Party gold: {state.players.gold} gp</p>
-        </Section>
+        </PanelSection>
 
-        <Section title="Players" count={players.length}>
+        <PanelSection title="Players" count={players.length}>
           <ul className="flex flex-col gap-1">
             {players.map((p) => (
               <li key={p.characterId} className="flex items-center justify-between gap-2">
@@ -128,32 +129,8 @@ export function DmOverviewPanel() {
               ))}
             </div>
           )}
-        </Section>
+        </PanelSection>
       </div>
     </div>
-  )
-}
-
-function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
-  return (
-    <details open className="group">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs font-semibold uppercase text-muted-foreground [&::-webkit-details-marker]:hidden">
-        <svg
-          className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90"
-          viewBox="0 0 12 12"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          aria-hidden="true"
-        >
-          <path d="M4 2l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        {title}
-        <span className="ml-auto rounded-full bg-muted px-1.5 text-[10px] font-medium normal-case tabular-nums">
-          {count}
-        </span>
-      </summary>
-      <div className="mt-1.5 pl-[1.125rem]">{children}</div>
-    </details>
   )
 }

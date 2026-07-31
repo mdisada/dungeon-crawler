@@ -20,11 +20,7 @@ export function IntentInputRow() {
   const { state, isSpectator, reveal } = usePlay()
   const { myCharacterId, isBusy, error, clearError, say, requestHint } = useIntents()
   const [draft, setDraft] = useState('')
-  // The chip whose text is sitting in the input untouched. Any edit clears it, so an edited
-  // suggestion travels as ordinary free text and gets interpreted like anything else.
-  const [chipKey, setChipKey] = useState<string | null>(null)
-  const activeLine = state.dialogue.lines.find((l) => l.id === state.dialogue.activeLineId) ?? null
-  const { isRevealing } = reveal
+  const { line: activeLine, isRevealing } = reveal
 
   if (isSpectator || !myCharacterId || state.session.status !== 'active') return null
 
@@ -53,25 +49,21 @@ export function IntentInputRow() {
   async function submit() {
     const text = draft.trim()
     if (!text) return
-    const ok = await say(text, { affordanceKey: chipKey ?? undefined })
-    if (ok) {
-      setDraft('')
-      setChipKey(null)
-    }
+    const ok = await say(text)
+    if (ok) setDraft('')
   }
 
-  /** Prefill, never auto-submit: the player still chooses to send, can edit first, and the table
-   *  keeps equal footing (one player cannot advance the story by clicking faster). */
+  /** One click, one intent: the chip is the whole action, so it sends as-is. The player's own
+   *  draft is left alone - a chip never overwrites what they were typing. */
   function pickChoice(choice: { key: string; hint: string; label: string }) {
-    setDraft(choice.hint || choice.label)
-    setChipKey(choice.key)
+    void say(choice.hint || choice.label, { affordanceKey: choice.key })
   }
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-3">
-      <div className="pointer-events-auto flex w-full max-w-4xl flex-col gap-2">
+      <div className="pointer-events-auto flex w-full max-w-4xl flex-col gap-3">
         {myOpenings.length > 0 && (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap justify-center gap-2">
             {myOpenings.map((opening) => (
               <span
                 key={opening.id}
@@ -83,20 +75,18 @@ export function IntentInputRow() {
           </div>
         )}
 
-        {/* Authored ways into the current scene. Suggestions beside the free-text box - clicking
-            one fills the input so it can be edited or ignored, never sends on its own. */}
+        {/* Authored ways into the current scene, beside the free-text box: clicking one sends it
+            straight to the DM. Disabled while a send is in flight so a double-click is one
+            intent, not two. */}
         {suggestedChoices.length > 0 && !inputBlocked && (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap justify-center gap-2">
             {suggestedChoices.map((choice) => (
               <button
                 key={choice.key}
                 type="button"
+                disabled={isBusy}
                 onClick={() => pickChoice(choice)}
-                className={`rounded-full border px-3 py-1 text-xs transition-colors ${
-                  chipKey === choice.key
-                    ? 'border-sky-300/80 bg-sky-900/80 text-sky-100'
-                    : 'border-white/25 bg-black/70 text-white/80 hover:border-sky-300/60 hover:text-white'
-                }`}
+                className="rounded-full border border-white/25 bg-black/70 px-3 py-1 text-xs text-white/80 transition-colors hover:border-sky-300/60 hover:text-white disabled:opacity-50"
               >
                 {choice.label}
               </button>
@@ -140,10 +130,7 @@ export function IntentInputRow() {
         >
           <Input
             value={draft}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-              setDraft(e.target.value)
-              setChipKey(null) // an edited suggestion is just free text again
-            }}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
             placeholder={placeholder}
             disabled={inputBlocked}
             aria-label="Action or dialogue input"

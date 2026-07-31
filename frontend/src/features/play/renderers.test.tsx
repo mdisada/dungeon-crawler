@@ -81,7 +81,7 @@ describe('renderers from scripted diff sequences', () => {
 
   it('narration state renders the background and the narrated line', () => {
     const narration = states[0]
-    renderInPlay(narration, <NarrationView scene={narration.scene} dialogue={narration.dialogue} />)
+    renderInPlay(narration, <NarrationView scene={narration.scene} />)
     expect(screen.getByAltText('Hollowbrook')).toBeInTheDocument()
     expect(screen.getByText(/Dusk settles/)).toBeInTheDocument()
   })
