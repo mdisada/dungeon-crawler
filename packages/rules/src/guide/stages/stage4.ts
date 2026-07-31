@@ -209,6 +209,7 @@ Rules:
 - placement.condition means ONE thing: this clue needs a PASSED SKILL CHECK to come out. Write it as the check ("successful DC 14 persuasion", "an insight check"), or leave it null. It is NOT a place to describe when the moment is right - "asked about the money", "once they trust her" - because the game reads any condition as a check requirement, and a clue conditioned on a conversation is locked behind a roll that a conversation never makes. If a clue should simply come out when the topic arises, leave condition null and let the NPC judge the moment.
 - ${ingredientMin}-${ingredientMax} ingredients for this chapter. ${ingredientMax} is a CAP, not a target to beat, and anything past ${INGREDIENTS_PER_CHAPTER.max} is discarded before the DM ever sees it - a chapter is made rich by what its clues connect, not by how many there are. Each is linked to ONE or TWO objectives by number (objective_numbers holds 1-2 entries, never more) and tagged with the pillars it serves ("combat", "social", "exploration").
 - A "reveals" field says what learning this ingredient TELLS the party - the conclusion, not the prop.
+- PLACE IT ON SOMEONE WHO CAN GIVE IT. A clue on a person comes out in CONVERSATION, so it must sit with someone the party can actually talk to: never on an NPC marked dead or absent, and never with someone who has no reason to know it. What a corpse or a missing person knows is physical evidence - put that in a room. Each NPC below carries what they want and what they belong to; a secret should be something THAT person would plausibly hold, trade or let slip.
 - BE CONCISE: every ingredient text and reveals field is 1-2 sentences. Depth comes from
   connections, not word count.
 ${coopRules}
@@ -237,11 +238,25 @@ Respond with ONLY a JSON object, no prose, in exactly this shape:
     'for physical evidence that has to exist somewhere. An adventure whose every clue sits in a ' +
     'room gives the party no reason to talk to anyone, and its social scenes have nothing to give.'
 
+  // WHAT THE CLUE WRITER NEEDS TO KNOW ABOUT A PERSON (2026-07-31).
+  //
+  // One call used to author the cast and the clues together, so everything below was in its own
+  // head. Handing it only "key (name): description" let it place a clue that comes out in
+  // CONVERSATION on someone marked dead - unreachable for the whole adventure, the same shape as
+  // the conditions that locked clues behind rolls a conversation never makes. So the state, the
+  // role and what a person wants travel with the key.
+  const npcLine = (n: NpcDraft) => {
+    const tags = [n.role === 'boss' ? 'the chapter villain' : '', n.initialState !== 'alive' ? n.initialState.toUpperCase() : '', n.faction]
+      .filter(Boolean)
+      .join(', ')
+    const wants = n.personality?.wants ? ` Wants: ${n.personality.wants}` : ''
+    return `- ${n.key} (${n.name})${tags ? ` [${tags}]` : ''}: ${n.description}${wants}`
+  }
   const castLines = [
-    ...cast.npcs.map((n) => `- ${n.key} (${n.name}): ${n.description}`),
-    ...ctx.existingNpcs.map((n) => `- ${n.key} (${n.name}): from an earlier chapter`),
+    ...cast.npcs.map(npcLine),
+    ...ctx.existingNpcs.map((n) => `- ${n.key} (${n.name}): ${(n.facts ?? []).join('; ') || 'from an earlier chapter'}`),
     ...cast.locations.map((l) => `- ${l.key} (${l.name}): ${l.description}`),
-    ...ctx.existingLocations.map((l) => `- ${l.key} (${l.name}): from an earlier chapter`),
+    ...ctx.existingLocations.map((l) => `- ${l.key} (${l.name}): ${(l.facts ?? []).join('; ') || 'from an earlier chapter'}`),
   ].join('\n')
 
   const user = `${chapterBrief(ctx)}
@@ -481,6 +496,20 @@ function parseSections(
       }
     })
 
+  // A clue on a person is released by the reveal gate IN CONVERSATION, so one placed on someone
+  // dead or absent can never come out - the guide reads fine and the clue is simply unreachable
+  // for the whole adventure. Warn rather than fail: the DM can move it, and dropping the placement
+  // here would only make it unreachable a different way.
+  const unreachable = ingredients
+    .filter((ing) => ing.placement.npcKey && !ing.placement.locationKey)
+    .map((ing) => npcs.find((n) => n.key === ing.placement.npcKey))
+    .filter((n): n is NpcDraft => Boolean(n) && n!.initialState !== 'alive')
+  const unreachableWarnings = unreachable.map((n) =>
+    `a clue was placed on "${n.name}", who is ${n.initialState} when play begins - clues on a ` +
+    'person come out in conversation, so this one cannot be reached. Move it to a location the ' +
+    'party can search.',
+  )
+
   // Malformed sets are demoted here rather than at the row above, because demotion needs the
   // ingredients: a member whose set is dropped stays in the pool as a plain clue, and its key had
   // to survive until now so its own `coop_set_key` still resolved.
@@ -537,6 +566,7 @@ function parseSections(
     ingredients,
     warnings: [
       ...flawWarnings,
+      ...unreachableWarnings,
       ...repaired.warnings,
       // Trimming from the end can strip a coop set's member clues; repairCoopConformance above
       // then demotes that set with its own warning, which is the right outcome and already covered.

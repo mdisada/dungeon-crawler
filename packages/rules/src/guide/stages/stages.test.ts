@@ -26,7 +26,7 @@ import {
   parseStage3,
 } from './stage3.ts'
 import {
-  buildStage4CastPrompt, entityNameMatches, maxCoopDemanding, parseStage4, parseStage4Cast,
+  buildStage4CastPrompt, buildStage4IngredientsPrompt, entityNameMatches, maxCoopDemanding, parseStage4, parseStage4Cast,
   parseStage4Ingredients, validateCoopConformance,
   validateEntityCoverage,
 } from './stage4.ts'
@@ -384,6 +384,34 @@ describe('stage 4 split into two calls', () => {
     const result = parseStage4Ingredients(broken, STAGE4_CONTEXT, cast.data)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errors.some((e) => e.includes('npc:nobody'))).toBe(true)
+  })
+
+  it('tells the clue writer who is dead, who the villain is, and what people want', () => {
+    // The cast call knew all of this; handing the clue call only a description let it put a clue
+    // that comes out in CONVERSATION into a corpse's pocket.
+    const cast = parseStage4Cast(castDoc, STAGE4_CONTEXT)
+    if (!cast.ok) throw new Error('fixture cast should parse')
+    const dead = { ...cast.data.npcs[1], initialState: 'dead' as const }
+    const { user } = buildStage4IngredientsPrompt(STAGE4_CONTEXT, {
+      npcs: [{ ...cast.data.npcs[0], role: 'boss' as const }, dead],
+      locations: cast.data.locations,
+    })
+    expect(user).toContain('the chapter villain')
+    expect(user).toContain('DEAD')
+    expect(user).toContain('Wants:')
+  })
+
+  it('warns when a clue is placed on someone who cannot be talked to', () => {
+    const cast = parseStage4Cast(castDoc, STAGE4_CONTEXT)
+    if (!cast.ok) throw new Error('fixture cast should parse')
+    const doc = JSON.parse(fillingDoc)
+    const target = doc.ingredients.find((i: { placement: { npc_key?: string } }) => i.placement?.npc_key)
+    target.placement = { npc_key: target.placement.npc_key }
+    const buried = cast.data.npcs.map((n) =>
+      n.key === target.placement.npc_key ? { ...n, initialState: 'dead' as const } : n)
+    const result = parseStage4Ingredients(JSON.stringify(doc), STAGE4_CONTEXT, { ...cast.data, npcs: buried })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.warnings.some((w) => w.includes('cannot be reached'))).toBe(true)
   })
 
   it('halves add up to the whole reply', () => {
