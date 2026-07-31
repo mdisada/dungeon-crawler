@@ -94,7 +94,11 @@ export function useGuideImagePass(
 
   // `attempted` is what keeps this from looping: a row that failed, or whose generation produced
   // nothing, still counts as attempted and is not picked up again until the DM asks for it.
-  const pending: QueueItem[] = adventureId
+  //
+  // Empty while disabled, so the count is always "what a click would draw right now". It used to
+  // ignore `enabled` and only `start` checked it, which put a "Draw all 14" button on screen
+  // through the whole text pipeline that silently did nothing when pressed.
+  const pending: QueueItem[] = enabled && adventureId
     ? [
         ...npcs
           .filter((npc) => needsImages(npc) && !attempted.current.has(npc.id))

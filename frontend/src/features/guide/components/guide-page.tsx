@@ -61,12 +61,14 @@ export function GuidePage() {
   // 2026-07-31). Hooks run before the early returns below, so the pass is described in terms that
   // survive the loading state.
   const guide = state.status === 'ready' ? state.data : null
-  const hasPendingJobs = guide?.jobs.some((j) => j.status === 'queued' || j.status === 'running') ?? true
+  // EVERY stage done, not merely "nothing running right now" (owner's call, 2026-08-01). A stage
+  // that failed leaves no queued or running job, so the old check read a paused pipeline as a
+  // finished one and offered to draw a cast that was still half-written. Same predicate as
+  // `showPipeline` below, inverted: the art banner and the progress list never show together.
+  const hasUnfinishedJobs = guide?.jobs.some((j) => j.status !== 'done') ?? true
   const imagePass = useGuideImagePass(id, { npcs: guide?.npcs ?? [], locations: guide?.locations ?? [] }, {
-    // Only once the pipeline has actually landed: a paused-on-failure queue means the cast is
-    // still half-written, and drawing it would spend on rows about to be regenerated.
     enabled:
-      !hasPendingJobs && (guide?.adventure.status === 'guide_ready' || guide?.adventure.status === 'active'),
+      !hasUnfinishedJobs && (guide?.adventure.status === 'guide_ready' || guide?.adventure.status === 'active'),
     onItemDone: () => void refresh(),
   })
 
@@ -134,6 +136,8 @@ export function GuidePage() {
     try {
       await startPipeline(id)
       setValidationErrors(null)
+      // The last pass's tally described rows that are about to be replaced.
+      imagePass.retryAll()
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to restart the pipeline')
@@ -142,12 +146,16 @@ export function GuidePage() {
     }
   }
 
-  // Stage-8 reachability warnings render inside the Endings tab, not in the header. Everything
-  // else splits by kind: 'warning' feeds the sequential review popup (Approve/Edit, one at a
-  // time); 'info' is the record of what generation already fixed, collapsed out of the way.
+  // Stage-8 reachability warnings render inside the Endings tab, not in the header. Of the rest,
+  // only 'warning' surfaces: it feeds the sequential review popup (Approve/Edit, one at a time).
+  // 'info' findings are the record of what generation already fixed - nothing is asked of the DM,
+  // so they no longer take space on the page.
   const readiness = artReadiness(data)
+  // The missing-art dots wait for the same finished pipeline the batch banner does: a count taken
+  // off a cast that is still being written is counting rows that do not exist yet, and it moves on
+  // every refresh.
+  const showArtDots = !hasUnfinishedJobs
   const reviewQueue = data.warnings.filter((w) => !w.resolved && w.kind === 'warning' && w.stage !== 8)
-  const autoResolved = data.warnings.filter((w) => !w.resolved && w.kind === 'info' && w.stage !== 8)
   if (reviewOpen === null && !isGenerating && reviewQueue.length > 0) setReviewOpen(true)
 
   const editWarning = (w: GuideWarning) => {
@@ -213,18 +221,6 @@ export function GuidePage() {
           </Button>
         </section>
       )}
-      {autoResolved.length > 0 && (
-        <details className="rounded-md border p-3 text-sm text-muted-foreground">
-          <summary className="cursor-pointer select-none">
-            Auto-resolved during generation ({autoResolved.length})
-          </summary>
-          <ul className="mt-1 list-inside list-disc">
-            {autoResolved.map((w) => (
-              <li key={w.id}>{w.message}</li>
-            ))}
-          </ul>
-        </details>
-      )}
       <WarningReviewDialog
         open={reviewOpen === true}
         onOpenChange={setReviewOpen}
@@ -239,11 +235,14 @@ export function GuidePage() {
             <TabsList>
               <TabsTab value="plot">Plot &amp; Objectives</TabsTab>
               <TabsTab value="npcs">
-                NPCs ({data.npcs.length}){readiness.npcsMissing > 0 ? <MissingArtDot count={readiness.npcsMissing} /> : null}
+                NPCs ({data.npcs.length})
+                {showArtDots && readiness.npcsMissing > 0 ? <MissingArtDot count={readiness.npcsMissing} /> : null}
               </TabsTab>
               <TabsTab value="locations">
                 Locations ({data.locations.length})
-                {readiness.backgroundsMissing > 0 ? <MissingArtDot count={readiness.backgroundsMissing} /> : null}
+                {showArtDots && readiness.backgroundsMissing > 0 ? (
+                  <MissingArtDot count={readiness.backgroundsMissing} />
+                ) : null}
               </TabsTab>
               <TabsTab value="endings">Endings ({data.endings.length})</TabsTab>
             </TabsList>
