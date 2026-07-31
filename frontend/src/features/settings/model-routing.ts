@@ -55,7 +55,11 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   beat_planner: 'google/gemini-2.5-flash-lite',
   hook_weaver: 'openai/gpt-5.6-luna',
   meta_loop_steward: 'openai/gpt-5.6-luna',
-  consistency_checker: 'google/gemini-2.5-flash-lite',
+  // Primary seat since 2026-07-31: at guide time this role also runs the stage-6 group classifier,
+  // which DELETES npc rows - the one irreversible model call in the pipeline. Measured on a cast it
+  // destroyed, three runs each: flash-lite called a named individual a group 3/3, gpt-5.6-luna and
+  // glm-5.2 0/3, and all three caught a real group when one was present. See the edge copy.
+  consistency_checker: 'openai/gpt-5.6-luna',
   summarizer: 'google/gemini-2.5-flash-lite',
   user_direct: 'google/gemini-2.5-flash-lite',
 }

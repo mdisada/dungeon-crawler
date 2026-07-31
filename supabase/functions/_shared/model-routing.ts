@@ -52,20 +52,6 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   // pro model 2026-07-26 - it was ~22% of guide cost for what is menu-picking work, and flash-lite
   // parsed the node schema first try with no retry.
   beat_planner: 'google/gemini-2.5-flash-lite',
-  // PLAY-side only, and the distinction matters: at guide time this same role also runs the stage-6
-  // GROUP CLASSIFIER, which DELETES npc rows - the one irreversible model decision in the pipeline.
-  // Measured 2026-07-31 on the cast of a guide it broke (Batman [alive], Dr. Jonathan Crane
-  // [absent]), three runs each:
-  //
-  //   google/gemini-2.5-flash-lite   called Batman a group 3/3 (once Crane too)
-  //   openai/gpt-5.6-luna            0/3
-  //   z-ai/glm-5.2                   0/3
-  //
-  // All three caught a genuine group ("The Gotham City Watch") when one was present, so the cheap
-  // seat is not being careful - it is wrong. The guide phase already routes this role to
-  // GUIDE_MODEL for exactly this reason; a user model_map pin is what puts it back on the cheap
-  // tier, and doing that costs a deleted character.
-  consistency_checker: 'google/gemini-2.5-flash-lite',
   summarizer: 'google/gemini-2.5-flash-lite',
   // Not a Story agent -- direct user-triggered calls (e.g. the Settings test box). Cheap default.
   user_direct: 'google/gemini-2.5-flash-lite',
@@ -95,6 +81,23 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   // Hooks, the entry contract, and the personal-stake slots - the connective tissue the whole
   // guide hangs off. Two calls per guide.
   hook_weaver: 'openai/gpt-5.6-luna',
+  // PROMOTED 2026-07-31, on the only measurement in this table taken against a DELETION.
+  //
+  // This role looks like cheap-tier work - it reads and reports, and its stage-7 output is warnings
+  // a person triages. But at guide time it also runs the stage-6 GROUP CLASSIFIER, which DELETES
+  // npc rows: the one irreversible model decision in the pipeline, with no later stage able to put
+  // a row back. Measured on the cast of a guide it destroyed (Batman [alive], Dr. Jonathan Crane
+  // [absent]), three runs each:
+  //
+  //   google/gemini-2.5-flash-lite   called Batman a group 3/3 (once Crane too)
+  //   openai/gpt-5.6-luna            0/3
+  //   z-ai/glm-5.2                   0/3
+  //
+  // All three caught a genuine group ("The Gotham City Watch") when one was in the list, so the
+  // cheap seat was not being cautious - it was wrong about named individuals. The blast-radius
+  // rule this table is built on says an irreversible call belongs on the primary seat, and this is
+  // the role that proves it: one bad classification cost a whole generation.
+  consistency_checker: 'openai/gpt-5.6-luna',
   // Antagonist turns and, critically, the CLIMAX author - the prose the player reads as the
   // ending. Rare calls, and the last thing anyone experiences.
   meta_loop_steward: 'openai/gpt-5.6-luna',
