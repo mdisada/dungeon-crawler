@@ -78,7 +78,7 @@ export function renderCrop(
  * Throws BackdropNotKeyableError when the image is not a green-screen generation - keying a picture
  * that has real scenery behind it would punch holes in it rather than cut it out.
  */
-export async function removeImageBackground(source: Blob): Promise<Blob> {
+export async function cutOutBackdrop(source: Blob): Promise<{ blob: Blob; image: ImageData }> {
   const bitmap = await createImageBitmap(source)
   try {
     const canvas = document.createElement('canvas')
@@ -91,10 +91,17 @@ export async function removeImageBackground(source: Blob): Promise<Blob> {
     const image = ctx.getImageData(0, 0, canvas.width, canvas.height)
     if (!keyOutBackdrop(image)) throw new BackdropNotKeyableError()
     ctx.putImageData(image, 0, 0)
-    return canvasToBlob(canvas)
+    // The pixels come back with the blob because auto-framing needs the alpha channel, and
+    // decoding the PNG again just to look at it would be pure waste.
+    return { blob: await canvasToBlob(canvas), image }
   } finally {
     bitmap.close()
   }
+}
+
+export async function removeImageBackground(source: Blob): Promise<Blob> {
+  const { blob } = await cutOutBackdrop(source)
+  return blob
 }
 
 export function loadImage(url: string): Promise<HTMLImageElement> {

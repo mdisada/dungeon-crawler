@@ -27,6 +27,23 @@ export async function saveGuideRow(
   if (error) throw error
 }
 
+/**
+ * Stores generated media paths WITHOUT marking the row human-edited.
+ *
+ * `human_edited` means "a person authored this text, so regeneration must propose rather than
+ * overwrite" (SS7). A portrait is not authorship: the automatic image pass touches every NPC in the
+ * guide, and routing that through saveGuideRow would quietly protect the whole cast from ever being
+ * regenerated again. Re-framing a crop by hand is the same - it changes the picture, not the fiction.
+ */
+export async function saveGuideImages(
+  table: GuideTable,
+  id: string,
+  images: Partial<Record<string, string>>,
+): Promise<void> {
+  const { error } = await supabase.from(table).update({ images }).eq('id', id)
+  if (error) throw error
+}
+
 /** Accept a regeneration proposal: apply the proposed fields and clear it. */
 export async function acceptRegen(
   table: GuideTable,

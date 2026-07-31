@@ -2,14 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 
 import { Textarea } from '@/components/ui/textarea'
 import { useSession } from '@/features/auth'
-import { uploadImageReference, useImageGeneration } from '@/features/image'
+import {
+  BackdropNotKeyableError,
+  removeImageBackground,
+  TokenCropTool,
+  uploadImageReference,
+  useImageGeneration,
+  type CropOutputs,
+} from '@/features/image'
 import { getAssetUrl } from '@/lib/asset-storage'
 import { useAssetUrl } from '@/hooks/use-asset-url'
 import { timeJob } from '@/lib/job-timer'
 import { uploadCharacterImage } from '../../api/upload-character-image'
 import { useCharacterImageUrl } from '../../hooks/use-character-image-url'
-import { BackdropNotKeyableError, removeImageBackground } from '../../image-pipeline'
-import { TokenCropTool, type CropOutputs } from '../token-crop-tool'
 import { StepNav } from '../step-nav'
 import type { WizardStepProps } from '../step-props'
 import type { CharacterImages, SrdBackground, SrdClass, SrdRace, WizardDraft } from '../../types'

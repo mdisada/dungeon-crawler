@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 
-import { clampRect, DEFAULT_TOKEN_BACKGROUND, renderCrop, type CropRect } from '../image-pipeline'
+import { portraitRectFromToken } from '../crop-geometry'
+import { clampRect, DEFAULT_TOKEN_BACKGROUND, renderCrop, type CropRect } from '../post-process'
 
 const VIEWPORT = 240
 
@@ -90,17 +91,9 @@ export function TokenCropTool({ sourceUrl, onCrops, isBusy }: TokenCropToolProps
       img.naturalWidth,
       img.naturalHeight,
     )
-    const headCenterX = token.x + token.w / 2
-    const headCenterY = token.y + token.h / 2
-
-    // Half-body portrait (3:4): head sits in the upper fifth, frame extends down past the torso.
-    const portraitW = Math.min(token.w * 2.6, img.naturalWidth)
-    const portraitH = portraitW * (1024 / 768)
-    const portrait = clampRect(
-      { x: headCenterX - portraitW / 2, y: headCenterY - portraitH * 0.2, w: portraitW, h: portraitH },
-      img.naturalWidth,
-      img.naturalHeight,
-    )
+    // Half-body portrait (3:4): head in the upper fifth, frame extending down past the torso. The
+    // derivation lives in crop-geometry so a hand-framed crop and an auto-framed one match.
+    const portrait = portraitRectFromToken(token, img.naturalWidth, img.naturalHeight)
 
     try {
       const [tokenBlob, portraitBlob] = await Promise.all([

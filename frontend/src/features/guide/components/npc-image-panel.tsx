@@ -2,9 +2,10 @@ import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { TokenCropTool, type CropOutputs } from '@/features/characters'
-import { generateGuideImage, uploadAdventureMedia } from '../api/images'
-import { saveGuideRow } from '../api/save-guide-row'
+import { TokenCropTool, type CropOutputs } from '@/features/image'
+import { generateNpcImages } from '../api/npc-images'
+import { uploadAdventureMedia } from '../api/images'
+import { saveGuideImages, saveGuideRow } from '../api/save-guide-row'
 import { useMediaUrl } from '../hooks/use-media-url'
 import type { Npc } from '../types'
 
@@ -14,25 +15,31 @@ interface NpcImagePanelProps {
   onChanged: () => void
 }
 
-// F04 SS5.2: images NEVER auto-generate - the per-NPC prompt is shown and generation is an
-// explicit click; crops flow through the F2 tool (token/portrait derived from one rect). NPC crops
-// come off the raw generation - the background-removal chain is character-creation only.
+/**
+ * F04 SS5.2, revised 2026-07-31: images now generate automatically for the whole cast after the
+ * pipeline finishes (see use-npc-image-pass), and the crops are framed from the cutout's
+ * silhouette. This panel is the override - regenerate one NPC, or re-frame crops the measurement
+ * got wrong, using the same tool the character creator uses.
+ */
 export function NpcImagePanel({ adventureId, npc, onChanged }: NpcImagePanelProps) {
   const [prompt, setPrompt] = useState(npc.imagePrompt)
-  const [pendingSourceUrl, setPendingSourceUrl] = useState<string | null>(null)
-  const [pendingBlob, setPendingBlob] = useState<Blob | null>(null)
   const [isBusy, setIsBusy] = useState(false)
+  const [isCropping, setIsCropping] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const portraitUrl = useMediaUrl(npc.images.portrait ?? null)
 
-  async function generate() {
+  const portraitUrl = useMediaUrl(npc.images.portrait ?? null)
+  const tokenUrl = useMediaUrl(npc.images.token ?? null)
+  // Crops come off the cutout; an NPC whose backdrop could not be keyed falls back to the original.
+  const cropSourceUrl = useMediaUrl(npc.images.base ?? npc.images.original ?? npc.images.fullbody ?? null)
+
+  async function regenerate() {
     setIsBusy(true)
     setError(null)
     try {
       if (prompt !== npc.imagePrompt) await saveGuideRow('npcs', npc.id, { image_prompt: prompt })
-      const blob = await generateGuideImage(adventureId, prompt, 'npc')
-      setPendingBlob(blob)
-      setPendingSourceUrl(URL.createObjectURL(blob))
+      await generateNpcImages(adventureId, { ...npc, imagePrompt: prompt })
+      setIsCropping(false)
+      onChanged()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Image generation failed')
     } finally {
@@ -40,20 +47,19 @@ export function NpcImagePanel({ adventureId, npc, onChanged }: NpcImagePanelProp
     }
   }
 
-  async function handleCrops(crops: CropOutputs) {
-    if (!pendingBlob) return
+  async function handleCrops({ token, portrait, tokenBackground }: CropOutputs) {
     setIsBusy(true)
     setError(null)
     try {
-      const base = `npcs/${npc.id}`
+      const dir = `npcs/${npc.id}`
       const images = {
-        fullbody: await uploadAdventureMedia(adventureId, `${base}/fullbody.png`, pendingBlob),
-        token: await uploadAdventureMedia(adventureId, `${base}/token.png`, crops.token),
-        portrait: await uploadAdventureMedia(adventureId, `${base}/portrait.png`, crops.portrait),
+        ...npc.images,
+        token: await uploadAdventureMedia(adventureId, `${dir}/token.png`, token),
+        portrait: await uploadAdventureMedia(adventureId, `${dir}/portrait.png`, portrait),
+        tokenBackground,
       }
-      await saveGuideRow('npcs', npc.id, { images })
-      setPendingSourceUrl(null)
-      setPendingBlob(null)
+      await saveGuideImages('npcs', npc.id, images)
+      setIsCropping(false)
       onChanged()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Image upload failed')
@@ -65,9 +71,24 @@ export function NpcImagePanel({ adventureId, npc, onChanged }: NpcImagePanelProp
   return (
     <section className="flex flex-col gap-2">
       <h3 className="text-sm font-semibold">Images</h3>
-      {portraitUrl && !pendingSourceUrl && (
-        <img src={portraitUrl} alt={`${npc.name} portrait`} className="h-40 w-30 rounded-md object-cover" />
-      )}
+
+      <div className="flex items-end gap-3">
+        {portraitUrl ? (
+          <figure className="m-0">
+            <img src={portraitUrl} alt={`${npc.name} portrait`} className="h-40 w-30 rounded-md border object-cover" />
+            <figcaption className="mt-1 text-center text-xs text-muted-foreground">Portrait</figcaption>
+          </figure>
+        ) : (
+          <p className="text-xs text-muted-foreground">No portrait yet.</p>
+        )}
+        {tokenUrl && (
+          <figure className="m-0">
+            <img src={tokenUrl} alt={`${npc.name} token`} className="size-12 rounded-full border object-cover" />
+            <figcaption className="mt-1 text-center text-xs text-muted-foreground">Token</figcaption>
+          </figure>
+        )}
+      </div>
+
       <label className="flex flex-col gap-1 text-xs text-muted-foreground">
         Image prompt
         <Textarea
@@ -76,17 +97,27 @@ export function NpcImagePanel({ adventureId, npc, onChanged }: NpcImagePanelProp
           onChange={(e) => setPrompt(e.target.value)}
         />
       </label>
-      <div>
-        <Button size="sm" disabled={isBusy || prompt.trim().length === 0} onClick={() => void generate()}>
-          {npc.images.portrait ? 'Regenerate image' : 'Generate image'}
+
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={isBusy || prompt.trim().length === 0} onClick={() => void regenerate()}>
+          {isBusy ? 'Working…' : npc.images.original || npc.images.fullbody ? 'Regenerate image' : 'Generate image'}
         </Button>
+        {cropSourceUrl && (
+          <Button size="sm" variant="outline" disabled={isBusy} onClick={() => setIsCropping((v) => !v)}>
+            {isCropping ? 'Cancel re-crop' : 'Re-crop'}
+          </Button>
+        )}
       </div>
-      {pendingSourceUrl && (
+
+      {isCropping && cropSourceUrl && (
         <div className="flex flex-col gap-2">
-          <p className="text-xs text-muted-foreground">Frame the token (head) - the portrait derives from it.</p>
-          <TokenCropTool sourceUrl={pendingSourceUrl} onCrops={(crops) => void handleCrops(crops)} isBusy={isBusy} />
+          <p className="text-xs text-muted-foreground">
+            Frame the head - the portrait derives from it. Replaces the automatic framing.
+          </p>
+          <TokenCropTool sourceUrl={cropSourceUrl} onCrops={(crops) => void handleCrops(crops)} isBusy={isBusy} />
         </div>
       )}
+
       {error && <p className="text-xs text-destructive">{error}</p>}
     </section>
   )

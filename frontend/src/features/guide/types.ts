@@ -48,6 +48,15 @@ export interface Objective {
   pendingRegen: Record<string, unknown> | null
 }
 
+/**
+ * The set written since 2026-07-31 is original -> base -> {portrait, token}, plus the hex baked in
+ * behind the token. `fullbody`/`avatar` are the older scheme: still read, never written. A type
+ * alias rather than an interface so it can be handed to the generic image writer.
+ */
+export type NpcImages = Partial<
+  Record<'original' | 'base' | 'portrait' | 'token' | 'tokenBackground' | 'fullbody' | 'avatar', string>
+>
+
 export interface Npc {
   id: string
   chapterId: string | null
@@ -57,7 +66,7 @@ export interface Npc {
   faction: string
   voiceId: string | null
   imagePrompt: string
-  images: Partial<Record<'fullbody' | 'avatar' | 'token' | 'portrait', string>>
+  images: NpcImages
   description: string
   statBlock: NpcStatBlock | null
   humanEdited: boolean

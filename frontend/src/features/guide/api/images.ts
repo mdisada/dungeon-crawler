@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 
 const SIGNED_URL_TTL_SECONDS = 3600
 
-async function requestImage(
+export async function requestImage(
   adventureId: string,
   payload: Record<string, unknown>,
   model?: string,
@@ -32,7 +32,7 @@ async function requestImage(
   return imageUrl
 }
 
-async function toBlob(imageUrl: string): Promise<Blob> {
+export async function toBlob(imageUrl: string): Promise<Blob> {
   const res = await fetch(imageUrl)
   if (!res.ok) throw new Error('Could not download the generated image')
   return res.blob()

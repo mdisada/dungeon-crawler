@@ -1816,3 +1816,60 @@ no keyer can find that. Watched, not fixed.
 (`base_char` backdrop clause), `steps/step-portrait.tsx` (no progress percentage — it is one frame
 of work now), `config/env.ts` + `vite-env.d.ts` (`VITE_IMGLY_ASSET_BASE` removed),
 `docs/F02-character-page-creator.md` §4.
+
+---
+
+## 2026-07-31 — The guide draws its own cast, and the crops frame themselves
+
+**What:** NPC images stop being a per-row click. Once the pipeline lands and the adventure is
+`guide_ready`/`active`, `useNpcImagePass` walks every NPC that has a description and no images and
+runs it through the same chain a player character goes through — `original` → `base` (chroma-key
+cutout) → `portrait` + `token` — one at a time, behind a readable guide, with progress and a Stop
+button. `portrait` is what the visual-novel speaker slot reads in play (`session/social-staging.ts`
+already prefers it), and `token` is what the map and roster read.
+
+**Why the reversal.** F04 §5.2 said images NEVER auto-generate. That rule was written when the
+alternative was a slow, expensive per-image click; a cast of fourteen simply arrived in play as
+fourteen name plates, because nobody clicks fourteen times. What changed underneath it: Krea at
+$0.015 an image (down from $0.0336) and a cutout that costs 148 ms instead of 42 MB of weights, so a
+whole cast is ~$0.20 and a few minutes of background work.
+
+**The crops frame themselves, which is the part that makes it usable.** Auto-generating images
+nobody has cropped would leave every speaker slot showing a full body where a bust belongs. The
+cutout makes the silhouette measurable, so `features/image/crop-geometry.ts` finds the head and
+derives the portrait from it with the same function the manual tool uses — re-cropping by hand moves
+the framing rather than changing the rules. Two things had to be measured against real generations
+to get it right:
+
+- **Row width means the widest CONTIGUOUS run, not the row's extent.** The elf's bow crosses the
+  frame, putting solid pixels at both edges of a row: measured as an extent, his skull reads 225 px
+  wide when it is 45, and the head detector locked onto the bow tip as the top of the figure.
+- **The token frame is sized from head WIDTH, not height.** A dwarf's beard trips the
+  shoulder-widening test early — his head measured 98 px tall against the elf's 135 — and sizing on
+  that cropped him at the nose. Head width is stable across both.
+
+**Also fixed, same change:** image writes no longer go through `saveGuideRow`, which sets
+`human_edited: true`. That flag means "a person authored this text, so regeneration must propose
+rather than overwrite" (F04 §7) — routing an automatic pass through it would have silently marked
+the entire cast hand-edited and protected it from ever being regenerated. `saveGuideImages` writes
+the paths and nothing else. The manual crop path had the same bug in miniature and is fixed with it.
+
+**Shared code moved rather than duplicated:** `chroma-key.ts`, `post-process.ts` and
+`token-crop-tool.tsx` now live in `features/image` (they are used by characters and the guide alike),
+with `crop-geometry.ts` alongside them. The guide no longer imports its NPC art pipeline from
+`features/characters`.
+
+**Guards:** an NPC with no description is skipped, so "Add NPC" does not spend a generation on a
+blank row. A row is attempted once per visit — a failure does not loop. The pass is disabled while
+any pipeline job is queued or running, because a paused-on-failure queue means the cast is still
+half-written.
+
+**Known limitation:** two DMs with the guide open in two browsers would both run the pass and pay
+twice. Not worth a lock yet; the writes are idempotent by path, so the outcome is correct, just
+wasteful.
+
+**Updated:** `features/image/{chroma-key,post-process,crop-geometry,components/token-crop-tool}` (moved
++ new, 9 new geometry tests), `features/guide/{api/npc-images,hooks/use-npc-image-pass,components/npc-image-pass-banner}`
+(new), `features/guide/{components/npc-image-panel,components/guide-page,api/save-guide-row,api/images,types}`,
+`features/characters/{index,components/steps/step-portrait}`, `docs/F04-adventure-guide-pipeline-editor.md`
+§3/§5.2/§8.
