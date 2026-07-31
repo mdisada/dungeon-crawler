@@ -48,11 +48,9 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   npc_agent: 'openai/gpt-5.6-luna',
   adjudicator: 'google/gemini-2.5-flash-lite',
   loop_classifier: 'google/gemini-2.5-flash-lite',
-  encounter_designer: 'google/gemini-2.5-flash-lite',
   npc_tactician: 'google/gemini-2.5-flash-lite',
   story_director: 'openai/gpt-5.6-luna',
   ingredient_generator: 'openai/gpt-5.6-luna',
-  beat_planner: 'google/gemini-2.5-flash-lite',
   hook_weaver: 'openai/gpt-5.6-luna',
   meta_loop_steward: 'openai/gpt-5.6-luna',
   // Primary seat since 2026-07-31: at guide time this role also runs the stage-6 group classifier,
@@ -60,6 +58,11 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   // destroyed, three runs each: flash-lite called a named individual a group 3/3, gpt-5.6-luna and
   // glm-5.2 0/3, and all three caught a real group when one was present. See the edge copy.
   consistency_checker: 'openai/gpt-5.6-luna',
+  // Promoted 2026-07-31 (owner's call). beat_planner measured on one objective, seven runs each:
+  // flash-lite 4.1-4.4s writing three skill challenges, gpt-5.6-luna 7.5-10.2s with 7/7 parses and
+  // a puzzle in every run. encounter_designer rides along unmeasured - its budget guard is code.
+  beat_planner: 'openai/gpt-5.6-luna',
+  encounter_designer: 'openai/gpt-5.6-luna',
   summarizer: 'google/gemini-2.5-flash-lite',
   user_direct: 'google/gemini-2.5-flash-lite',
 }

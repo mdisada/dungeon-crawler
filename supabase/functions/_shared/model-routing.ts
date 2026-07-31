@@ -46,12 +46,7 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   // price than the premium seat below. "flash" is not a synonym for cheap on OpenRouter.
   adjudicator: 'google/gemini-2.5-flash-lite',
   loop_classifier: 'google/gemini-2.5-flash-lite',
-  encounter_designer: 'google/gemini-2.5-flash-lite',
   npc_tactician: 'google/gemini-2.5-flash-lite',
-  // Story-node authoring: schema-constrained, code-derived outcomes, lint-gated. Demoted from a
-  // pro model 2026-07-26 - it was ~22% of guide cost for what is menu-picking work, and flash-lite
-  // parsed the node schema first try with no retry.
-  beat_planner: 'google/gemini-2.5-flash-lite',
   summarizer: 'google/gemini-2.5-flash-lite',
   // Not a Story agent -- direct user-triggered calls (e.g. the Settings test box). Cheap default.
   user_direct: 'google/gemini-2.5-flash-lite',
@@ -98,6 +93,25 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   // rule this table is built on says an irreversible call belongs on the primary seat, and this is
   // the role that proves it: one bad classification cost a whole generation.
   consistency_checker: 'openai/gpt-5.6-luna',
+  // PROMOTED 2026-07-31 (owner's call), reversing the 2026-07-26 demotion and the 2026-07-29 guide
+  // exemption. Both rested on facts about models that no longer sit in these seats.
+  //
+  // `beat_planner` authors a chapter's playable scenes. Measured on one objective, seven runs each,
+  // with the route ceiling stated in the prompt (it was not, and that was worth finding):
+  //
+  //   google/gemini-2.5-flash-lite   4.1-4.4s   ~1150 tok   2/2 parsed   kinds: skill/skill/skill
+  //   openai/gpt-5.6-luna            7.5-10.2s  ~1160 tok   7/7 parsed   puzzle in 7/7, combat 5/7
+  //
+  // 8.5s average against a 150s invocation, so four objectives cost ~34s - nothing like the 83s
+  // that got this role exempted when glm-5.2 held the seat. What the money buys is scene VARIETY:
+  // the cheap seat wrote three skill challenges for an objective where luna wrote a puzzle every
+  // time. "Menu-picking work" was the demotion's argument, and it is exactly where a stronger
+  // writer shows: the menu is the same, the choices are not.
+  beat_planner: 'openai/gpt-5.6-luna',
+  // `encounter_designer` rides along on the owner's call. Its exemption shared beat_planner's dead
+  // premises, but note honestly: it has NOT been measured on this seat. The budget arithmetic that
+  // guards it is code, not model, so the downside is spend and latency rather than a bad fight.
+  encounter_designer: 'openai/gpt-5.6-luna',
   // Antagonist turns and, critically, the CLIMAX author - the prose the player reads as the
   // ending. Rare calls, and the last thing anyone experiences.
   meta_loop_steward: 'openai/gpt-5.6-luna',
@@ -159,40 +173,26 @@ export type ResolvePhase = 'play' | 'guide'
 const GUIDE_MODEL = SYSTEM_DEFAULT_MODEL_MAP.story_director
 
 /**
- * Guide-time roles the strong model is NOT worth paying for, measured 2026-07-29.
+ * RETIRED 2026-07-31 - kept empty rather than deleted, because the mechanism is one line and the
+ * history is the point.
  *
- * `beat_planner` authors a whole chapter's node graph in ONE call. Same role, same task:
+ * It held `beat_planner` and `encounter_designer`, exempted 2026-07-29 on this measurement:
  *
  *   google/gemini-2.5-flash-lite   4.7s   1006 output tokens   213 tok/s   (11 calls)
  *   z-ai/glm-5.2                  83.3s   4000 output tokens    48 tok/s
  *
- * 4.4x slower per token AND four times the output - landing exactly on the 4000-token cap, so the
- * reply was TRUNCATED. Stage 5 then retried inside the same invocation and blew the edge function's
- * ~150s wall clock four times running, taking the whole guide down with it. `encounter_designer`
- * showed the same shape at 33-87s across six calls.
+ * glm-5.2 landed exactly on the 4000-token cap, so its reply was truncated, stage 5 retried inside
+ * the same invocation, and the ~150s wall clock died four times running. `encounter_designer`
+ * showed the same shape at 33-87s across six calls. The exemption is what kept guides finishing.
  *
- * So the promotion bought a cut-off answer and a failed generation, not quality. And these are
- * precisely the roles the 2026-07-26 tiering demoted for being schema-constrained, lint-gated
- * menu-picking - an argument that is STRONGER after 2026-07-29, because outcomes, transitions and
- * `establishes` are now all code-derived and the model only writes fiction and picks from closed
- * menus. The roles that actually shape the story - story_director, ingredient_generator,
- * hook_weaver - keep the strong model.
+ * Every premise of that has since gone. Stage 5 authors one call per OBJECTIVE (2026-07-29) instead
+ * of one per chapter, the seat holds gpt-5.6-luna rather than glm-5.2, and re-measuring the same
+ * role on the same objective gives 7.5-10.2s and 7/7 parses. An exemption argued from a truncation
+ * that cannot recur, against a model no longer in the seat, is not evidence - it is residue.
  *
- * The real fix for stage 5 is to author one call per OBJECTIVE rather than per chapter; the
- * truncation will bite on any model as guides grow. Until then this exemption is what keeps guide
- * generation finishing at all.
- *
- * BOTH of those conditions have since changed, and this list has NOT been re-measured (2026-07-31).
- * Stage 5 does author one call per objective now (2026-07-29), and the model this was measured
- * against is no longer the one GUIDE_MODEL resolves to. The 83.3s and 48 tok/s above are facts
- * about glm-5.2 and say nothing about gpt-5.6-luna. So this exemption may now be costing quality
- * for no reason - or still be the thing keeping stage 5 inside its wall clock. Re-run the same
- * comparison before trusting either guess.
+ * If a future seat is slow again, this is where that goes, with its numbers.
  */
-const GUIDE_MODEL_EXEMPT: ReadonlySet<AgentRole> = new Set<AgentRole>([
-  'beat_planner',
-  'encounter_designer',
-])
+const GUIDE_MODEL_EXEMPT: ReadonlySet<AgentRole> = new Set<AgentRole>([])
 
 /** User's model_map entry wins; then the phase default; then the MAIN-SPEC SS4.7 role default. */
 export function resolveModel(
