@@ -33,11 +33,14 @@ export function MapEditorCanvas({
 }: MapEditorCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const panEnabled = tool === 'pan'
-  const { viewport, onWheel, onPointerDown, onPointerMove, onPointerUp, toMapPx } = useMapViewport(containerRef, panEnabled)
-  const strokeRef = useRef<Set<string> | null>(null)
-
   const mapW = cols * CELL_PX
   const mapH = rows * CELL_PX
+  const { viewport, onWheel, onPointerDown, onPointerMove, onPointerUp, toMapPx } = useMapViewport(
+    containerRef,
+    panEnabled,
+    { width: mapW, height: mapH, key: url ?? '' },
+  )
+  const strokeRef = useRef<Set<string> | null>(null)
 
   function paintAt(clientX: number, clientY: number) {
     const at = toMapPx(clientX, clientY)

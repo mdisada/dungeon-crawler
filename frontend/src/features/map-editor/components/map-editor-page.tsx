@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { useSession } from '@/features/auth'
 
 import { useMapEditor } from '../hooks/use-map-editor'
+import { DEFAULT_GRID_COLS, DEFAULT_GRID_ROWS } from '../types'
 import { MapEditorCanvas } from './map-editor-canvas'
 import { MapList } from './map-list'
 import { MapPropertiesPanel } from './map-properties-panel'
@@ -46,8 +47,8 @@ export function MapEditorBody({ userId, headerAction }: { userId: string; header
       <div className="relative min-w-0 flex-1">
         <MapEditorCanvas
           url={editor.selected?.url ?? null}
-          cols={editor.draft?.gridCols ?? 32}
-          rows={editor.draft?.gridRows ?? 32}
+          cols={editor.draft?.gridCols ?? DEFAULT_GRID_COLS}
+          rows={editor.draft?.gridRows ?? DEFAULT_GRID_ROWS}
           imageFit={editor.draft?.imageFit ?? 'fill'}
           obstacles={editor.draft?.obstacles ?? []}
           spawns={editor.draft?.spawns ?? { party: [], enemy: [] }}

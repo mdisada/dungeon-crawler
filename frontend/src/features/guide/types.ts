@@ -3,6 +3,7 @@
 import type { Cell } from '@rules/combat'
 import type { NpcStatBlock } from '@rules/guide'
 
+import { DEFAULT_GRID_COLS, DEFAULT_GRID_ROWS } from '@/features/map-editor'
 import type { MapImageFit, Spawns } from '@/features/map-editor'
 
 export interface StoryDial {
@@ -91,7 +92,7 @@ export interface BattleMap {
 }
 
 export const DEFAULT_BATTLE_MAP: BattleMap = {
-  imagePath: null, gridCols: 32, gridRows: 32, imageWidth: null, imageHeight: null,
+  imagePath: null, gridCols: DEFAULT_GRID_COLS, gridRows: DEFAULT_GRID_ROWS, imageWidth: null, imageHeight: null,
   imageFit: 'fill', obstacles: [], spawns: { party: [], enemy: [] },
 }
 

@@ -2,7 +2,7 @@
 // (kept as a per-feature copy so map-editor never imports from combat-lab); `panEnabled` lets the
 // paint tools claim the drag gesture instead of panning.
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
 export interface MapViewport {
   x: number
@@ -10,12 +10,57 @@ export interface MapViewport {
   scale: number
 }
 
+/** The map content the viewport frames. `key` changes when a different map is loaded, which re-fits. */
+export interface MapContent {
+  width: number
+  height: number
+  key: string
+}
+
 const MIN_SCALE = 0.15
 const MAX_SCALE = 3
+const FIT_PADDING = 16
 
-export function useMapViewport(containerRef: React.RefObject<HTMLDivElement | null>, panEnabled: boolean) {
-  const [viewport, setViewport] = useState<MapViewport>({ x: 0, y: 0, scale: 0.6 })
+export function useMapViewport(
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  panEnabled: boolean,
+  content: MapContent,
+) {
+  const [viewport, setViewport] = useState<MapViewport>({ x: 0, y: 0, scale: 1 })
   const panRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null)
+
+  const { width, height, key } = content
+
+  /** Centres the map and scales it to fill the container. Returns false while the container has no size yet. */
+  const fit = useCallback(() => {
+    const el = containerRef.current
+    if (!el || width <= 0 || height <= 0) return false
+    const cw = el.clientWidth - FIT_PADDING * 2
+    const ch = el.clientHeight - FIT_PADDING * 2
+    if (cw <= 0 || ch <= 0) return false
+    const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.min(cw / width, ch / height)))
+    setViewport({ scale, x: (el.clientWidth - width * scale) / 2, y: (el.clientHeight - height * scale) / 2 })
+    return true
+  }, [containerRef, width, height])
+
+  // Fit on load. A dialog's container can still be zero-sized on the first layout pass, so keep
+  // watching until it has one; grid edits change `fit` but not `key`, and must not re-frame the map.
+  const fittedKeyRef = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (!el || fittedKeyRef.current === key) return
+    if (fit()) {
+      fittedKeyRef.current = key
+      return
+    }
+    const observer = new ResizeObserver(() => {
+      if (!fit()) return
+      fittedKeyRef.current = key
+      observer.disconnect()
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [containerRef, fit, key])
 
   const onWheel = useCallback(
     (e: React.WheelEvent) => {

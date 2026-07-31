@@ -6,8 +6,8 @@ export const CELL_PX = 32
 /** Grid bounds an authored map may use (mirrors the DB check constraint). */
 export const MIN_GRID = 4
 export const MAX_GRID = 128
-export const DEFAULT_GRID_COLS = 32
-export const DEFAULT_GRID_ROWS = 32
+export const DEFAULT_GRID_COLS = 30
+export const DEFAULT_GRID_ROWS = 30
 
 /** How the uploaded image maps onto the cols x rows grid area. */
 export type MapImageFit = 'fill' | 'cover' | 'contain'
