@@ -522,19 +522,40 @@ describe('stage 4 (ingredients + coop sets)', () => {
     expect(result.data.warnings.some((w) => w.includes('min_players'))).toBe(true)
   })
 
-  it('drops coop sets whole in a solo adventure instead of conformance-checking them', () => {
-    // Live 2026-07-31 on a min_players=1 one-shot: the model authored three sets, two were demoted
-    // for members lacking a reveals_to - a rule the solo prompt never states, because it tells the
-    // model not to author coop content at all - and the third, a complementary_obstacle needing two
-    // characters at once, survived into a one-player guide.
-    const result = parseStage4(STAGE4_RESPONSE, { ...STAGE4_CONTEXT, seed: SOLO_SEED })
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.data.coopSets).toEqual([])
-    expect(result.data.ingredients.every((i) => i.coopSetKey === null)).toBe(true)
-    expect(result.data.warnings.some((w) => w.includes('can be played solo'))).toBe(true)
-    // One note about the whole thing, not one verdict per set.
-    expect(result.data.warnings.filter((w) => w.includes('demoted')).length).toBe(0)
+  describe('a party of one can find clues, it just cannot act twice at once', () => {
+    // bindCoopSet runs at first session start and falls back to any_pc for every member it cannot
+    // match, so a lone player finds ALL of a split-knowledge set's clues. Dropping those to suit
+    // the floor would rob a four-player table of content for nothing.
+    it('KEEPS a split-knowledge set when the adventure allows one player', () => {
+      const result = parseStage4(STAGE4_RESPONSE, { ...STAGE4_CONTEXT, seed: SOLO_SEED })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.data.coopSets.map((s) => s.kind)).toEqual(['split_knowledge'])
+    })
+
+    it('drops a complementary obstacle, which needs two characters at once', () => {
+      const doc = JSON.parse(STAGE4_RESPONSE)
+      doc.coop_sets = [{ key: 'coop:gate', kind: 'complementary_obstacle', reveals: 'The gate opens.' }]
+      doc.ingredients = (doc.ingredients as { coop_set_key: string | null }[])
+        .map((i, idx) => ({ ...i, coop_set_key: idx === 0 ? 'coop:gate' : null }))
+      const result = parseStage4(JSON.stringify(doc), { ...STAGE4_CONTEXT, seed: SOLO_SEED })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.data.coopSets).toEqual([])
+      expect(result.data.ingredients.every((i) => i.coopSetKey === null)).toBe(true)
+      expect(result.data.warnings.some((w) => w.includes('two characters acting at the same time'))).toBe(true)
+    })
+
+    it('tells a mixed-size adventure it may split knowledge but not demand two hands', () => {
+      const { system } = buildStage4IngredientsPrompt(
+        { ...STAGE4_CONTEXT, seed: { ...SOLO_SEED, maxPlayers: 4 } },
+        { npcs: [], locations: [] },
+      )
+      expect(system).toContain('ANY size from 1 to 4')
+      expect(system).toContain('NEVER author a "complementary_obstacle"')
+      // The rule the parser enforces is stated at this size too - that was the actual bug.
+      expect(system).toContain('EVERY member clue needs a reveals_to affinity')
+    })
   })
 
   it('allows a coop-free chapter for a solo adventure without warnings', () => {

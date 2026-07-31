@@ -180,14 +180,28 @@ Respond with ONLY a JSON object, no prose, in exactly this shape:
 
 /** Second call: the clue pool, placed on a cast it is handed rather than one it remembers. */
 export function buildStage4IngredientsPrompt(ctx: Stage4Context, cast: Stage4Cast): Stage4Prompt {
+  // The SPLIT-KNOWLEDGE rules are stated at every party size, because they are what the parser
+  // checks at every party size. Stating them only in the multiplayer branch is how a solo one-shot
+  // came to be judged for "every member needs a reveals_to affinity" - a rule it had never been
+  // shown (live 2026-07-31). A prompt that withholds a rule the code enforces is the recurring
+  // defect in this pipeline, not a coop-specific accident.
+  const splitKnowledgeRules =
+    '- "split_knowledge": decompose one deduction across 2-3 CLUE ingredients (type "clue", never a secret, item or rumor); EVERY member clue needs a reveals_to affinity ({"skill": "religion"} or {"class": "rogue"} or {"background_tag": "criminal"}) and a coop_set_key naming the set; the combined conclusion goes in the SET\'s "reveals" text, never on a single clue.'
   const coopRules =
     ctx.seed.minPlayers > 1
       ? `
 Cooperative content (REQUIRED - this adventure has ${ctx.seed.minPlayers}+ players):
-- Produce at least one coop_set. "split_knowledge": decompose one deduction across 2-3 clue ingredients; each member clue gets a reveals_to affinity ({"skill": "religion"} or {"class": "rogue"} or {"background_tag": "criminal"}); the combined conclusion goes in the SET's "reveals" text, never on a single clue.
+- Produce at least one coop_set.
+${splitKnowledgeRules}
 - "complementary_obstacle": an obstacle needing two proficiencies at the same time (hold the gate with Athletics while the lock is picked). At most ${maxCoopDemanding(ctx.objectives.length)} of these for this chapter's ${ctx.objectives.length} objectives - everything else must reward cooperation, not demand it.`
-      : `
-This can be played solo: do not create content that REQUIRES multiple simultaneous characters.`
+      : ctx.seed.maxPlayers > 1
+        ? `
+Cooperative content (OPTIONAL - this adventure must play at ANY size from 1 to ${ctx.seed.maxPlayers}):
+- You may author "split_knowledge" sets and they are welcome: a party of one simply finds all the member clues themselves, so nothing is lost but the moment of pooling them.
+${splitKnowledgeRules}
+- NEVER author a "complementary_obstacle". It needs two characters acting at the same time, and one player cannot do that - it would be dropped.`
+        : `
+This is played SOLO (one character). Do not author cooperative sets at all: there is nobody to split knowledge with and nobody to hold the gate.`
 
   // The required entities are non-negotiable, so the ingredient ask is what has to give when a
   // chapter has a big cast. Court's multi-chapter stage 4 failed all four retries - truncating,
@@ -709,35 +723,39 @@ export function repairCoopConformance(
   const warnings: string[] = []
   const demotedKeys = new Set<string>()
 
-  // A SOLO ADVENTURE HAS NO COOPERATIVE CONTENT TO CONFORM (2026-07-31).
-  //
-  // The prompt tells a min_players=1 chapter "do not create content that REQUIRES multiple
-  // simultaneous characters" and, in the same breath, withholds the rules a coop set must satisfy -
-  // they live in the multiplayer branch. So a model that authors one anyway is judged against
-  // requirements it was never shown. Live today: three sets on a solo one-shot, two demoted for
-  // members being `secret`/`rumor` without a `reveals_to`, reported to the creator as if there were
-  // something to fix, and the third - a complementary_obstacle, an obstacle needing two characters
-  // at once - kept, in a one-player adventure.
-  //
-  // Cooperative content in a solo guide is not nonconforming, it is inapplicable. Dropped whole,
-  // with one note, instead of three conformance verdicts about content that should not exist.
-  if (minPlayers <= 1 && coopSets.length > 0) {
-    for (const ing of ingredients) ing.coopSetKey = null
-    return {
-      coopSets: [],
-      warnings: [
-        `${coopSets.length} cooperative set(s) were dropped: this adventure can be played solo ` +
-        '(min_players 1), so nothing may require two characters acting at once. Their clues stay ' +
-        'in the pool as ordinary ingredients.',
-      ],
-    }
-  }
   const demote = (set: CoopSetDraft, reason: string) => {
     demotedKeys.add(set.key)
     for (const ing of ingredients) {
       if (ing.coopSetKey === set.key) ing.coopSetKey = null
     }
     warnings.push(`coop set "${set.key}" was demoted to plain ingredients: ${reason}`)
+  }
+  // WHAT A SOLO PARTY CANNOT DO IS ACT TWICE AT ONCE (2026-07-31, corrected same day).
+  //
+  // The first version of this dropped EVERY coop set when min_players was 1, which is wrong for the
+  // shape most adventures have: min 1, max 4. A guide is authored once and played by whoever turns
+  // up - solo tonight, four players next month - so authoring to the floor robs the larger table of
+  // content it could have had.
+  //
+  // The runtime already settles the difference, and it settles it in favour of keeping the content.
+  // `bindCoopSet` runs at first session start, when the party is finally known: it matches member
+  // clues to characters by affinity and falls back to `any_pc` for every member it cannot match. A
+  // lone player therefore finds ALL of a split-knowledge set's clues; what they lose is the moment
+  // of pooling them, not the evidence.
+  //
+  // `complementary_obstacle` is the one kind that does not degrade: it asks for two proficiencies
+  // AT THE SAME TIME, nothing at runtime relaxes that, and nothing reads the coop_sets table in
+  // play to notice. So that kind alone is dropped when one player is allowed.
+  if (minPlayers <= 1) {
+    for (const set of coopSets) {
+      if (set.kind !== 'complementary_obstacle') continue
+      demote(
+        set,
+        'this adventure allows a party of one, and a complementary obstacle needs two characters ' +
+        'acting at the same time. Split-knowledge sets are kept - a lone player simply finds all ' +
+        'their clues.',
+      )
+    }
   }
 
   for (const set of coopSets) {
