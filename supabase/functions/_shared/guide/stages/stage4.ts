@@ -7,7 +7,7 @@
 // density guardrail (checked by validateCoopConformance below - also used by tests).
 
 import { Check, extractJsonObject } from '../json.ts'
-import { stage4Schema } from './stage4-schema.ts'
+import { stage4CastSchema, stage4IngredientsSchema } from './stage4-schema.ts'
 import type { NpcStatSeed } from '../npc-stats.ts'
 import type {
   AdventureSeed,
@@ -94,12 +94,95 @@ export function maxCoopDemanding(objectiveCount: number): number {
   return Math.floor(objectiveCount / 3)
 }
 
-export function buildStage4Prompt(ctx: Stage4Context): {
+export interface Stage4Prompt {
   system: string
   user: string
   maxTokens: number
   schema: { name: string; schema: Record<string, unknown> }
-} {
+}
+
+/**
+ * What both halves of stage 4 need to know about the chapter. Sent twice, deliberately: ~10k
+ * characters of input is the cheapest part of this stage, and a filling call that cannot see the
+ * scenes and objectives writes clues for a chapter it has not read.
+ */
+function chapterBrief(ctx: Stage4Context): string {
+  const objectiveList = ctx.objectives
+    .map((o, i) => `${i + 1}. ${o.title} - ${o.hiddenDescription}`)
+    .join('\n')
+  const sceneList = ctx.scenes.map((s, i) => `Scene ${i + 1}: ${s.sketch}`).join('\n')
+  const existing = [
+    establishedLines('NPCs', ctx.existingNpcs),
+    establishedLines('locations', ctx.existingLocations),
+  ]
+    .filter(Boolean)
+    .join('\n')
+  const required = ctx.requiredEntities
+    .map((e) => `- [${e.kind}] ${e.name}: ${e.note}`)
+    .join('\n')
+
+  return `Meta loop antagonist: ${ctx.metaLoop.antagonist}
+
+Chapter ${ctx.chapterNumber}: ${ctx.chapter.title}
+Arc summary: ${ctx.chapter.arcSummary}
+
+REQUIRED entities (every one must become a row, exact names):
+${required || '(none)'}
+
+Scene sketches:
+${sceneList}
+
+Objectives:
+${objectiveList}
+${existing ? `\n${existing}` : ''}`
+}
+
+/** First call: the people and the places. Nothing here depends on the clue pool. */
+export function buildStage4CastPrompt(ctx: Stage4Context): Stage4Prompt {
+  const system = `You are the Ingredient Generator for a tabletop RPG platform. For one chapter, produce its CAST: the NPCs and the locations. A later call places the clues, so write none here.
+
+LENGTH IS A HARD CONSTRAINT. Every description, arrival_line and image_prompt is ONE short
+sentence. Never write two sentences where one carries the idea. Completing every required entity
+briefly beats describing a few of them beautifully.
+
+Rules:
+- REQUIRED ENTITIES: the chapter's registry (listed below) names what the story already established. Every entry marked [npc] or [location] MUST appear in your response as a row with the EXACT same name (or be reused by existing key). Missing one is a validation failure. Entries marked [lore] are factions, forces and phenomena - they are world context to WRITE ABOUT, and you must NOT create rows for them.
+- AN NPC IS ONE PERSON. Only create an npc row for an INDIVIDUAL the party could talk to or fight: someone with a name, a voice and opinions. Never create an npc for a group ("the city watch", "Valerius's agents", "the lost expedition") or for a force, curse or plague ("the Blight", "the Murkheart"). A group cannot hold a conversation, so giving it an npc row hands it a heartbeat, a mood and a seat in dialogue it can never use - and the game then treats killing a few of its members as the death of a person. Fights against a group are built from creature counts at the encounter stage, and if the party ever needs to TALK to a faction, name ONE representative of it as an individual npc (e.g. "Iron Hand Envoy Sera") and create that person instead.
+- Every scene's cast and places must exist: create the NPCs and locations the scene sketches imply. Mark the chapter's main villain (if present here) as role "boss".
+- "pronouns" is REQUIRED on every NPC: exactly one of "he/him", "she/her", "they/them", or "it/its" for a construct or creature. Write the pair and nothing else - not "male", not a sentence. The live narrator uses this and nothing else to refer to them, so a name that reads one way and pronouns that read another is a contradiction the players will see; pick deliberately and make the description agree with it.
+- "initial_state" is where the NPC stands when play BEGINS: "alive" (default), "dead", or "absent" (alive but not reachable yet). A murder victim, or anyone the premise says is already dead or missing, MUST NOT be "alive" - the live game will otherwise stage them and have them speak. At least one NPC must be living and reachable, or the party has nobody to talk to.
+- Reuse existing NPCs/locations by their key instead of duplicating them.
+- Every location needs "features": 3-5 things in it a player might point at and examine, each with the DETAIL they find on looking closely. This is the single most-used thing you will author: players spend most of their turns asking about and examining the room, and anything you do not write here the narrator has to invent on the spot - which is where contradictions come from. Write what is THERE and what it tells them ("the bellows: the leather is new, replaced within the month, though the foundry has cast nothing in a year"), never a puzzle solution and never a secret the chapter is saving.
+- Every location needs an "arrival_line": one or two sentences for the moment the party gets here, written so it works whether they walked, were sent, or arrived in a hurry. THIS IS WHERE A DISCOVERY BELONGS - the warmth rising from a cellar floor, the salt crust undisturbed since dawn. Only the party ever reads it.
+- A location's "description" is the OPPOSITE: what the place IS to anyone who lives in this world, in one plain sentence ("a timber records building near the centre of the saltworks, where the wage ledgers are kept"). NPCs are given these so they can answer "what's the tallyhouse" instead of stonewalling or inventing, so a description must never contain something the party is meant to discover. If it is a secret, it goes in the arrival_line, never here.
+- Keys are short lowercase slugs unique in this response, e.g. "npc:volgarth", "loc:sunken-chapel". The clue-writing call places its clues on these exact keys, so they must be stable and self-explanatory.
+- image_prompt fields describe the visual for later image generation (style-neutral, concrete).
+- Every NPC gets a lightweight "combat" block so it can appear in combat: pick an "archetype"
+  (brute = melee bruiser, skirmisher = mobile fighter, sniper = ranged, caster = spellcaster,
+  leader = commander/social, minion = weak mook) and a challenge rating "cr" from
+  "0","1/8","1/4","1/2","1","2","3","4","5" (bosses roughly 2-5, common NPCs 0-1). Optionally give
+  0-2 "skills" (proper-case skill names) and a signature "attack" name. Abilities/HP/AC are derived
+  from archetype + cr - do NOT supply them.
+
+Respond with ONLY a JSON object, no prose, in exactly this shape:
+{
+  "npcs": [ { "key": "npc:...", "name": "...", "role": "npc"|"boss", "pronouns": "he/him"|"she/her"|"they/them"|"it/its", "initial_state": "alive"|"dead"|"absent", "personality": { "traits": "...", "voice": "...", "wants": "..." }, "faction": "...", "description": "...", "image_prompt": "...", "combat": { "cr": "1/4", "archetype": "brute"|"skirmisher"|"sniper"|"caster"|"leader"|"minion", "skills": ["Perception"], "attack": "Rusty Cutlass" } } ],
+  "locations": [ { "key": "loc:...", "name": "...", "description": "...", "image_prompt": "...",
+                   "arrival_line": "...",
+                   "features": [ { "name": "the bellows", "detail": "what a character finds on looking closely" } ] } ]
+}`
+
+  return {
+    system,
+    user: chapterBrief(ctx),
+    // Half a chapter: 7 npcs + 6 locations measured at ~3000 tokens, against a 150s invocation.
+    maxTokens: 4500,
+    schema: stage4CastSchema(),
+  }
+}
+
+/** Second call: the clue pool, placed on a cast it is handed rather than one it remembers. */
+export function buildStage4IngredientsPrompt(ctx: Stage4Context, cast: Stage4Cast): Stage4Prompt {
   const coopRules =
     ctx.seed.minPlayers > 1
       ? `
@@ -118,63 +201,26 @@ This can be played solo: do not create content that REQUIRES multiple simultaneo
   const mandatoryEntities = ctx.requiredEntities.filter((e) => e.kind !== 'lore').length
   const ingredientMax = mandatoryEntities >= 8 ? 6 : INGREDIENTS_PER_CHAPTER.defaultMax
   const ingredientMin = Math.min(INGREDIENTS_PER_CHAPTER.min, ingredientMax)
-  const system = `You are the Ingredient Generator for a tabletop RPG platform. For one chapter, produce NPCs, locations, and ingredients - the toys the DM places in the world.
+  const system = `You are the Ingredient Generator for a tabletop RPG platform. The chapter's cast already exists - it is listed for you below. Produce the INGREDIENTS: the clues, secrets, events, items and rumors the DM places in the world, and the cooperative sets that bind some of them together.
 
-LENGTH IS A HARD CONSTRAINT. This is the largest response in the pipeline and it is cut off if it
-runs long - a truncated response is not a partial guide, it is NO guide, and multi-chapter
-adventures failed to generate at all this way. Every description, reveals, note and image_prompt
-is ONE short sentence. Never write two sentences where one carries the idea. Completing every
-required entity briefly beats describing a few of them beautifully.
+LENGTH IS A HARD CONSTRAINT. Every text and reveals field is ONE short sentence. Never write two
+sentences where one carries the idea.
 
 Rules:
-- REQUIRED ENTITIES: the chapter's registry (listed below) names what the story already established. Every entry marked [npc] or [location] MUST appear in your response as a row with the EXACT same name (or be reused by existing key). Missing one is a validation failure. Entries marked [lore] are factions, forces and phenomena - they are world context to WRITE ABOUT, and you must NOT create rows for them.
-- AN NPC IS ONE PERSON. Only create an npc row for an INDIVIDUAL the party could talk to or fight: someone with a name, a voice and opinions. Never create an npc for a group ("the city watch", "Valerius's agents", "the lost expedition") or for a force, curse or plague ("the Blight", "the Murkheart"). A group cannot hold a conversation, so giving it an npc row hands it a heartbeat, a mood and a seat in dialogue it can never use - and the game then treats killing a few of its members as the death of a person. Fights against a group are built from creature counts at the encounter stage, and if the party ever needs to TALK to a faction, name ONE representative of it as an individual npc (e.g. "Iron Hand Envoy Sera") and create that person instead.
 - Ingredients are TOYS, not railroads: each one is something players can find, use, ignore, or subvert. Never a mandatory step.
+- PLACE ON THE KEYS YOU ARE GIVEN. Every location_key and npc_key must come from the cast listed below, copied exactly. Do not invent a person or a place to hold a clue: if nobody listed can hold it, put it somewhere that can.
 - placement.condition means ONE thing: this clue needs a PASSED SKILL CHECK to come out. Write it as the check ("successful DC 14 persuasion", "an insight check"), or leave it null. It is NOT a place to describe when the moment is right - "asked about the money", "once they trust her" - because the game reads any condition as a check requirement, and a clue conditioned on a conversation is locked behind a roll that a conversation never makes. If a clue should simply come out when the topic arises, leave condition null and let the NPC judge the moment.
 - ${ingredientMin}-${ingredientMax} ingredients for this chapter. ${ingredientMax} is a CAP, not a target to beat, and anything past ${INGREDIENTS_PER_CHAPTER.max} is discarded before the DM ever sees it - a chapter is made rich by what its clues connect, not by how many there are. Each is linked to ONE or TWO objectives by number (objective_numbers holds 1-2 entries, never more) and tagged with the pillars it serves ("combat", "social", "exploration").
-- Every scene's cast and places must exist: create the NPCs and locations the scene sketches imply. Mark the chapter's main villain (if present here) as role "boss".
-- "pronouns" is REQUIRED on every NPC: exactly one of "he/him", "she/her", "they/them", or "it/its" for a construct or creature. Write the pair and nothing else - not "male", not a sentence. The live narrator uses this and nothing else to refer to them, so a name that reads one way and pronouns that read another is a contradiction the players will see; pick deliberately and make the description agree with it.
-- "initial_state" is where the NPC stands when play BEGINS: "alive" (default), "dead", or "absent" (alive but not reachable yet). A murder victim, or anyone the premise says is already dead or missing, MUST NOT be "alive" - the live game will otherwise stage them and have them speak.
-- Reuse existing NPCs/locations by their key instead of duplicating them.
-- Every location needs "features": 3-5 things in it a player might point at and examine, each with the DETAIL they find on looking closely. This is the single most-used thing you will author: players spend most of their turns asking about and examining the room, and anything you do not write here the narrator has to invent on the spot - which is where contradictions come from. Write what is THERE and what it tells them ("the bellows: the leather is new, replaced within the month, though the foundry has cast nothing in a year"), never a puzzle solution and never a secret the chapter is saving.
-- Every location needs an "arrival_line": one or two sentences for the moment the party gets here, written so it works whether they walked, were sent, or arrived in a hurry. THIS IS WHERE A DISCOVERY BELONGS - the warmth rising from a cellar floor, the salt crust undisturbed since dawn. Only the party ever reads it.
-- A location's "description" is the OPPOSITE: what the place IS to anyone who lives in this world, in one plain sentence ("a timber records building near the centre of the saltworks, where the wage ledgers are kept"). NPCs are given these so they can answer "what's the tallyhouse" instead of stonewalling or inventing, so a description must never contain something the party is meant to discover. If it is a secret, it goes in the arrival_line or an ingredient, never here.
-- Keys are short lowercase slugs unique in this response, e.g. "npc:volgarth", "loc:sunken-chapel".
-- image_prompt fields describe the visual for later image generation (style-neutral, concrete).
-- Every NPC gets a lightweight "combat" block so it can appear in combat: pick an "archetype"
-  (brute = melee bruiser, skirmisher = mobile fighter, sniper = ranged, caster = spellcaster,
-  leader = commander/social, minion = weak mook) and a challenge rating "cr" from
-  "0","1/8","1/4","1/2","1","2","3","4","5" (bosses roughly 2-5, common NPCs 0-1). Optionally give
-  0-2 "skills" (proper-case skill names) and a signature "attack" name. Abilities/HP/AC are derived
-  from archetype + cr - do NOT supply them.
-- BE CONCISE: every description, ingredient text, and reveals field is 1-2 sentences. Depth comes
-  from connections, not word count.
+- A "reveals" field says what learning this ingredient TELLS the party - the conclusion, not the prop.
+- BE CONCISE: every ingredient text and reveals field is 1-2 sentences. Depth comes from
+  connections, not word count.
 ${coopRules}
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
 {
-  "npcs": [ { "key": "npc:...", "name": "...", "role": "npc"|"boss", "pronouns": "he/him"|"she/her"|"they/them"|"it/its", "initial_state": "alive"|"dead"|"absent", "personality": { "traits": "...", "voice": "...", "wants": "..." }, "faction": "...", "description": "...", "image_prompt": "...", "combat": { "cr": "1/4", "archetype": "brute"|"skirmisher"|"sniper"|"caster"|"leader"|"minion", "skills": ["Perception"], "attack": "Rusty Cutlass" } } ],
-  "locations": [ { "key": "loc:...", "name": "...", "description": "...", "image_prompt": "...",
-                   "arrival_line": "...",
-                   "features": [ { "name": "the bellows", "detail": "what a character finds on looking closely" } ] } ],
   "coop_sets": [ { "key": "coop:...", "kind": "split_knowledge"|"complementary_obstacle", "reveals": "the combined conclusion once pooled" } ],
   "ingredients": [ { "type": "clue"|"secret"|"event"|"item"|"rumor", "content": { "text": "..." }, "placement": { "location_key": "...", "npc_key": "...", "condition": "..." }, "reveals": "...", "pillar_tags": ["social"], "reveals_to": null | {"skill":"..."} | {"class":"..."} | {"background_tag":"..."}, "coop_set_key": null | "coop:...", "objective_numbers": [1] } ]
 }`
-
-  const objectiveList = ctx.objectives
-    .map((o, i) => `${i + 1}. ${o.title} - ${o.hiddenDescription}`)
-    .join('\n')
-  const sceneList = ctx.scenes.map((s, i) => `Scene ${i + 1}: ${s.sketch}`).join('\n')
-  const existing = [
-    establishedLines('NPCs', ctx.existingNpcs),
-    establishedLines('locations', ctx.existingLocations),
-  ]
-    .filter(Boolean)
-    .join('\n')
-
-  const required = ctx.requiredEntities
-    .map((e) => `- [${e.kind}] ${e.name}: ${e.note}`)
-    .join('\n')
 
   // PUT WHAT IS KNOWN INTO PEOPLE, NOT ONLY ROOMS (2026-07-28).
   //
@@ -194,38 +240,27 @@ Respond with ONLY a JSON object, no prose, in exactly this shape:
     'for physical evidence that has to exist somewhere. An adventure whose every clue sits in a ' +
     'room gives the party no reason to talk to anyone, and its social scenes have nothing to give.'
 
-  const user = `Meta loop antagonist: ${ctx.metaLoop.antagonist}
+  const castLines = [
+    ...cast.npcs.map((n) => `- ${n.key} (${n.name}): ${n.description}`),
+    ...ctx.existingNpcs.map((n) => `- ${n.key} (${n.name}): from an earlier chapter`),
+    ...cast.locations.map((l) => `- ${l.key} (${l.name}): ${l.description}`),
+    ...ctx.existingLocations.map((l) => `- ${l.key} (${l.name}): from an earlier chapter`),
+  ].join('\n')
 
-Chapter ${ctx.chapterNumber}: ${ctx.chapter.title}
-Arc summary: ${ctx.chapter.arcSummary}
+  const user = `${chapterBrief(ctx)}
 
 ${placementRule}
 
-REQUIRED entities (every one must become a row, exact names):
-${required || '(none)'}
+THE CAST - place every clue on one of these keys, copied exactly:
+${castLines || '(none - leave every placement key null)'}`
 
-Scene sketches:
-${sceneList}
-
-Objectives:
-${objectiveList}
-${existing ? `\n${existing}` : ''}`
-
-  // SIZED TO WHAT THIS STAGE ACTUALLY WRITES, NOT TO A ROUND NUMBER (2026-07-31).
-  //
-  // 4000 was set to keep the reply "well inside one edge invocation's wall clock". Measured, it
-  // did the opposite. Stage 4 needs ~5600 tokens on glm-5.2, so every attempt bought a truncated
-  // call at the cap (46-72s) AND the doubled retry that follows one (134-147s) - 180-220s against
-  // a 150s kill, three attempts running, the last killed mid-call (live 2026-07-30, "By Dawn's
-  // Light"). Replaying the same prompt with room to finish: one call, 84s, 5558 tokens, complete.
-  //
-  // A cap is a ceiling, not a spend: flash-lite writes this stage in ~3300 tokens and pays nothing
-  // for the headroom. What the low cap bought was a guaranteed second call.
+  // Half a chapter's worth of writing. The whole-chapter call needed 7000 and still ran 94-147s
+  // on glm-5.2; the clue pool alone measured ~2000 tokens.
   //
   // The schema guarantees SHAPE - valid JSON, every required key present, enums honoured. Counts
-  // stay with the prompt above and the trim/floor in parseStage4, because a schema carrying array
-  // bounds is one Google will not serve (see stage4-schema.ts).
-  return { system, user, maxTokens: 7000, schema: stage4Schema(ctx.objectives.length) }
+  // stay with the prompt above and the trim/floor in parseSections, because a schema carrying
+  // array bounds is one Google will not serve (see stage4-schema.ts).
+  return { system, user, maxTokens: 3500, schema: stage4IngredientsSchema(ctx.objectives.length) }
 }
 
 /**
@@ -260,7 +295,24 @@ function parseAffinity(c: Check, value: unknown, path: string): AffinityRef | nu
   return { [key]: c.str(o[keys[0]], `${path}.${keys[0]}`) }
 }
 
-export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4Output> {
+/** Which half of a chapter's content a reply is expected to carry. See parseStage4Cast below. */
+interface Sections {
+  cast: boolean
+  filling: boolean
+}
+
+/** The cast a filling-only reply places its clues on - authored by the call before it. */
+export interface Stage4Cast {
+  npcs: NpcDraft[]
+  locations: LocationDraft[]
+}
+
+function parseSections(
+  raw: string,
+  ctx: Stage4Context,
+  sections: Sections,
+  providedCast: Stage4Cast = { npcs: [], locations: [] },
+): ParseResult<Stage4Output> {
   const extracted = extractJsonObject(raw)
   if (!extracted.ok) return extracted
 
@@ -268,7 +320,7 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
   const root = extracted.data
 
   const PRONOUN_SETS = ['he/him', 'she/her', 'they/them', 'it/its']
-  const npcs: NpcDraft[] = c.arr(root.npcs, '$.npcs', 0, 20).map((raw, i) => {
+  const npcs: NpcDraft[] = !sections.cast ? providedCast.npcs : c.arr(root.npcs, '$.npcs', 0, 20).map((raw, i) => {
     const path = `$.npcs[${i}]`
     const n = c.obj(raw, path)
     return {
@@ -293,7 +345,7 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
     }
   })
 
-  const locations: LocationDraft[] = c.arr(root.locations, '$.locations', 0, 15).map((raw, i) => {
+  const locations: LocationDraft[] = !sections.cast ? providedCast.locations : c.arr(root.locations, '$.locations', 0, 15).map((raw, i) => {
     const path = `$.locations[${i}]`
     const l = c.obj(raw, path)
     // Features and arrival line are THIN, NOT FATAL - the same treatment narration_seed gets.
@@ -317,7 +369,7 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
   })
 
   const coopFlaws: { key: string; reason: string }[] = []
-  const coopSets: CoopSetDraft[] = c.arr(root.coop_sets ?? [], '$.coop_sets', 0, 10).map((raw, i) => {
+  const coopSets: CoopSetDraft[] = !sections.filling ? [] : c.arr(root.coop_sets ?? [], '$.coop_sets', 0, 10).map((raw, i) => {
     const path = `$.coop_sets[${i}]`
     const s = c.obj(raw, path)
     const key = typeof s.key === 'string' ? s.key.trim() : ''
@@ -354,7 +406,9 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
   //
   // The floor stays fatal. A chapter with two clues in it is genuinely thin and worth re-rolling,
   // and no code can invent the missing ones.
-  const rawIngredients = c.arr(root.ingredients, '$.ingredients', INGREDIENTS_PER_CHAPTER.min)
+  const rawIngredients = sections.filling
+    ? c.arr(root.ingredients, '$.ingredients', INGREDIENTS_PER_CHAPTER.min)
+    : []
   const dropped = Math.max(0, rawIngredients.length - INGREDIENTS_PER_CHAPTER.max)
   const ingredients: IngredientDraft[] = rawIngredients
     .slice(0, INGREDIENTS_PER_CHAPTER.max)
@@ -449,11 +503,16 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
   // philosophy as parseCombatSeed above and stage 5's budget warnings.
   const repaired = repairCoopConformance(usableCoopSets, ingredients, ctx.seed.minPlayers, ctx.objectives.length)
 
-  const coverage = validateEntityCoverage(
-    ctx.requiredEntities,
-    [...npcs.map((n) => n.name), ...ctx.existingNpcs.map((n) => n.name)],
-    [...locations.map((l) => l.name), ...ctx.existingLocations.map((l) => l.name)],
-  )
+  // Both of these judge the CAST, so they belong to whichever call authored it - asking a
+  // filling-only reply to answer for a registry it was not allowed to write would fail it for
+  // someone else's omission.
+  const coverage = sections.cast
+    ? validateEntityCoverage(
+      ctx.requiredEntities,
+      [...npcs.map((n) => n.name), ...ctx.existingNpcs.map((n) => n.name)],
+      [...locations.map((l) => l.name), ...ctx.existingLocations.map((l) => l.name)],
+    )
+    : { errors: [], reclassifyAsLore: [] }
   c.errors.push(...coverage.errors)
   for (const entity of coverage.reclassifyAsLore) {
     repaired.warnings.push(
@@ -466,7 +525,7 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
   // no way to author its way out - Below the Sunken Chapel shipped with exactly two NPCs, one
   // dead and one absent, and its only social route to the objective could never open (live
   // 2026-07-22). Hard error into the existing regeneration loop.
-  if (npcs.length > 0 && npcs.every((n) => n.initialState === 'dead' || n.initialState === 'absent')) {
+  if (sections.cast && npcs.length > 0 && npcs.every((n) => n.initialState === 'dead' || n.initialState === 'absent')) {
     c.errors.push(
       '$.npcs: every NPC in this chapter is dead or absent - the party would have nobody to ' +
         'talk to. Keep the premise, but give the chapter at least one LIVING, reachable ' +
@@ -497,6 +556,39 @@ export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4
     ],
     reclassifyAsLore: coverage.reclassifyAsLore.map((e) => e.name),
   })
+}
+
+/**
+ * One reply carrying the whole chapter. Kept because it is the shape a regeneration or a
+ * hand-written fixture uses, and because the two halves below must stay interchangeable with it.
+ */
+export function parseStage4(raw: string, ctx: Stage4Context): ParseResult<Stage4Output> {
+  return parseSections(raw, ctx, { cast: true, filling: true })
+}
+
+/**
+ * TWO CALLS, BECAUSE ONE WAS TOO BIG TO GET RIGHT (2026-07-31).
+ *
+ * Stage 4 authored a chapter's cast AND its clue pool in one reply - ~20k characters, 94-147s on
+ * glm-5.2, against a 150s invocation kill. Four generations of one adventure died there. The lab
+ * runs that DID pass were the same model and the same code; their chapters just asked for 8-10
+ * rows instead of 13, which came to ~3500 tokens and 49s. So the fix is not a model or a cap: it
+ * is a call that asks for less.
+ *
+ * Split at the one real dependency - clues need somewhere to sit - each half lands back in that
+ * range, and the second half is HANDED the keys instead of remembering them from 15k characters
+ * ago. "unknown npc_key", a fatal class today, stops being writable.
+ */
+export function parseStage4Cast(raw: string, ctx: Stage4Context): ParseResult<Stage4Output> {
+  return parseSections(raw, ctx, { cast: true, filling: false })
+}
+
+export function parseStage4Ingredients(
+  raw: string,
+  ctx: Stage4Context,
+  cast: Stage4Cast,
+): ParseResult<Stage4Output> {
+  return parseSections(raw, ctx, { cast: false, filling: true }, cast)
 }
 
 function normalizeEntityName(name: string): string {

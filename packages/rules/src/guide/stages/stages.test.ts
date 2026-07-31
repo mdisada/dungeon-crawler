@@ -26,7 +26,8 @@ import {
   parseStage3,
 } from './stage3.ts'
 import {
-  buildStage4Prompt, entityNameMatches, maxCoopDemanding, parseStage4, validateCoopConformance,
+  buildStage4CastPrompt, entityNameMatches, maxCoopDemanding, parseStage4, parseStage4Cast,
+  parseStage4Ingredients, validateCoopConformance,
   validateEntityCoverage,
 } from './stage4.ts'
 import { parseStage5 } from './stage5.ts'
@@ -338,6 +339,61 @@ describe('stage 4 pronouns', () => {
     const r = withNpc({ pronouns: undefined })
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.data.npcs[0].pronouns).toBe('')
+  })
+})
+
+describe('stage 4 split into two calls', () => {
+  // One call for a 13-row chapter ran 94-147s against a 150s kill and failed four generations
+  // running; the same code cleared the lab's 8-10 row chapters in 49s. The halves must add up to
+  // exactly what the whole reply produced, or the split has changed the guide rather than its size.
+  const whole = JSON.parse(STAGE4_RESPONSE)
+  const castDoc = JSON.stringify({ npcs: whole.npcs, locations: whole.locations })
+  const fillingDoc = JSON.stringify({ coop_sets: whole.coop_sets, ingredients: whole.ingredients })
+
+  it('parses a cast-only reply, and still holds it to the registry', () => {
+    const result = parseStage4Cast(castDoc, STAGE4_CONTEXT)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.npcs.map((n) => n.role)).toContain('boss')
+    expect(result.data.ingredients).toEqual([])
+  })
+
+  it('fails a cast-only reply that skips a required location', () => {
+    const missing = JSON.parse(castDoc)
+    missing.locations = missing.locations.slice(0, 1)
+    const result = parseStage4Cast(JSON.stringify(missing), STAGE4_CONTEXT)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.some((e) => e.includes('is missing from the response'))).toBe(true)
+  })
+
+  it('parses an ingredients-only reply against the cast it was handed', () => {
+    const cast = parseStage4Cast(castDoc, STAGE4_CONTEXT)
+    expect(cast.ok).toBe(true)
+    if (!cast.ok) return
+    const result = parseStage4Ingredients(fillingDoc, STAGE4_CONTEXT, cast.data)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.ingredients).toHaveLength(6)
+    expect(result.data.npcs).toEqual(cast.data.npcs)
+  })
+
+  it('still rejects a placement key the cast does not contain', () => {
+    const cast = parseStage4Cast(castDoc, STAGE4_CONTEXT)
+    if (!cast.ok) throw new Error('fixture cast should parse')
+    const broken = fillingDoc.replace('"npc_key":"npc:tam"', '"npc_key":"npc:nobody"')
+    const result = parseStage4Ingredients(broken, STAGE4_CONTEXT, cast.data)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errors.some((e) => e.includes('npc:nobody'))).toBe(true)
+  })
+
+  it('halves add up to the whole reply', () => {
+    const cast = parseStage4Cast(castDoc, STAGE4_CONTEXT)
+    const one = parseStage4(STAGE4_RESPONSE, STAGE4_CONTEXT)
+    if (!cast.ok || !one.ok) throw new Error('fixture should parse')
+    const filling = parseStage4Ingredients(fillingDoc, STAGE4_CONTEXT, cast.data)
+    if (!filling.ok) throw new Error('filling should parse')
+    expect({ ...cast.data, coopSets: filling.data.coopSets, ingredients: filling.data.ingredients })
+      .toEqual({ ...one.data, warnings: cast.data.warnings })
   })
 })
 
@@ -854,7 +910,7 @@ describe('stage 4 established-entity contract', () => {
   // Live 2026-07-21: stage 4 runs per chapter and used to see only names, so a later chapter
   // made Elara Voss the victim's wife, his poisoner, AND the servant framing someone else.
   it('carries facts from earlier chapters into the prompt, not just names', () => {
-    const { user } = buildStage4Prompt({
+    const { user } = buildStage4CastPrompt({
       ...STAGE4_CONTEXT,
       existingNpcs: [{
         key: 'npc:elara',
@@ -870,7 +926,7 @@ describe('stage 4 established-entity contract', () => {
   })
 
   it('says nothing about existing entities in the first chapter', () => {
-    const { user } = buildStage4Prompt({ ...STAGE4_CONTEXT, existingNpcs: [], existingLocations: [] })
+    const { user } = buildStage4CastPrompt({ ...STAGE4_CONTEXT, existingNpcs: [], existingLocations: [] })
     expect(user).not.toContain('never author anything that contradicts it')
   })
 })

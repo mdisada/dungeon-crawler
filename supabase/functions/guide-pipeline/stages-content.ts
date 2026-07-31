@@ -1,7 +1,9 @@
 // Stages 4-5: Ingredient Generator and Encounter Designer, per chapter.
 import { expectedPartyLevel, expectedPartySize } from '../_shared/guide/budget.ts'
 import { deriveNpcStatBlock } from '../_shared/guide/npc-stats.ts'
-import { buildStage4Prompt, parseStage4 } from '../_shared/guide/stages/stage4.ts'
+import {
+  buildStage4CastPrompt, buildStage4IngredientsPrompt, parseStage4Cast, parseStage4Ingredients,
+} from '../_shared/guide/stages/stage4.ts'
 import { buildStage5Prompt, parseStage5 } from '../_shared/guide/stages/stage5.ts'
 import {
   buildRescueNode, buildStage5NodesPrompt, parseStage5Nodes,
@@ -108,7 +110,25 @@ export async function runStage4(env: StageEnv, chapterId: string): Promise<void>
       facts: [row.description ?? '', ...(revealsByEntityId.get(row.id) ?? [])].filter(Boolean),
     })),
   }
-  const output = await env.generate('ingredient_generator', buildStage4Prompt(ctx), (raw) => parseStage4(raw, ctx))
+  // Two calls, split at the one real dependency: clues need somewhere to sit. See the comment on
+  // parseStage4Cast - one call for a 13-row chapter ran 94-147s against a 150s kill and failed
+  // four generations running, while the lab's 8-10 row chapters cleared the same code in 49s.
+  const cast = await env.generate(
+    'ingredient_generator',
+    buildStage4CastPrompt(ctx),
+    (raw) => parseStage4Cast(raw, ctx),
+  )
+  const filling = await env.generate(
+    'ingredient_generator',
+    buildStage4IngredientsPrompt(ctx, cast),
+    (raw) => parseStage4Ingredients(raw, ctx, cast),
+  )
+  const output = {
+    ...cast,
+    coopSets: filling.coopSets,
+    ingredients: filling.ingredients,
+    warnings: [...cast.warnings, ...filling.warnings],
+  }
 
   // Stage 1 files groups under `npc` ("Silver Scale Guild guards"); stage 4, told an NPC is one
   // person, declines to make them people. Persist that correction to the registry so stage 5,

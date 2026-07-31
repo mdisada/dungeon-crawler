@@ -118,12 +118,22 @@ function ingredient(objectiveCount: number) {
   })
 }
 
-export function stage4Schema(objectiveCount: number): { name: string; schema: Record<string, unknown> } {
+/** First call: the cast. */
+export function stage4CastSchema(): { name: string; schema: Record<string, unknown> } {
   return {
-    name: 'stage4_chapter_content',
+    name: 'stage4_chapter_cast',
     schema: obj({
       npcs: { type: 'array', items: NPC },
       locations: { type: 'array', items: LOCATION },
+    }),
+  }
+}
+
+/** Second call: the clue pool placed on that cast. */
+export function stage4IngredientsSchema(objectiveCount: number): { name: string; schema: Record<string, unknown> } {
+  return {
+    name: 'stage4_chapter_ingredients',
+    schema: obj({
       coop_sets: { type: 'array', items: COOP_SET },
       ingredients: { type: 'array', items: ingredient(objectiveCount) },
     }),
