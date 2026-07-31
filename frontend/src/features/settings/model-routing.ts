@@ -18,6 +18,7 @@ export type AgentRole =
   | 'meta_loop_steward'
   | 'consistency_checker'
   | 'summarizer'
+  | 'image_prompter'
   | 'user_direct'
 
 export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
@@ -34,6 +35,7 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   meta_loop_steward: 'Meta Loop Steward',
   consistency_checker: 'Consistency Checker',
   summarizer: 'Summarizer',
+  image_prompter: 'Image Prompter',
   user_direct: 'Direct requests (e.g. this test box)',
 }
 
@@ -64,6 +66,9 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   beat_planner: 'openai/gpt-5.6-luna',
   encounter_designer: 'openai/gpt-5.6-luna',
   summarizer: 'google/gemini-2.5-flash-lite',
+  // Primary seat: what it writes goes straight into a paid image with nothing downstream to
+  // catch a bad brief - a background plate full of people is a plate you pay for twice.
+  image_prompter: 'openai/gpt-5.6-luna',
   user_direct: 'google/gemini-2.5-flash-lite',
 }
 

@@ -51,10 +51,19 @@ export const IMAGE_PRESETS: Record<ImagePresetKey, ImagePreset> = {
   background: {
     key: 'background',
     label: 'Location background',
-    description: 'Establishing shot of a place, no characters.',
+    description: 'Establishing shot of a place. Scenery only - it sits behind the narration.',
+    // This plate sits behind dialogue and narration like a visual-novel background, so it has to
+    // stay empty: a painted figure standing in the scene contradicts whoever the game says is
+    // actually there. A distant, faceless crowd is scenery and is allowed to stay - a market with
+    // nobody in it reads as abandoned. "No text" matters too; models like to sign a tavern.
     promptSuffix:
-      'wide establishing shot of the location, no characters present, atmospheric lighting, ' +
-      'painterly fantasy illustration',
+      'wide establishing shot of the location, cinematic composition, ' +
+      'painterly high fantasy illustration in the style of a Dungeons & Dragons rulebook, ' +
+      'atmospheric lighting, deep depth of field, ' +
+      'empty of people, no figures in the foreground, no characters, no portraits, ' +
+      'distant anonymous crowds only where the place would be busy, ' +
+      'no text, no labels, no signage lettering, no watermark, ' +
+      'scenery only, suitable as a visual-novel background plate',
     maxReferences: 0,
   },
   map: {

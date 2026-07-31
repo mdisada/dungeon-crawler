@@ -4,7 +4,7 @@ import { useSession } from '@/features/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { generateGuideImage, uploadAdventureMedia } from '../api/images'
+import { generateLocationBackground } from '../api/location-images'
 import { regenerateRow } from '../api/pipeline'
 import { deleteGuideRow, insertGuideRow, saveGuideRow } from '../api/save-guide-row'
 import { useMediaUrl } from '../hooks/use-media-url'
@@ -12,9 +12,7 @@ import type { GuideData, LocationRow } from '../types'
 import { LocationMapDialog } from './location-map-dialog'
 import { RegenBanner } from './regen-banner'
 
-const KEPT_BACKGROUNDS = 3
-
-function LocationOverview({ adventureId, location, userId, onChanged }: { adventureId: string; location: LocationRow; userId: string; onChanged: () => void }) {
+function LocationOverview({ adventureId, location, userId, castNames, onChanged }: { adventureId: string; location: LocationRow; userId: string; castNames: string[]; onChanged: () => void }) {
   const [fields, setFields] = useState({
     name: location.name,
     description: location.description,
@@ -32,7 +30,9 @@ function LocationOverview({ adventureId, location, userId, onChanged }: { advent
       .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Save failed'))
   }
 
-  // F04 SS5.3: manual-trigger background generation; regenerate keeps the last 3.
+  // F04 SS5.3: the automatic pass draws any location that has none (use-guide-image-pass); this is
+  // the override for one row. Both go through generateLocationBackground, so a hand-triggered plate
+  // gets the same 16:9 frame and the same people-free prompt as an automatic one.
   async function generateBackground() {
     setIsBusy(true)
     setError(null)
@@ -40,13 +40,8 @@ function LocationOverview({ adventureId, location, userId, onChanged }: { advent
       if (fields.imagePrompt !== location.imagePrompt) {
         await saveGuideRow('locations', location.id, { image_prompt: fields.imagePrompt })
       }
-      const blob = await generateGuideImage(adventureId, fields.imagePrompt, 'background')
-      const version = Date.now()
-      const path = await uploadAdventureMedia(adventureId, `locations/${location.id}/background-${version}.png`, blob)
-      const previous = location.backgroundPath
-        ? [location.backgroundPath, ...location.previousBackgroundPaths].slice(0, KEPT_BACKGROUNDS)
-        : location.previousBackgroundPaths
-      await saveGuideRow('locations', location.id, { background_url: path, previous_background_urls: previous })
+      const path = await generateLocationBackground(adventureId, { ...location, imagePrompt: fields.imagePrompt }, castNames)
+      if (!path) setError('This location has no description to draw from yet.')
       onChanged()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Background generation failed')
@@ -185,7 +180,14 @@ export function LocationsTab({ data, onChanged }: { data: GuideData; onChanged: 
         </Button>
       </aside>
       {selected ? (
-        <LocationOverview key={selected.id} adventureId={data.adventure.id} location={selected} userId={user?.id ?? ''} onChanged={onChanged} />
+        <LocationOverview
+          key={selected.id}
+          adventureId={data.adventure.id}
+          location={selected}
+          userId={user?.id ?? ''}
+          castNames={data.npcs.map((npc) => npc.name)}
+          onChanged={onChanged}
+        />
       ) : (
         <p className="text-sm text-muted-foreground">No locations yet.</p>
       )}

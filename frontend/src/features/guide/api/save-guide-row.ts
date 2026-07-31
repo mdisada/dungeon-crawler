@@ -35,12 +35,12 @@ export async function saveGuideRow(
  * guide, and routing that through saveGuideRow would quietly protect the whole cast from ever being
  * regenerated again. Re-framing a crop by hand is the same - it changes the picture, not the fiction.
  */
-export async function saveGuideImages(
+export async function saveGeneratedMedia(
   table: GuideTable,
   id: string,
-  images: Partial<Record<string, string>>,
+  patch: Record<string, unknown>,
 ): Promise<void> {
-  const { error } = await supabase.from(table).update({ images }).eq('id', id)
+  const { error } = await supabase.from(table).update(patch).eq('id', id)
   if (error) throw error
 }
 

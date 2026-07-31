@@ -23,7 +23,7 @@ import {
 } from '@/features/image'
 import { timeJob } from '@/lib/job-timer'
 import { requestImage, toBlob, uploadAdventureMedia } from './images'
-import { saveGuideImages } from './save-guide-row'
+import { saveGeneratedMedia } from './save-guide-row'
 import type { Npc, NpcImages } from '../types'
 
 const CLOUD_IMAGE_SIZE = 1024
@@ -41,6 +41,9 @@ async function generateOriginal(adventureId: string, npc: Npc): Promise<Blob> {
   if (env.placeholderMedia) return toBlob('/placeholders/fullbody.png')
   const url = await requestImage(adventureId, {
     prompt: npcImagePrompt(npc),
+    // Both, deliberately: Krea honours `aspect_ratio` and ignores `size` (measured 2026-07-31),
+    // other models do the reverse. The auto-frame constants are tuned on a square 1024.
+    aspect_ratio: '1:1',
     size: `${CLOUD_IMAGE_SIZE}x${CLOUD_IMAGE_SIZE}`,
     output_format: 'png',
   })
@@ -86,7 +89,7 @@ export async function generateNpcImages(adventureId: string, npc: Npc): Promise<
     // stored and saved below, so the DM can cut it by hand or regenerate.
   }
 
-  await saveGuideImages('npcs', npc.id, images)
+  await saveGeneratedMedia('npcs', npc.id, { images })
   return images
 }
 

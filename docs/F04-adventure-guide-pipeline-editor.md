@@ -278,7 +278,9 @@ Header: adventure title, status, pipeline progress (while generating), "Start Ad
 
 - Left list, main overview per location:
   - Description (editable).
-  - **Background image:** editable prompt textarea + "Generate image" button (manual trigger only); preview with panning simulation; regenerate keeps last 3.
+  - **Background image:** generated automatically for every location that has none, by the same background pass that draws the NPCs (§5.2, revised 2026-07-31). The editable prompt textarea and "Generate image" button remain as the per-location override, and both routes go through `generateLocationBackground`, so a hand-triggered plate is framed and worded exactly like an automatic one. Preview with panning simulation; regenerate keeps the last 3.
+    - **16:9**, requested as `aspect_ratio` — measured 2026-07-31: Krea honours `aspect_ratio` and ignores `size` (a `1344x768` size came back 1024×1024).
+    - **Nobody in it.** The plate sits behind the narration, so who is present is decided by play; a figure painted into the wall contradicts it. Names are stripped deterministically (`location-prompt.ts`) and then a model on the `image_prompter` role (primary seat) rewrites the note into a description of an empty place (`api/image-prompt.ts`). Both steps are needed: stripping names alone leaves "where agents watch from the rope bridges", which was measured to paint twenty figures into the scene, four of them in the foreground. A distant, faceless crowd is allowed to stay where the place would read as dead without one. If the rewrite is unavailable the deterministic strip is used, so the feature degrades rather than breaks.
   - **Battle map:** grid preview (1024×1024, 32×32 tiles). v1 map generation: image-gen with top-down prompt template onto the grid template, plus a simple editor: place/remove obstacle tiles (blocked movement), spawn markers, and sample tokens from a starter token set in Storage. (Full map authoring tools are out of scope; DMs can upload their own 1024×1024 map image.)
 
 ### 5.4 Endings

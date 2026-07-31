@@ -61,6 +61,9 @@ async function requestCloudImage(
       ...(model ? { model } : {}),
       payload: {
         prompt,
+        // Krea honours `aspect_ratio` and ignores `size`; other models do the reverse (measured
+        // 2026-07-31). Sending both is what actually pins the frame across the allowlist.
+        aspect_ratio: '1:1',
         size: `${CLOUD_IMAGE_SIZE}x${CLOUD_IMAGE_SIZE}`,
         output_format: 'png',
         ...(referenceUrls.length > 0

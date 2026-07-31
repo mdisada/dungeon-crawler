@@ -1873,3 +1873,50 @@ wasteful.
 (new), `features/guide/{components/npc-image-panel,components/guide-page,api/save-guide-row,api/images,types}`,
 `features/characters/{index,components/steps/step-portrait}`, `docs/F04-adventure-guide-pipeline-editor.md`
 §3/§5.2/§8.
+
+---
+
+## 2026-07-31 — Backgrounds draw themselves too, and a model writes the brief that keeps them empty
+
+**What:** location background plates join the automatic pass (`useGuideImagePass` now walks NPCs
+then locations, one paid generation at a time, behind a readable guide). Three things make a plate
+usable as a visual-novel background:
+
+1. **16:9, via `aspect_ratio`.** Measured: Krea honours `aspect_ratio` and ignores `size` — a
+   `1344x768` size request came back 1024×1024, while `aspect_ratio: '16:9'` returned 1376×768. The
+   square character paths were therefore working by luck (Krea's default is square); they now send
+   both, since other models do the reverse.
+2. **A prompt that describes a place, not a scene.** The plate sits behind the narration, so who is
+   present is decided by play — a figure painted into the wall contradicts it.
+3. **Krea**, which is now simply the account default (migration applied the same day).
+
+**Why a model writes the prompt, when a regex already stripped the names.** The deterministic strip
+(`location-prompt.ts`) removes "Maren's" and "Volgarth's" cleanly, and it is still the first pass and
+the fallback. But it cannot remove people who were never named: the surviving clause "where agents
+watch from the rope bridges" produced a plate with roughly twenty figures in it, four in the
+foreground, despite the preset asking three separate ways for an empty place. A clause about people
+beats a style instruction about no people. No blocklist fixes this either — it cannot tell "merchant
+stalls" (scenery) from "merchants haggling" (a scene).
+
+So `image_prompter` (new agent role, **primary seat**) rewrites the note into an empty place before
+anything is painted. Re-measured on the same location: "empty rope bridges … lanterns glowing through
+damp air", and the plate came back with nobody in it. On a market note it kept exactly the exception
+that was asked for — "a distant crowd filling the space" — and painted an empty foreground with the
+crowd small and faceless at the gate.
+
+The seat is primary for the usual reason: nothing downstream catches a bad brief, because the next
+step spends $0.015 painting whatever it says. The brief itself costs **$0.00013** — 0.9% of the
+image it protects.
+
+**Requires an ai-proxy deploy.** `isAgentRole` rejects unknown roles, so until the function ships
+with `image_prompter` the call 400s — and `writeLocationScenePrompt` returns null on any failure, so
+backgrounds fall back to the deterministic strip. That is the pre-change behaviour, people clauses
+and all, which is exactly what this decision exists to fix. Deploy before trusting the output.
+
+**Updated:** `features/image/presets.ts` (`background` suffix rewritten for VN plates),
+`features/guide/{location-prompt,api/image-prompt,api/location-images}` (new, +21 tests),
+`features/guide/hooks/use-guide-image-pass.ts` + `components/guide-image-pass-banner.tsx` (renamed
+from the npc-only pass, now a combined queue), `components/locations-tab.tsx`,
+`api/save-guide-row.ts` (`saveGuideImages` → `saveGeneratedMedia`, still no `human_edited`),
+`settings/model-routing.ts` + `supabase/functions/_shared/model-routing.ts` (the new role, both
+copies), `docs/F04-adventure-guide-pipeline-editor.md` §5.3.

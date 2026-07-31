@@ -5,7 +5,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { TokenCropTool, type CropOutputs } from '@/features/image'
 import { generateNpcImages } from '../api/npc-images'
 import { uploadAdventureMedia } from '../api/images'
-import { saveGuideImages, saveGuideRow } from '../api/save-guide-row'
+import { saveGeneratedMedia, saveGuideRow } from '../api/save-guide-row'
 import { useMediaUrl } from '../hooks/use-media-url'
 import type { Npc } from '../types'
 
@@ -58,7 +58,7 @@ export function NpcImagePanel({ adventureId, npc, onChanged }: NpcImagePanelProp
         portrait: await uploadAdventureMedia(adventureId, `${dir}/portrait.png`, portrait),
         tokenBackground,
       }
-      await saveGuideImages('npcs', npc.id, images)
+      await saveGeneratedMedia('npcs', npc.id, { images })
       setIsCropping(false)
       onChanged()
     } catch (err) {

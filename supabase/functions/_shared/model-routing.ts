@@ -19,6 +19,7 @@ export type AgentRole =
   | 'meta_loop_steward'
   | 'consistency_checker'
   | 'summarizer'
+  | 'image_prompter'
   | 'user_direct'
 
 /**
@@ -49,6 +50,9 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   npc_tactician: 'google/gemini-2.5-flash-lite',
   summarizer: 'google/gemini-2.5-flash-lite',
   // Not a Story agent -- direct user-triggered calls (e.g. the Settings test box). Cheap default.
+  // Primary seat: what it writes goes straight into a paid image with nothing downstream to
+  // catch a bad brief - a background plate full of people is a plate you pay for twice.
+  image_prompter: 'openai/gpt-5.6-luna',
   user_direct: 'google/gemini-2.5-flash-lite',
 
   // --- Primary seat: openai/gpt-5.6-luna ($0.100/$0.600, 1.05M ctx) --------------------------

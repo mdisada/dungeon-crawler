@@ -8,8 +8,8 @@ import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { activateAdventure } from '@/features/play'
 import { startPipeline } from '../api/pipeline'
 import { useGuide } from '../hooks/use-guide'
-import { useNpcImagePass } from '../hooks/use-npc-image-pass'
-import { NpcImagePassBanner } from './npc-image-pass-banner'
+import { useGuideImagePass } from '../hooks/use-guide-image-pass'
+import { GuideImagePassBanner } from './guide-image-pass-banner'
 import { EndingsTab } from './endings-tab'
 import { IngredientsDrawer } from './ingredients-drawer'
 import { LocationsTab } from './locations-tab'
@@ -55,16 +55,17 @@ export function GuidePage() {
   // from loaded data, not from an external system.
   const [reviewOpen, setReviewOpen] = useState<boolean | null>(null)
 
-  // Portraits fill in behind a finished guide (F04 SS5.2, revised 2026-07-31). Hooks run before the
-  // early returns below, so the pass is described in terms that survive the loading state.
+  // Portraits and backgrounds fill in behind a finished guide (F04 SS5.2/SS5.3, revised
+  // 2026-07-31). Hooks run before the early returns below, so the pass is described in terms that
+  // survive the loading state.
   const guide = state.status === 'ready' ? state.data : null
   const hasPendingJobs = guide?.jobs.some((j) => j.status === 'queued' || j.status === 'running') ?? true
-  const imagePass = useNpcImagePass(id, guide?.npcs ?? [], {
+  const imagePass = useGuideImagePass(id, { npcs: guide?.npcs ?? [], locations: guide?.locations ?? [] }, {
     // Only once the pipeline has actually landed: a paused-on-failure queue means the cast is
     // still half-written, and drawing it would spend on rows about to be regenerated.
     enabled:
       !hasPendingJobs && (guide?.adventure.status === 'guide_ready' || guide?.adventure.status === 'active'),
-    onNpcDone: () => void refresh(),
+    onItemDone: () => void refresh(),
   })
 
   if (state.status === 'loading') return <p className="p-8 text-muted-foreground">Loading guide…</p>
@@ -187,7 +188,7 @@ export function GuidePage() {
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       {showPipeline && <PipelineProgress jobs={data.jobs} chapters={data.chapters} onChanged={() => void refresh()} />}
-      <NpcImagePassBanner state={imagePass.state} onStop={imagePass.stop} onRetry={imagePass.retryAll} />
+      <GuideImagePassBanner state={imagePass.state} onStop={imagePass.stop} onRetry={imagePass.retryAll} />
 
       {reviewQueue.length > 0 && (
         <section className="flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">

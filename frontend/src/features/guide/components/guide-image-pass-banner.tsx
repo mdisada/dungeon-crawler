@@ -1,8 +1,8 @@
 import { Button } from '@/components/ui/button'
-import type { NpcImagePassState } from '../hooks/use-npc-image-pass'
+import type { GuideImagePassState } from '../hooks/use-guide-image-pass'
 
 interface Props {
-  state: NpcImagePassState
+  state: GuideImagePassState
   onStop: () => void
   onRetry: () => void
 }
@@ -11,8 +11,8 @@ interface Props {
  * Says what the background image pass is doing, because it is spending money on the DM's behalf.
  * Silent while idle, and silent once everything succeeded - a finished job is not news.
  */
-export function NpcImagePassBanner({ state, onStop, onRetry }: Props) {
-  const { status, total, completed, currentName, failures } = state
+export function GuideImagePassBanner({ state, onStop, onRetry }: Props) {
+  const { status, total, completed, current, failures } = state
   const isFinished = status === 'done' || status === 'stopped'
   if (status === 'idle' || (status === 'done' && failures.length === 0)) return null
 
@@ -22,9 +22,11 @@ export function NpcImagePassBanner({ state, onStop, onRetry }: Props) {
         <>
           <p>
             <span className="font-medium">
-              Drawing NPC portraits ({completed}/{total})
+              Drawing guide art ({completed}/{total})
             </span>{' '}
-            <span className="text-muted-foreground">{currentName ? `— ${currentName}` : ''}</span>
+            <span className="text-muted-foreground">
+              {current ? `— ${current.kind === 'npc' ? 'portrait of' : 'background for'} ${current.name}` : ''}
+            </span>
           </p>
           <div
             className="h-1.5 w-32 overflow-hidden rounded-full bg-muted"
@@ -32,7 +34,7 @@ export function NpcImagePassBanner({ state, onStop, onRetry }: Props) {
             aria-valuenow={completed}
             aria-valuemin={0}
             aria-valuemax={total}
-            aria-label="NPC portrait progress"
+            aria-label="Guide art progress"
           >
             <div className="h-full bg-primary transition-[width]" style={{ width: `${(completed / total) * 100}%` }} />
           </div>
@@ -48,12 +50,12 @@ export function NpcImagePassBanner({ state, onStop, onRetry }: Props) {
             {status === 'stopped' && <span className="font-medium">Stopped. </span>}
             {failures.length > 0 ? (
               <span className="text-muted-foreground">
-                {failures.length} NPC{failures.length === 1 ? '' : 's'} could not be drawn:{' '}
+                {failures.length} image{failures.length === 1 ? '' : 's'} could not be drawn:{' '}
                 {failures.map((f) => f.name).join(', ')}. The rest are done.
               </span>
             ) : (
               <span className="text-muted-foreground">
-                {completed} of {total} portraits drawn.
+                {completed} of {total} images drawn.
               </span>
             )}
           </p>
