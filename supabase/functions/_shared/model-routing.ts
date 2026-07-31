@@ -70,7 +70,7 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   // Not a Story agent -- direct user-triggered calls (e.g. the Settings test box). Cheap default.
   user_direct: 'google/gemini-2.5-flash-lite',
 
-  // --- Premium tier: z-ai/glm-5.2 ($0.711/$2.235, 1M ctx) ------------------------------------
+  // --- Primary seat: openai/gpt-5.6-luna ($0.100/$0.600, 1.05M ctx) --------------------------
   // Output no code can validate: either a person READS it directly, or everything downstream
   // inherits it.
   //
@@ -140,7 +140,20 @@ export type ResolvePhase = 'play' | 'guide'
  * pins the GUIDE too, so a lab run that wants a real guide must use a PARTIAL model_map naming
  * only the play-side roles.
  */
-const GUIDE_MODEL = 'z-ai/glm-5.2'
+/**
+ * DERIVED, not named (2026-07-31). This was the literal string `z-ai/glm-5.2`, and when the primary
+ * seat moved to gpt-5.6-luna it became the last place in the codebase still pointing at the old
+ * occupant - so every guide role WITHOUT a user pin kept resolving to a model no seat named any
+ * more. Reading it off the flagship primary role means a future seat change moves this with it,
+ * and there is no third place to forget.
+ *
+ * What does NOT come along: glm-5.2's guide-time measurements. Stage 4 at 94s and 5,736 tokens,
+ * $0.711/$2.235 per M, the 4.4x-slower-per-token figure behind the exemptions below - all of that
+ * described one model. gpt-5.6-luna is unmeasured at guide time; treat the pipeline's timings and
+ * spend as unknown until a run says otherwise. Its output price is 3.7x lower on paper, which is a
+ * reason to expect cheaper guides and no reason at all to expect better ones.
+ */
+const GUIDE_MODEL = SYSTEM_DEFAULT_MODEL_MAP.story_director
 
 /**
  * Guide-time roles the strong model is NOT worth paying for, measured 2026-07-29.
@@ -165,6 +178,13 @@ const GUIDE_MODEL = 'z-ai/glm-5.2'
  * The real fix for stage 5 is to author one call per OBJECTIVE rather than per chapter; the
  * truncation will bite on any model as guides grow. Until then this exemption is what keeps guide
  * generation finishing at all.
+ *
+ * BOTH of those conditions have since changed, and this list has NOT been re-measured (2026-07-31).
+ * Stage 5 does author one call per objective now (2026-07-29), and the model this was measured
+ * against is no longer the one GUIDE_MODEL resolves to. The 83.3s and 48 tok/s above are facts
+ * about glm-5.2 and say nothing about gpt-5.6-luna. So this exemption may now be costing quality
+ * for no reason - or still be the thing keeping stage 5 inside its wall clock. Re-run the same
+ * comparison before trusting either guess.
  */
 const GUIDE_MODEL_EXEMPT: ReadonlySet<AgentRole> = new Set<AgentRole>([
   'beat_planner',
