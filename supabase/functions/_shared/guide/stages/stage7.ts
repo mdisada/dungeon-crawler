@@ -51,7 +51,10 @@ export function buildStage7Prompt(
 Look for:
 - Contradictions between chapter arcs, objective hidden descriptions, and the meta loop.
 - Objectives whose completion predicates reference NPCs/locations/flags that nothing establishes.
-- Dead-end knowledge: information the players can never plausibly reach.
+- Dead-end knowledge: information the players can never plausibly reach. Each ingredient says
+  where it sits: one "held by" a person comes out in conversation with them, one "found in" a
+  place is discovered by searching there, and one marked PLACED NOWHERE can never be found at all.
+  An NPC marked [dead] or [absent] is never staged, so nothing they hold can ever be prised out.
 - Timeline impossibilities (an NPC in two places, an event before its cause).
 - Spoiling titles: objective titles that give away a twist their hidden description relies on.
 - Scene (node) prose that contradicts another scene, its objective, or the meta loop: two scenes
@@ -69,6 +72,11 @@ one route breaks a barred door, another has the owner open it; one leaves a witn
 another leaves them dead. That is the design, not a contradiction. Compare two scenes ONLY when
 both can happen in the same playthrough - scenes serving DIFFERENT objectives, or a scene against
 the meta loop. Never flag two routes of the same objective for disagreeing with each other.
+
+A scene marked "(rescue)" is not authored content: it is the engine's guaranteed last resort,
+materialized by code with a generated win line ("The party achieves this the hard way: ..."). It
+exists so a party that has lost every real route still finishes. Never report one as vague, thin,
+too easy, or as completing its objective without the work - that is what it is for.
 
 Do NOT report:
 - An NPC, location, item or rumour that no scene happens to use. An adventure carries TEXTURE -

@@ -47,8 +47,11 @@ Also produce quest CONTRACTS: the story is offered, not imposed - a quest only s
 players accept an in-fiction offer from a giver NPC with stated pay and stakes.
 - Exactly ONE contract with "is_entry": true - the adventure's opening job, covering chapter
   1's opening objective(s). Its giver MUST be one of: ${entryGiverHandles.join(', ') || '(none listed)'} -
-  the offer opens the adventure, so only a first-chapter or global NPC can make it. Later-chapter
-  NPCs are NOT valid entry givers however fitting they seem.
+  the offer opens the adventure, so only a first-chapter or global NPC who is THERE to make it
+  can. Later-chapter NPCs are NOT valid entry givers however fitting they seem, and neither is
+  anyone marked [dead] or [absent]: the first scene of the game is this person making the offer
+  in front of the party, so a patron who is off-stage or a victim who is already gone cannot be
+  the one who hires them, however much the premise revolves around them.
 - Optionally up to one side contract per later chapter where the content supports it.
 - "gold_floor" is the opening bid; "gold_ceiling" is the most the giver can be haggled up to.
   Keep amounts modest and level-appropriate (a village elder does not offer 5000 gold).

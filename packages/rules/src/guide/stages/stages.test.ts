@@ -401,6 +401,19 @@ describe('stage 4 split into two calls', () => {
     expect(user).toContain('Wants:')
   })
 
+  it('warns about a clue that sits nowhere at all', () => {
+    // Live play writes ingredients.discovered from exactly two queries - by location_id when the
+    // party searches, by npc_id in conversation - so a clue with neither is unreachable by
+    // construction. 118 of 637 stored ingredients were in that state.
+    const cast = parseStage4Cast(castDoc, STAGE4_CONTEXT)
+    if (!cast.ok) throw new Error('fixture cast should parse')
+    const doc = JSON.parse(fillingDoc)
+    doc.ingredients[0].placement = { condition: null }
+    const result = parseStage4Ingredients(JSON.stringify(doc), STAGE4_CONTEXT, cast.data)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.warnings.some((w) => w.includes('sits nowhere'))).toBe(true)
+  })
+
   it('warns when a clue is placed on someone who cannot be talked to', () => {
     const cast = parseStage4Cast(castDoc, STAGE4_CONTEXT)
     if (!cast.ok) throw new Error('fixture cast should parse')

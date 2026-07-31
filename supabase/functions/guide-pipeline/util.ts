@@ -93,6 +93,13 @@ export interface DigestRefs {
    * not see which NPCs were chapter-1 - the digest lines carried no chapter at all - so the
    * "giver must appear in the first chapter" rule was checkable only server-side, after the
    * job had already burned an attempt.
+   *
+   * ...AND WHOM THE PARTY CAN ACTUALLY MEET (2026-07-31). The chapter filter took every
+   * first-chapter NPC regardless of `initial_state`, so a murder victim or an off-stage patron
+   * was a legal giver - and the session opens on the giver's offer scene (lifecycle.ts), which a
+   * corpse cannot play. Unfired across 66 stored entry contracts, but the guide being generated
+   * today has Batman authored `absent` by design and 4 of its 7 first-chapter NPCs dead or
+   * absent, with the absent one the obvious person to hand out the job.
    */
   entryGiverHandles: string[]
   /** Chapters in order - the legal targets when a stage-7 repair moves a row between chapters. */
@@ -104,10 +111,10 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
   const [chapters, objectives, npcs, locations, ingredients, nodes] = await Promise.all([
     db.from('chapters').select('id, index, title').eq('adventure_id', adventureId).order('index'),
     db.from('objectives').select('id, chapter_id, index, title, hidden_description').eq('adventure_id', adventureId),
-    db.from('npcs').select('id, name, role, description, chapter_id').eq('adventure_id', adventureId).order('created_at'),
+    db.from('npcs').select('id, name, role, description, chapter_id, initial_state').eq('adventure_id', adventureId).order('created_at'),
     db.from('locations').select('id, name, description, chapter_id').eq('adventure_id', adventureId).order('created_at'),
-    db.from('ingredients').select('id, type, content, reveals').eq('adventure_id', adventureId).order('created_at'),
-    db.from('story_nodes').select('id, key, kind, label, narration_seed, chapter_id, objective_id')
+    db.from('ingredients').select('id, type, content, reveals, placement').eq('adventure_id', adventureId).order('created_at'),
+    db.from('story_nodes').select('id, key, kind, role, label, narration_seed, chapter_id, objective_id, outcome_summary, transitions')
       .eq('adventure_id', adventureId).order('key'),
   ])
   for (const res of [chapters, objectives, npcs, locations, ingredients, nodes]) {
@@ -136,21 +143,42 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
     refs.set(handle, { table: 'objectives', id: o.id })
     objectiveIdByHandle.set(handle, o.id)
   })
+  // Everyone the consistency checker reads carries their life state now. It is asked to find
+  // timeline impossibilities and scenes built on people who cannot be there, and a line reading
+  // "Tam Gosse (chapter 1) - a longshoreman who saw the barge" gives it no way to know Tam is a
+  // corpse. Only non-alive states are printed: the common case stays short.
+  const stateTag = (state: string | null) => (state && state !== 'alive' ? ` [${state}]` : '')
+  const reachableGivers: string[] = []
   ;(npcs.data ?? []).forEach((n, i) => {
     const handle = `npc#${i + 1}`
-    digest.npcs.set(handle, `${n.name}${n.role === 'boss' ? ' (boss)' : ''} ${chapterTag(n.chapter_id)} - ${clip(n.description, 150)}`)
+    digest.npcs.set(
+      handle,
+      `${n.name}${n.role === 'boss' ? ' (boss)' : ''} ${chapterTag(n.chapter_id)}${stateTag(n.initial_state)} - ${clip(n.description, 150)}`,
+    )
     refs.set(handle, { table: 'npcs', id: n.id })
-    if (n.chapter_id === null || n.chapter_id === firstChapterId) entryGiverHandles.push(handle)
+    if (n.chapter_id === null || n.chapter_id === firstChapterId) {
+      entryGiverHandles.push(handle)
+      if (n.initial_state !== 'dead' && n.initial_state !== 'absent') reachableGivers.push(handle)
+    }
   })
   ;(locations.data ?? []).forEach((l, i) => {
     const handle = `loc#${i + 1}`
     digest.locations.set(handle, `${l.name} ${chapterTag(l.chapter_id)} - ${clip(l.description, 120)}`)
     refs.set(handle, { table: 'locations', id: l.id })
   })
+  // WHERE a clue sits is what decides whether it can be found at all, and the checker is asked to
+  // flag "information the players can never plausibly reach" - which it had no way to judge from
+  // `type: text` alone.
+  const npcNameById = new Map((npcs.data ?? []).map((n) => [n.id as string, n.name as string]))
+  const locationNameById = new Map((locations.data ?? []).map((l) => [l.id as string, l.name as string]))
   ;(ingredients.data ?? []).forEach((ing, i) => {
     const handle = `ing#${i + 1}`
     const text = (ing.content as { text?: string } | null)?.text ?? ing.reveals
-    digest.ingredients.set(handle, `${ing.type}: ${clip(text, 140)}`)
+    const placement = (ing.placement ?? {}) as Record<string, unknown>
+    const held = typeof placement.npc_id === 'string' ? npcNameById.get(placement.npc_id) : undefined
+    const room = typeof placement.location_id === 'string' ? locationNameById.get(placement.location_id) : undefined
+    const where = held ? `held by ${held}` : room ? `found in ${room}` : 'PLACED NOWHERE'
+    digest.ingredients.set(handle, `${ing.type} (${where}): ${clip(text, 140)}`)
     refs.set(handle, { table: 'ingredients', id: ing.id })
   })
   // Authored scenes (2026-07-26). Their prose is the newest thing that can contradict the guide,
@@ -159,9 +187,30 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
   ;(nodes.data ?? []).forEach((n, i) => {
     const handle = `node#${i + 1}`
     const serves = objectiveTitle.get(n.objective_id as string) ?? '?'
+    // The seed alone was all stage 7 ever saw, while its own instructions ask it to catch "an
+    // arrival line that reads as a success when the party got there by failing" and scenes
+    // "assuming something an earlier one never established". Both live in the fields below: the
+    // failure edge's arrival context is the line a losing party is handed, and the outcome pair is
+    // the state a played scene leaves behind for every later scene to be written against.
+    const outcome = (n.outcome_summary ?? {}) as { win?: string; loss?: string }
+    const transitions = (Array.isArray(n.transitions) ? n.transitions : []) as {
+      on?: string; arrival_context?: string
+    }[]
+    const arrival = transitions.find((t) => t.on !== 'full' && t.arrival_context)?.arrival_context
+    const extra = [
+      outcome.win ? `WIN: ${clip(outcome.win, 100)}` : '',
+      outcome.loss ? `LOSS: ${clip(outcome.loss, 100)}` : '',
+      arrival ? `ON ARRIVING BEATEN: ${clip(arrival, 100)}` : '',
+    ].filter(Boolean).join(' | ')
+    // The role rides along because a RESCUE node's win line is code-generated boilerplate ("The
+    // party achieves this the hard way: <route>"), and a checker shown the outcome without the
+    // role reads it as a designed scene that completes an objective for free - four such findings,
+    // one per objective, in the first measured run of this enrichment.
+    const roleTag = n.role === 'rescue' ? ' (rescue - the code-authored last resort)' : ''
     digest.nodes!.set(
       handle,
-      `${n.kind} scene ${chapterTag(n.chapter_id)} serving "${clip(serves, 60)}" - ${clip(n.narration_seed, 160)}`,
+      `${n.kind} scene${roleTag} ${chapterTag(n.chapter_id)} serving "${clip(serves, 60)}" - ${clip(n.narration_seed, 160)}` +
+        (extra ? `\n    ${extra}` : ''),
     )
     refs.set(handle, { table: 'story_nodes', id: n.id })
   })
@@ -170,7 +219,12 @@ export async function buildDigest(db: SupabaseClient, adventureId: string): Prom
     digest,
     refs,
     objectiveIdByHandle,
-    entryGiverHandles,
+    // Prefer givers the party can actually be handed the job by. Falling back to the unfiltered
+    // list when a first chapter has nobody living is deliberate: an entry contract is mandatory
+    // (parseStage6 requires exactly one), so an empty legal set would make the stage unsatisfiable
+    // - and the stage-8 gate already refuses a chapter with no living NPC in it for its own
+    // reasons. Better a flagged guide than an ungeneratable one.
+    entryGiverHandles: reachableGivers.length > 0 ? reachableGivers : entryGiverHandles,
     chapters: (chapters.data ?? []).map((c) => ({ id: c.id, number: c.index + 1, title: c.title ?? '' })),
   }
 }

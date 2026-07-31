@@ -205,6 +205,7 @@ sentences where one carries the idea.
 
 Rules:
 - Ingredients are TOYS, not railroads: each one is something players can find, use, ignore, or subvert. Never a mandatory step.
+- EVERY INGREDIENT SITS SOMEWHERE. Each one needs a location_key or an npc_key - one of the two at minimum. The game surfaces a clue in exactly two ways: the party searches the room it is in, or they prise it out of the person holding it. An ingredient with neither key exists only on the page and no party can ever find it, however good it is.
 - PLACE ON THE KEYS YOU ARE GIVEN. Every location_key and npc_key must come from the cast listed below, copied exactly. Do not invent a person or a place to hold a clue: if nobody listed can hold it, put it somewhere that can.
 - placement.condition means ONE thing: this clue needs a PASSED SKILL CHECK to come out. Write it as the check ("successful DC 14 persuasion", "an insight check"), or leave it null. It is NOT a place to describe when the moment is right - "asked about the money", "once they trust her" - because the game reads any condition as a check requirement, and a clue conditioned on a conversation is locked behind a roll that a conversation never makes. If a clue should simply come out when the topic arises, leave condition null and let the NPC judge the moment.
 - ${ingredientMin}-${ingredientMax} ingredients for this chapter. ${ingredientMax} is a CAP, not a target to beat, and anything past ${INGREDIENTS_PER_CHAPTER.max} is discarded before the DM ever sees it - a chapter is made rich by what its clues connect, not by how many there are. Each is linked to ONE or TWO objectives by number (objective_numbers holds 1-2 entries, never more) and tagged with the pillars it serves ("combat", "social", "exploration").
@@ -496,6 +497,26 @@ function parseSections(
       }
     })
 
+  // AN INGREDIENT LIVES IN EXACTLY TWO PLACES OR NOWHERE AT ALL (2026-07-31).
+  //
+  // Live play writes `ingredients.discovered` from two queries and no others: discovery.ts matches
+  // `placement->>location_id` when the party searches a room, and npc-dialogue.ts matches
+  // `placement->>npc_id` in a conversation. An ingredient carrying neither key is unreachable by
+  // construction - not hard to find, impossible - and nothing in the pipeline noticed: the parser
+  // accepted an empty placement, the stage-8 gate never looks at ingredients, and stage 7 is not
+  // shown placements at all. Measured across the stored guides: 118 of 637 ingredients unplaced,
+  // in 11 of the 12 most recent adventures.
+  //
+  // Warned, not failed, and not repaired: code cannot know where a clue belongs, and dropping it
+  // would spend an ingredient slot the chapter's floor already counted.
+  const placementWarnings = ingredients
+    .filter((ing) => !ing.placement.npcKey && !ing.placement.locationKey)
+    .map((ing) =>
+      `the ${ing.type} "${String(ing.content.text ?? '').slice(0, 60)}..." sits nowhere - it names no ` +
+      'location and no NPC, and the game can only surface a clue by searching the room it is in ' +
+      'or talking to the person holding it. Give it a place or a person, or drop it.',
+    )
+
   // A clue on a person is released by the reveal gate IN CONVERSATION, so one placed on someone
   // dead or absent can never come out - the guide reads fine and the clue is simply unreachable
   // for the whole adventure. Warn rather than fail: the DM can move it, and dropping the placement
@@ -504,11 +525,14 @@ function parseSections(
     .filter((ing) => ing.placement.npcKey && !ing.placement.locationKey)
     .map((ing) => npcs.find((n) => n.key === ing.placement.npcKey))
     .filter((n): n is NpcDraft => Boolean(n) && n!.initialState !== 'alive')
-  const unreachableWarnings = unreachable.map((n) =>
-    `a clue was placed on "${n.name}", who is ${n.initialState} when play begins - clues on a ` +
-    'person come out in conversation, so this one cannot be reached. Move it to a location the ' +
-    'party can search.',
-  )
+  const unreachableWarnings = [
+    ...placementWarnings,
+    ...unreachable.map((n) =>
+      `a clue was placed on "${n.name}", who is ${n.initialState} when play begins - clues on a ` +
+      'person come out in conversation, so this one cannot be reached. Move it to a location the ' +
+      'party can search.',
+    ),
+  ]
 
   // Malformed sets are demoted here rather than at the row above, because demotion needs the
   // ingredients: a member whose set is dropped stays in the pool as a plain clue, and its key had
