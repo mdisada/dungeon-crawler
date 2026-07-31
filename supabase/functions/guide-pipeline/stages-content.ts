@@ -243,16 +243,23 @@ export async function runStage4(env: StageEnv, chapterId: string): Promise<void>
   )
   assertOk(ingredientError, 'ingredients insert failed')
 
-  // SS4.1 conformance issues are repaired (nonconforming coop sets demoted), not stage failures;
-  // surface each repair as a stage-4 warning, replacing this chapter's previous batch - same
-  // pattern as stage 5's budget warnings.
-  const warningPrefix = `Chapter ${chapter.index + 1} coop: `
+  // Stage-4 repairs, replacing this chapter's previous batch - same pattern as stage 5's budget
+  // warnings. The prefix is what scopes that replacement to one chapter.
+  //
+  // It used to read "Chapter N coop: ", from when coop-set demotions were the only thing this
+  // channel carried. It now carries clue placement, trimmed pools and unreachable holders too, so
+  // a creator reading "Chapter 1 coop: a clue was placed on someone who is absent" would
+  // reasonably file it under cooperative content and move on. A warning nobody reads is a warning
+  // that does not exist - live 2026-07-31, this is how the one real defect in a guide was labelled.
+  const warningPrefix = `Chapter ${chapter.index + 1}: `
   const { error: oldWarnError } = await env.db
     .from('guide_warnings')
     .delete()
     .eq('adventure_id', env.adventure.id)
     .eq('stage', 4)
-    .like('message', `${warningPrefix}%`)
+    // Matches both the current prefix and the retired "Chapter N coop: " one, so a re-run still
+    // clears warnings written before the rename instead of leaving a stale copy beside the new.
+    .like('message', `Chapter ${chapter.index + 1}%`)
   assertOk(oldWarnError, 'stage-4 warning cleanup failed')
   if (output.warnings.length > 0) {
     const { error: warnError } = await env.db.from('guide_warnings').insert(
@@ -743,11 +750,24 @@ async function authorChapterNodes(
   }
   // Route-ladder trims and anything else the node author had repaired: surfaced to the creator on
   // the same channel as the encounter budget verdicts, never a reason to fail the stage.
+  //
+  // Cleared by PREFIX, because these carry no target_id to key off - the encounter warnings beside
+  // them are deleted by the ids of the rows they annotate, and rows that no longer exist cannot be
+  // matched. Without this a re-run stacked a second copy on the first, and a creator re-running a
+  // chapter three times would read the same trim three times.
+  const nodeWarningPrefix = `Chapter ${chapter.index + 1} scenes: `
+  const { error: oldNodeWarnError } = await env.db
+    .from('guide_warnings')
+    .delete()
+    .eq('adventure_id', env.adventure.id)
+    .eq('stage', 5)
+    .like('message', `${nodeWarningPrefix}%`)
+  assertOk(oldNodeWarnError, 'stage-5 node warning cleanup failed')
   if (output.warnings.length > 0) {
     const { error: warnError } = await env.db.from('guide_warnings').insert(
       output.warnings.map((message) => ({
         adventure_id: env.adventure.id, stage: 5, target_table: 'story_nodes', target_id: null,
-        message: `Chapter ${chapter.index + 1} scenes: ${message}`, kind: 'info',
+        message: `${nodeWarningPrefix}${message}`, kind: 'info',
       })),
     )
     assertOk(warnError, 'stage-5 node warnings insert failed')
