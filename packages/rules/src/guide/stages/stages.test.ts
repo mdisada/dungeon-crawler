@@ -709,6 +709,20 @@ describe('stage 5 (encounters + budget)', () => {
     if (!result.ok) expect(result.errors.some((e) => e.includes('npc:mother-brine'))).toBe(true)
   })
 
+  it('keeps a boss whose phases were omitted, and says so', () => {
+    // Live 2026-07-31: "$.boss_updates[0].boss_phases: expected an array of length 1-5" discarded a
+    // chapter on the stage AFTER stage 4 had spent six attempts getting through. Nothing reads
+    // npcs.boss_phases - not session, not combat, not the frontend - so a fight with no authored
+    // threshold shifts plays identically to one with them.
+    const noPhases = JSON.parse(STAGE5_RESPONSE)
+    noPhases.boss_updates[0].boss_phases = []
+    const result = parseStage5(JSON.stringify(noPhases), STAGE5_CONTEXT)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.bossUpdates[0].npcKey).toBe('npc:mother-brine')
+    expect(result.data.warnings.some((w) => w.includes('no boss_phases'))).toBe(true)
+  })
+
   it('rejects battles with no enemies and unknown location keys', () => {
     const broken = JSON.parse(STAGE5_RESPONSE)
     broken.encounters[0].enemies = []

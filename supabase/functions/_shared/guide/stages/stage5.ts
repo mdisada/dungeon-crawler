@@ -194,10 +194,22 @@ export function parseStage5(raw: string, ctx: Stage5Context): ParseResult<Stage5
         warnings.push(`${path}: dropped tactics for "${npcKey}" - it is not a boss NPC.`)
         return null
       }
+      // PHASES ARE THIN, NOT FATAL (2026-07-31) - and the rule was standing one line above this,
+      // for the sibling field, bought with a whole adventure in 2026-07-21.
+      //
+      // `boss_phases` failed a chapter live ("expected an array of length 1-5") on a stage that had
+      // just spent six attempts getting through stage 4. What it costs to be missing: nothing that
+      // runs. The pipeline writes it to npcs.boss_phases and NOTHING reads that column - not the
+      // session code, not combat, not the frontend. A fight with no authored threshold shifts plays
+      // exactly as one with them, so this can never be worth a discarded chapter.
+      const phases = c.arr(b.boss_phases ?? [], `${path}.boss_phases`, 0, 5)
+      if (phases.length === 0 && npcKey) {
+        warnings.push(`${path}: no boss_phases authored for "${npcKey}" - the fight has no HP-threshold behaviour shifts.`)
+      }
       return {
         npcKey,
         tacticsProfile: c.obj(b.tactics_profile, `${path}.tactics_profile`) as BossUpdateDraft['tacticsProfile'],
-        bossPhases: c.arr(b.boss_phases, `${path}.boss_phases`, 1, 5) as BossUpdateDraft['bossPhases'],
+        bossPhases: phases as BossUpdateDraft['bossPhases'],
       }
     })
     .filter((b): b is BossUpdateDraft => b !== null)
