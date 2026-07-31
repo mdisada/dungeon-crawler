@@ -15,10 +15,19 @@ export const IMAGE_PRESETS: Record<ImagePresetKey, ImagePreset> = {
   base_char: {
     key: 'base_char',
     label: 'Base character',
-    description: 'Full-body source image the token, avatar and portrait crops come from.',
+    description: 'Full-body source image the token and portrait crops come from.',
+    // The background clause is doing mechanical work, not artistic work: this image is fed straight
+    // into features/characters/chroma-key.ts, which separates the figure by colour distance. A
+    // saturated green nothing in the costume shares is what makes that separation exact - it is the
+    // difference between a 148 ms arithmetic cutout and a 3 s neural matte (DECISIONS 2026-07-31).
+    // "no green in the costume" is part of the bargain, and is the wording that was measured.
     promptSuffix:
       'full body visible from head to toe, standing neutral pose, centered in frame, ' +
-      'plain uncluttered background, painterly fantasy illustration',
+      'high fantasy tabletop RPG character art in the style of a Dungeons & Dragons rulebook, ' +
+      'painterly fantasy illustration, subject brightly and evenly lit, ' +
+      'flat solid pure chroma key green background (#00b140), ' +
+      'high contrast between subject and background, no green in the costume, ' +
+      'no scenery, no props, no shadows cast on the background, crisp silhouette edges',
     maxReferences: 0,
   },
   avatar_char: {

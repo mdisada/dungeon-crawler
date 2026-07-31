@@ -27,8 +27,9 @@ export function CharacterOverview({
   const navigate = useNavigate()
   const { races, classes, backgrounds } = useSrdReferenceData()
   const portraitUrl = useCharacterImageUrl(character.images.portraitUrl)
-  const avatarUrl = useCharacterImageUrl(character.images.avatarUrl)
-  const tokenUrl = useCharacterImageUrl(character.images.tokenUrl)
+  const tokenUrl = useCharacterImageUrl(character.images.tokenUrl ?? character.images.avatarUrl)
+  const originalUrl = useCharacterImageUrl(character.images.originalUrl ?? character.images.fullbodyUrl)
+  const baseUrl = useCharacterImageUrl(character.images.baseUrl)
 
   const race = races.find((r) => r.key === character.raceKey)
   const srdClass = classes.find((c) => c.key === character.classKey)
@@ -42,7 +43,7 @@ export function CharacterOverview({
     <div className="flex-1 p-6">
       <div className="flex items-start gap-6">
         <div className="size-32 shrink-0 overflow-hidden rounded-md bg-muted">
-          {avatarUrl && <img src={avatarUrl} alt="" className="size-full object-cover" />}
+          {tokenUrl && <img src={tokenUrl} alt="" className="size-full object-cover" />}
         </div>
         <div>
           <h1 className="text-2xl font-semibold">{character.name || 'Unnamed character'}</h1>
@@ -114,9 +115,10 @@ export function CharacterOverview({
           <p className="mb-2 text-sm font-medium">Image Set</p>
           <div className="flex gap-4">
             {[
-              { label: 'Avatar', url: avatarUrl },
-              { label: 'Token', url: tokenUrl },
+              { label: 'Original', url: originalUrl },
+              { label: 'Base', url: baseUrl },
               { label: 'Portrait', url: portraitUrl },
+              { label: 'Token', url: tokenUrl },
             ].map(({ label, url }) => (
               <div key={label} className="text-center">
                 <div className="size-16 overflow-hidden rounded-md bg-muted">

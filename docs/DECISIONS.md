@@ -1614,3 +1614,205 @@ authors it; and post-combat HP is still not written back, because nothing in the
 a one-way ratchet to 0 hp would brick a party.
 
 **Docs updated:** this file.
+
+---
+
+## 2026-07-31 — Player-facing pacing: chips send on click, and the die does not announce its verdict
+
+**What:** three UI reversals in the live-play surface, all requested by the user after playing it.
+
+1. **Scene text is delivered in chunks, not lines.** The scene box (narration and roleplay
+   renderers) shows one chunk at a time — whole sentences packed to a 240-character budget
+   (`REVEAL_MAX_CHARS`, `frontend/src/features/play/sentences.ts`) — and the player clicks to
+   advance. The box no longer keeps a scrolling history of what was read; the sidebar's Story log
+   already holds the full transcript, which is where a player goes back for it.
+2. **Authored affordance chips send on click** instead of prefilling the input for the player to
+   edit and Send. The prior behaviour was recorded in the `suggestedChoices` doc comment as
+   deliberate ("prefills the input so the player can edit or ignore it... keeps every player on
+   equal footing"). It read as a two-step menu in play. The free-text box stays open beside the
+   chips, so the "never the only input" half of that reasoning still holds; the click-race half
+   does not — the fastest clicker now commits the party's next beat.
+3. **The roll transcript line drops the verdict.** `Kestrel rolls investigation: 7 (d20 5 +2)`,
+   no trailing `- failure` (`supabase/functions/session/prompts.ts`, `rollLine`). Reverses the
+   2026-07-20 "the table sees every die" line format in the same place it was added.
+
+**Why:** (1) and (3) are the same complaint from two directions — the UI was answering questions
+the DM's narration exists to answer. A wall of text arrives before anyone has read a word of it,
+and a verdict printed beside the die tells the player how it went before the narration says so,
+which makes the narration a formality. The DC was always the DM's secret; the verdict now is too.
+It still reaches the event log and the DM's ruling console, so nothing is lost for the DM or for
+debugging — only the shared transcript changed.
+
+**Also fixed, same session:** every say route stages the player's own utterance as a dialogue line
+and points `activeLineId` at it, so the scene box echoed the player back at themselves and made
+them click past their own words to reach the reply. The provider now reveals the newest *narrated*
+line at or before `activeLineId`, skipping party utterances (`play-context.tsx`,
+`narratedLine`); because the revealed line's id does not change while the player's line is staged,
+the reader keeps their place in the current text. A null `activeLineId` still empties the box —
+the server clears it deliberately and a stale line must not creep back in.
+
+**Not done here:** a taken affordance is not retired — the server keeps offering a node's chips
+until the node changes (`graph-navigator.ts`), so the chip a player just clicked is still there
+under the reply. Left alone pending a call on whether taking a chip should consume it.
+
+**Docs updated:** `docs/F07-live-orchestration-core.md` (visible dice → hidden verdict), the
+`suggestedChoices` contract doc in `packages/rules/src/state/types.ts` (+ synced edge mirror),
+this file.
+
+---
+
+## 2026-07-31 — Krea 2 is the default image model; Nano Banana stays for anything with a reference
+
+**What:** `user_settings.image_model` now defaults to `krea/krea-2-medium-turbo` (migration
+`20260731100000_krea_default_image_model.sql`, which also moves existing rows still holding the old
+default and leaves customized ones alone). Krea does not honour reference images — measured
+2026-07-31, it accepts `input_references`, returns HTTP 200 and ignores them (a "portrait of this
+same character" request came back as an unrelated man in a blazer) — so every request that carries a
+reference names `google/gemini-3.1-flash-lite-image` explicitly instead of falling through to the
+account default:
+
+- `features/image/api/generate-image.ts` — `generateImage` pins the reference model when the
+  resolved reference list is non-empty (avatar_char, cutscene, map presets); `editImage` always
+  pins it, since an image-to-image edit is a reference by definition.
+- `features/guide/api/images.ts` — `kind: 'map'` pins it too, even though the map prompt is still
+  reference-free today. A map is drawn to match a location that already exists and is due to take
+  that background as a reference; pinning now means that wiring does not silently generate on a
+  model that cannot accept it.
+
+Requests with no references send no `model` at all, so the Settings image-model field keeps
+governing character and background generation, which is the point of the change.
+
+**Why:** Krea produces better characters and backgrounds than Nano Banana 2 Lite. It cannot do the
+one thing the reference paths need, so "default" and "capable of references" had to become two
+different answers rather than one setting. Splitting on whether the request actually carries
+references (rather than on the preset name) keeps the rule true for callers that pass fewer
+references than a preset allows.
+
+**Also:** `krea/krea-2-medium-turbo` added to the `MEDIA_MODEL_ALLOWLIST` defaults in
+`supabase/functions/_shared/media-models.ts` so the Assets Lab can select it by name.
+
+**Docs updated:** `MAIN-SPEC.md` §2 stack table, `docs/F01-auth-settings-ai-connectivity.md` §3,
+`docs/F02-character-page-creator.md`, this file.
+
+---
+
+## 2026-07-31 — A character's images are a chain off one cutout, and the prompt is written for the cutout
+
+**What:** the character image set becomes `original` → `base` → {`portrait`, `token`}:
+
+- **original** — what the model returned. The `base_char` prompt suffix now asks for D&D-rulebook
+  fantasy character art, brightly lit subject, **flat solid near-black background, no scenery, no
+  cast shadows, crisp silhouette edges**.
+- **base** — `original` with the background removed, in the browser, by
+  `@imgly/background-removal` (`frontend/src/features/characters/image-pipeline.ts`). Transparent
+  everywhere but the figure.
+- **portrait** — 768×1024 crop of `base`, transparent.
+- **token** — 256×256 crop of `base` over a flat colour the player picks in the crop tool. The fill
+  is baked into the PNG and the hex kept in `images.tokenBackground`, so a re-colour is a re-bake
+  from `base` rather than a regeneration.
+
+**`avatar` is deleted from the set.** Small round UI (character list rows, the overview header) now
+reads the token; dialogue and the play sheet read the portrait. Nothing wrote a second bust-framed
+image that was worth its storage.
+
+**Why the prompt clause is not decoration:** the backdrop is the input to a matting model, and a
+matte separates in proportion to how far the subject sits from what is behind it. Asking for an
+unlit near-black field is the cheapest available quality win for every derived image, so the prompt
+and the pipeline were changed together rather than tuning the model afterwards.
+
+**The library is dynamically imported**, so `@imgly/background-removal` (82 kB) and its
+`onnxruntime-web` peer (~390 kB per backend) stay out of the main chunk; only the character creator
+pays for them. Weights are the quantized `isnet_quint8` (~42 MB, vs ~84 MB for the fp16 default) —
+the easy backdrop the prompt now asks for is what makes the small model sufficient.
+
+**Model/wasm assets come from img.ly's CDN.** Self-hosting was the intent, but the npm data package
+(`@imgly/background-removal-data`, latest 1.4.5) does not match what the library v1.7.0 requests
+(it resolves `staticimgly.com/@imgly/background-removal-data/1.7.0/dist/` and needs `.mjs` entries
+that 1.4.5's manifest lacks), and the full asset set is ~211 MB installed. Mirroring it is a
+deliberate, later opt-in: set `VITE_IMGLY_ASSET_BASE` and the pipeline uses that origin instead.
+Until then, a deploy's CSP needs `staticimgly.com` in `connect-src`.
+
+**Known cost:** `onnxruntime-web` makes Vite emit `ort-wasm-simd-threaded.jsep.wasm` (~24 MB) into
+`dist/`, and it is dead weight — imgly overrides `ort.env.wasm.wasmPaths` to the CDN copy at
+runtime, so the emitted asset is never fetched. Left in place rather than fought with a build hack;
+it disappears on its own if the assets are ever mirrored locally.
+
+**Also:** a new original clears the crops derived from the previous one, so Next stays disabled
+until the player re-frames — a token of a character who no longer looks like that is worse than no
+token. The guide's NPC panel shares the crop tool and therefore also drops `avatar`; NPC crops
+still come off the raw generation (no cutout there).
+
+**Docs updated:** `docs/F02-character-page-creator.md` (§4 pipeline, §5 data model + storage paths,
+§6 acceptance), this file.
+
+**Measured the same day (9 real generations + 2 removal strategies over them):**
+
+| | time | cost | notes |
+| --- | --- | --- | --- |
+| Krea 2, 1024² | 9.2–14.0 s | $0.0150 | painterly, backdrop obeyed, head-to-toe framing held |
+| Nano Banana 2 Lite, 1024² | 3.2 s | $0.0336 | added a stone floor + cast shadow; one run 400'd on provider region |
+| ISNet cutout (`small`, onnxruntime-node CPU) | 2.3–3.7 s | — | 3.3–6.3% ambiguous alpha on the near-black backdrop; dark cloth reads translucent |
+| Threshold key vs near-black backdrop | 65 ms | — | unusable: dark costume keys out with the backdrop |
+| Threshold key vs chroma-green backdrop | 70 ms | — | 0.2–0.3% ambiguous, mean alpha 254/255; slight green fringe |
+| `gpt-5-image-mini`, `background: transparent` | 35.6 s | $0.0336 | real RGBA out of the generator, but photoreal and cropped at crown/ankles |
+
+Krea is 55% cheaper than the model it replaced and ~3× slower, which is the right trade for an
+image a player waits on once. The backdrop question these numbers opened — chroma green plus a
+canvas keyer against near-black plus ISNet — was settled the same day in favour of the keyer; see
+the entry below.
+
+---
+
+## 2026-07-31 — The cutout is a green screen and 200 lines of arithmetic, not a matting model
+
+**What:** `@imgly/background-removal` (and its `onnxruntime-web` peer) is out of the frontend
+entirely. The `base_char` prompt now asks for a flat chroma-green backdrop, and
+`frontend/src/features/characters/chroma-key.ts` keys it out on canvas. Measured on the same two
+generations, against the ISNet path it replaces:
+
+| | ISNet (`isnet_quint8`) | chroma key |
+| --- | --- | --- |
+| Time per 1024² image | 2.3–3.7 s | **148 ms** |
+| First-use download | 42 MB weights + CDN origin in the CSP | none |
+| Ambiguous alpha | 3.3–6.3% | 0.2–0.3% |
+| Residual colour fringe | none | 0.08–0.31 (mean green excess on edge pixels, 0–255) |
+| Bundle | 82 kB + ~390 kB per ORT backend, lazy | ~2 kB, always loaded |
+
+Vite was also emitting a dead 24 MB `ort-wasm-simd-threaded.jsep.wasm` into `dist/`; that is gone
+with the dependency.
+
+**Three ideas do the work, and each was needed to beat the model:**
+
+1. **Subpixel decision.** One in/out test per pixel is what produced a staircase edge. Disputed
+   pixels — 1.4% of the image, found by testing whether a pixel's 3×3 neighbourhood agrees — are
+   re-keyed with 3×3 supersampling. Verified bit-identical to supersampling the whole image, at a
+   fifth of the cost.
+2. **Choke by ramp bias, not erosion.** A 3×3 min-filter can only move the boundary a whole pixel,
+   which nicked bowstrings and chewed fur. Biasing the distance ramp chokes by a fraction of one.
+3. **Un-mix, then de-spill the rim only.** An edge pixel is genuinely part subject and part
+   backdrop, so its stored colour still carries green: `F = (C − (1−a)K) / a` recovers the paint.
+   The green clamp is limited to 4 px of rim and faded by depth, because a global clamp scores a
+   perfect fringe metric and drains an olive cloak. Un-mixing is faded in above alpha 0.25, since
+   dividing by a small alpha moves colour a long way on little evidence.
+
+**Rejected: keeping screen-coloured regions the figure encloses.** A synthetic test flagged that a
+green costume panel would be punched through, and the standard fix is to treat only border-connected
+screen as backdrop. On a real generation that filled the gap between the bow and its owner, and the
+holes in a tattered hem, with raw green — 1294 restored pixels, all of them wrong. Enclosed screen
+is normally a real gap. The costume case is handled in the prompt instead ("no green in the
+costume"), and `chroma-key.test.ts` records the trade rather than hiding it.
+
+**Guard:** `isKeyableBackdrop` requires the sampled corners to be green-dominant by 40/255. An
+image without that backdrop — a model that ignored the clause, an uploaded reference — throws
+`BackdropNotKeyableError`, the step keeps the `original` it already stored, and the crop tool falls
+back to it rather than cutting holes in a photograph.
+
+**Known residual:** a green backdrop bounces green light onto the subject while the image is being
+*painted*. On the dwarf's lower cloak, some green is in the art itself rather than in the edge, and
+no keyer can find that. Watched, not fixed.
+
+**Updated:** `frontend/src/features/characters/chroma-key.ts` (new, + 9 unit tests),
+`image-pipeline.ts` (canvas wrapper, `BackdropNotKeyableError`), `features/image/presets.ts`
+(`base_char` backdrop clause), `steps/step-portrait.tsx` (no progress percentage — it is one frame
+of work now), `config/env.ts` + `vite-env.d.ts` (`VITE_IMGLY_ASSET_BASE` removed),
+`docs/F02-character-page-creator.md` §4.

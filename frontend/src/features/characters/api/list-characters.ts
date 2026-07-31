@@ -8,7 +8,7 @@ interface CharacterSummaryRow {
   class_key: string | null
   level: number
   is_complete: boolean
-  images: { avatarUrl?: string }
+  images: { tokenUrl?: string; avatarUrl?: string }
 }
 
 export async function listCharacters(userId: string): Promise<CharacterSummary[]> {
@@ -25,6 +25,8 @@ export async function listCharacters(userId: string): Promise<CharacterSummary[]
     classKey: row.class_key,
     level: row.level,
     isComplete: row.is_complete,
-    avatarUrl: row.images?.avatarUrl,
+    // The list row shows a small circle: that is the token now. `avatarUrl` only answers for
+    // characters created before the 2026-07-31 image set.
+    tokenUrl: row.images?.tokenUrl ?? row.images?.avatarUrl,
   }))
 }

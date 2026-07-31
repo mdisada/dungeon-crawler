@@ -1,18 +1,13 @@
 import { useRef, useState } from 'react'
 
+import { clampRect, DEFAULT_TOKEN_BACKGROUND, renderCrop, type CropRect } from '../image-pipeline'
+
 const VIEWPORT = 240
 
 export interface CropOutputs {
   token: Blob
-  avatar: Blob
   portrait: Blob
-}
-
-interface Rect {
-  x: number
-  y: number
-  w: number
-  h: number
+  tokenBackground: string
 }
 
 interface Transform {
@@ -21,38 +16,19 @@ interface Transform {
   offsetY: number
 }
 
-// Keeps a rect inside the source image, shifting first and shrinking only when it can't fit.
-function clampRect(rect: Rect, naturalW: number, naturalH: number): Rect {
-  const w = Math.min(rect.w, naturalW)
-  const h = Math.min(rect.h, naturalH)
-  const x = Math.min(Math.max(rect.x, 0), naturalW - w)
-  const y = Math.min(Math.max(rect.y, 0), naturalH - h)
-  return { x, y, w, h }
-}
-
-function renderCrop(img: HTMLImageElement, rect: Rect, outputW: number, outputH: number): Promise<Blob> {
-  const canvas = document.createElement('canvas')
-  canvas.width = outputW
-  canvas.height = outputH
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return Promise.reject(new Error('Canvas 2D context unavailable'))
-  ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h, 0, 0, outputW, outputH)
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Canvas export failed'))), 'image/png')
-  })
-}
-
 interface TokenCropToolProps {
+  /** The background-removed base image - both crops inherit its transparency. */
   sourceUrl: string
   onCrops: (crops: CropOutputs) => void
   isBusy: boolean
 }
 
-// F02 SS4 (revised per Phase 2 review): the user frames ONLY the token (head/face). The avatar
-// and half-body portrait crops are derived from that rect - the token tells us where the head
-// is, the avatar is a slightly wider framing of it, and the portrait extends downward from it.
+// F02 SS4 (revised per Phase 2 review): the user frames ONLY the token (head/face). The half-body
+// portrait is derived from that rect - the token tells us where the head is, and the portrait
+// extends downward from it.
 export function TokenCropTool({ sourceUrl, onCrops, isBusy }: TokenCropToolProps) {
   const [transform, setTransform] = useState<Transform | null>(null)
+  const [tokenBackground, setTokenBackground] = useState(DEFAULT_TOKEN_BACKGROUND)
   const [error, setError] = useState<string | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
   const dragState = useRef<{ startX: number; startY: number; origin: Transform } | null>(null)
@@ -104,7 +80,7 @@ export function TokenCropTool({ sourceUrl, onCrops, isBusy }: TokenCropToolProps
     setError(null)
 
     // Viewport square -> source-space token rect (where the head is).
-    const token: Rect = clampRect(
+    const token: CropRect = clampRect(
       {
         x: -transform.offsetX / transform.scale,
         y: -transform.offsetY / transform.scale,
@@ -117,14 +93,6 @@ export function TokenCropTool({ sourceUrl, onCrops, isBusy }: TokenCropToolProps
     const headCenterX = token.x + token.w / 2
     const headCenterY = token.y + token.h / 2
 
-    // Avatar: the same head framing, pulled back ~35% for a bit of shoulder room.
-    const avatarSize = token.w * 1.35
-    const avatar = clampRect(
-      { x: headCenterX - avatarSize / 2, y: headCenterY - avatarSize / 2, w: avatarSize, h: avatarSize },
-      img.naturalWidth,
-      img.naturalHeight,
-    )
-
     // Half-body portrait (3:4): head sits in the upper fifth, frame extends down past the torso.
     const portraitW = Math.min(token.w * 2.6, img.naturalWidth)
     const portraitH = portraitW * (1024 / 768)
@@ -135,12 +103,13 @@ export function TokenCropTool({ sourceUrl, onCrops, isBusy }: TokenCropToolProps
     )
 
     try {
-      const [tokenBlob, avatarBlob, portraitBlob] = await Promise.all([
-        renderCrop(img, token, 256, 256),
-        renderCrop(img, avatar, 256, 256),
+      const [tokenBlob, portraitBlob] = await Promise.all([
+        // The token is the one image that gets a fill: it sits on a battle map, where a
+        // see-through counter is unreadable. The portrait keeps its transparency.
+        renderCrop(img, token, 256, 256, tokenBackground),
         renderCrop(img, portrait, 768, 1024),
       ])
-      onCrops({ token: tokenBlob, avatar: avatarBlob, portrait: portraitBlob })
+      onCrops({ token: tokenBlob, portrait: portraitBlob, tokenBackground })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to render crops')
     }
@@ -150,8 +119,8 @@ export function TokenCropTool({ sourceUrl, onCrops, isBusy }: TokenCropToolProps
     <div>
       <p className="mb-2 text-sm font-medium">Frame the head for the map token</p>
       <p className="mb-3 text-xs text-muted-foreground">
-        Drag and zoom until the face fills the circle. The avatar and half-body portrait are derived
-        from this framing automatically.
+        Drag and zoom until the face fills the circle. The half-body portrait is derived from this
+        framing automatically.
       </p>
       <div
         className="relative touch-none overflow-hidden rounded-md border bg-muted select-none"
@@ -176,6 +145,7 @@ export function TokenCropTool({ sourceUrl, onCrops, isBusy }: TokenCropToolProps
                   maxWidth: 'none',
                   transformOrigin: '0 0',
                   transform: `translate(${transform.offsetX}px, ${transform.offsetY}px) scale(${transform.scale})`,
+                  backgroundColor: tokenBackground,
                 }
               : { opacity: 0 }
           }
@@ -199,13 +169,27 @@ export function TokenCropTool({ sourceUrl, onCrops, isBusy }: TokenCropToolProps
         />
       </div>
 
+      <div className="mt-3 flex max-w-xs items-center gap-2">
+        <label htmlFor="token-background" className="text-xs text-muted-foreground">
+          Token background
+        </label>
+        <input
+          id="token-background"
+          type="color"
+          value={tokenBackground}
+          onChange={(e) => setTokenBackground(e.target.value)}
+          className="h-7 w-12 cursor-pointer rounded border bg-transparent"
+        />
+        <span className="text-xs text-muted-foreground">{tokenBackground}</span>
+      </div>
+
       <button
         type="button"
         onClick={() => void handleSetImages()}
         disabled={!transform || isBusy}
         className="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
       >
-        {isBusy ? 'Saving images…' : 'Set token, avatar & portrait'}
+        {isBusy ? 'Saving images…' : 'Set token & portrait'}
       </button>
       {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
     </div>

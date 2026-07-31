@@ -1,6 +1,8 @@
 import { supabase } from '@/lib/supabase'
 
-export type CharacterImageKind = 'fullbody' | 'avatar' | 'token' | 'portrait'
+// 'fullbody' and 'avatar' were the pre-2026-07-31 set; objects under those names still exist for
+// older characters, but nothing writes them any more - see CharacterImages in ../types.
+export type CharacterImageKind = 'original' | 'base' | 'token' | 'portrait'
 
 const SIGNED_URL_TTL_SECONDS = 3600
 

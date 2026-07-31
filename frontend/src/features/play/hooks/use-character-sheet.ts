@@ -80,7 +80,14 @@ export function useCharacterSheet(characterId: string | null): SheetState {
       )
       const images = (row.images ?? {}) as Record<string, unknown>
       const imageCandidate =
-        images.portraitUrl ?? images.portrait ?? images.avatarUrl ?? images.avatar ?? images.fullbodyUrl ?? null
+        images.portraitUrl ??
+        images.portrait ??
+        images.avatarUrl ??
+        images.avatar ??
+        images.baseUrl ??
+        images.originalUrl ??
+        images.fullbodyUrl ??
+        null
 
       const sheet: CharacterSheet = {
         id: row.id,

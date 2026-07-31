@@ -15,7 +15,8 @@ interface NpcImagePanelProps {
 }
 
 // F04 SS5.2: images NEVER auto-generate - the per-NPC prompt is shown and generation is an
-// explicit click; crops flow through the F2 tool (avatar/token/portrait derived from one rect).
+// explicit click; crops flow through the F2 tool (token/portrait derived from one rect). NPC crops
+// come off the raw generation - the background-removal chain is character-creation only.
 export function NpcImagePanel({ adventureId, npc, onChanged }: NpcImagePanelProps) {
   const [prompt, setPrompt] = useState(npc.imagePrompt)
   const [pendingSourceUrl, setPendingSourceUrl] = useState<string | null>(null)
@@ -48,7 +49,6 @@ export function NpcImagePanel({ adventureId, npc, onChanged }: NpcImagePanelProp
       const images = {
         fullbody: await uploadAdventureMedia(adventureId, `${base}/fullbody.png`, pendingBlob),
         token: await uploadAdventureMedia(adventureId, `${base}/token.png`, crops.token),
-        avatar: await uploadAdventureMedia(adventureId, `${base}/avatar.png`, crops.avatar),
         portrait: await uploadAdventureMedia(adventureId, `${base}/portrait.png`, crops.portrait),
       }
       await saveGuideRow('npcs', npc.id, { images })
@@ -83,7 +83,7 @@ export function NpcImagePanel({ adventureId, npc, onChanged }: NpcImagePanelProp
       </div>
       {pendingSourceUrl && (
         <div className="flex flex-col gap-2">
-          <p className="text-xs text-muted-foreground">Frame the token (head) - avatar and portrait derive from it.</p>
+          <p className="text-xs text-muted-foreground">Frame the token (head) - the portrait derives from it.</p>
           <TokenCropTool sourceUrl={pendingSourceUrl} onCrops={(crops) => void handleCrops(crops)} isBusy={isBusy} />
         </div>
       )}

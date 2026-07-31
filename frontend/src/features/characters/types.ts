@@ -70,11 +70,18 @@ export interface CharacterVoice {
   clipPath?: string
 }
 
+// The set written since 2026-07-31 is original -> base -> {portrait, token} (image-pipeline.ts).
+// `fullbodyUrl` and `avatarUrl` are the pre-2026-07-31 scheme: still read for characters created
+// then, never written now. Re-running the portrait step upgrades a character to the new set.
 export interface CharacterImages {
-  fullbodyUrl?: string
-  avatarUrl?: string
+  originalUrl?: string
+  baseUrl?: string
   tokenUrl?: string
   portraitUrl?: string
+  /** Hex fill baked in behind the token, kept so it can be re-baked from `base` without regenerating. */
+  tokenBackground?: string
+  fullbodyUrl?: string
+  avatarUrl?: string
 }
 
 export const WIZARD_STEPS = [
@@ -153,5 +160,6 @@ export interface CharacterSummary {
   classKey: string | null
   level: number
   isComplete: boolean
-  avatarUrl?: string
+  /** The small round image for list rows: the token, or a legacy avatar for older characters. */
+  tokenUrl?: string
 }

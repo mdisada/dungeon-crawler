@@ -5,7 +5,7 @@
 
 ## 1. Purpose
 
-Create, view, and edit player characters following SRD 5.2.1 rules, with a freeform uniqueness layer and a generated image set (full-body → avatar / map token / half-body portrait).
+Create, view, and edit player characters following SRD 5.2.1 rules, with a freeform uniqueness layer and a generated image set (original → background-removed base → map token / half-body portrait).
 
 ## 2. Routes & layout
 
@@ -32,11 +32,16 @@ Derived stats are computed by shared TypeScript functions in `packages/rules` (s
 ## 4. Portrait pipeline
 
 Revised 2026-07-17 per Phase 2 review: auto-generate + iterative edit + single-crop derivation.
+Revised again 2026-07-31: the crops come off a background-removed cutout, and `avatar` is gone.
 
-1. **Auto-generate on step entry:** the wizard already holds the full description by this step, so the first portrait generates automatically from an assembled prompt (race, class, background, physical fields, freeform text) — no button press. `kind: image` (Nano Banana 2 Lite), 9:16 full-body.
-2. **Iterative editing:** below the generated image, a text box ("describe a change") sends the **current image + edit text** back through the images endpoint as an image-to-image edit (`input_references`). "Regenerate from scratch" re-runs step 1. The full-body result is uploaded to Storage and its path stored.
-3. **Single-crop derivation:** the user frames **only the token** (head/face) in a pan/zoom circle mask. Because the token rect tells us where the head is, the client derives the other two crops from it — **avatar** 256×256 (same center, ~1.35× wider framing) and **half-body portrait** 768×1024 (3:4, head in the upper fifth, extending down the torso) — renders all three to canvas, uploads them, and shows a preview strip.
-4. **Testing mode:** placeholder assets (`/placeholders/{avatar|token|portrait|fullbody}.png`) injected when image gen disabled by env flag (`VITE_PLACEHOLDER_MEDIA`).
+The set is a chain — `original` → `base` → {`portrait`, `token`} — so the cutout runs once per
+generation and everything downstream is a crop of it.
+
+1. **Auto-generate on step entry:** the wizard already holds the full description by this step, so the first portrait generates automatically from an assembled prompt (race, class, background, physical fields, freeform text) — no button press. `kind: image` (the account's default image model, Krea 2 Medium Turbo), 9:16 full-body. Later image-to-image edits of that portrait pin Nano Banana 2 Lite, since they send the current image as a reference.
+2. **Iterative editing:** below the generated image, a text box ("describe a change") sends the **current image + edit text** back through the images endpoint as an image-to-image edit (`input_references`). "Regenerate from scratch" re-runs step 1. The result is stored as **`original`**, and a new original clears the crops derived from the previous one.
+3. **Background removal:** `original` → **`base`**, a transparent-background cutout produced in the browser by `features/characters/chroma-key.ts` — colour keying, no model, ~150 ms. The prompt asks for a flat chroma-green backdrop precisely so this is arithmetic rather than inference; the keyer decides at subpixel resolution on disputed pixels, un-mixes the edge and de-spills the rim. A failed or unkeyable cutout is surfaced but not fatal — the crop tool falls back to `original`.
+4. **Single-crop derivation:** the user frames **only the token** (head/face) in a pan/zoom circle mask, cropping `base`. Because the token rect tells us where the head is, the client derives the other crop from it — **half-body portrait** 768×1024 (3:4, head in the upper fifth, extending down the torso), transparent. The **token** 256×256 is the same rect over a flat fill the player picks; the colour is baked into the PNG and kept in `images.tokenBackground` so it can be re-baked from `base`.
+5. **Testing mode:** placeholder assets (`/placeholders/{avatar|token|portrait|fullbody}.png`) injected when image gen disabled by env flag (`VITE_PLACEHOLDER_MEDIA`); placeholder runs skip background removal.
 
 ## 5. Data model
 
@@ -54,7 +59,7 @@ characters:
   physical jsonb {age,height,hair,eyes,description},
   voice jsonb {source: default|clip, clipPath},      -- narration voice choice; cloning is F12 (Phase 3)
   background_narrative text,                         -- generated: merges freeform + physical into prose (LLM, user-editable)
-  images jsonb {fullbody_url, avatar_url, token_url, portrait_url},
+  images jsonb {originalUrl, baseUrl, portraitUrl, tokenUrl, tokenBackground},  -- pre-2026-07-31 rows also carry fullbodyUrl/avatarUrl
   persistent_conditions jsonb[],                     -- curses, exhaustion (survive sessions)
   draft jsonb, is_complete boolean, created_at, updated_at
 
@@ -62,7 +67,7 @@ srd_races / srd_classes / srd_backgrounds / srd_items / srd_spells / srd_feats:
   seeded from SRD 5.2.1 JSON at migration time; read-only.
 ```
 
-Storage: `characters/{character_id}/{fullbody|avatar|token|portrait}.png` (+ `history/`,
+Storage: `characters/{character_id}/{original|base|portrait|token}.png` (+ `history/`,
 `voice-sample.*` for the uploaded voice clip).
 
 **`background_narrative`:** on save, a one-shot LLM call (agent_role `user_direct`) merges freeform text + physical description + mechanical background into 2–3 paragraphs. Shown in the Background tab in play and fed to agents as the character's identity context. User can edit or regenerate.
@@ -76,7 +81,7 @@ Header: portrait, name, race/class/level/alignment. Body: ability block with mod
 - [ ] A complete SRD-legal level-1 character can be created start-to-finish in < 5 min with no free-text required except a name.
 - [ ] Point Buy validation rejects illegal spends; Standard Array prevents duplicates.
 - [ ] Derived stats (AC, HP, save/skill mods) match SRD hand-calculated fixtures (unit tests in `packages/rules`).
-- [ ] All three crops export at correct dimensions and render correctly in their UI targets (navbar-scale avatar, 32px map tile, VN portrait).
+- [ ] Both crops export at correct dimensions and render correctly in their UI targets (32px map tile, VN portrait), and the token's chosen fill is visible behind the cutout.
 - [ ] Draft resume works across sessions/devices.
 - [ ] Placeholder mode functions with image gen disabled.
 

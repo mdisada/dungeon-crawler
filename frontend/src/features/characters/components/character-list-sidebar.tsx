@@ -10,7 +10,7 @@ function CharacterListItem({
   isSelected: boolean
   onSelect: () => void
 }) {
-  const avatarUrl = useCharacterImageUrl(character.avatarUrl)
+  const tokenUrl = useCharacterImageUrl(character.tokenUrl)
 
   return (
     <li>
@@ -22,8 +22,8 @@ function CharacterListItem({
         }`}
       >
         <span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted-foreground/10">
-          {avatarUrl ? (
-            <img src={avatarUrl} alt="" className="size-full object-cover" />
+          {tokenUrl ? (
+            <img src={tokenUrl} alt="" className="size-full object-cover" />
           ) : (
             <span aria-hidden className="text-xs text-muted-foreground">
               ?
