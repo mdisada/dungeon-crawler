@@ -522,6 +522,21 @@ describe('stage 4 (ingredients + coop sets)', () => {
     expect(result.data.warnings.some((w) => w.includes('min_players'))).toBe(true)
   })
 
+  it('drops coop sets whole in a solo adventure instead of conformance-checking them', () => {
+    // Live 2026-07-31 on a min_players=1 one-shot: the model authored three sets, two were demoted
+    // for members lacking a reveals_to - a rule the solo prompt never states, because it tells the
+    // model not to author coop content at all - and the third, a complementary_obstacle needing two
+    // characters at once, survived into a one-player guide.
+    const result = parseStage4(STAGE4_RESPONSE, { ...STAGE4_CONTEXT, seed: SOLO_SEED })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.coopSets).toEqual([])
+    expect(result.data.ingredients.every((i) => i.coopSetKey === null)).toBe(true)
+    expect(result.data.warnings.some((w) => w.includes('can be played solo'))).toBe(true)
+    // One note about the whole thing, not one verdict per set.
+    expect(result.data.warnings.filter((w) => w.includes('demoted')).length).toBe(0)
+  })
+
   it('allows a coop-free chapter for a solo adventure without warnings', () => {
     const withoutCoop = JSON.parse(STAGE4_RESPONSE)
     withoutCoop.coop_sets = []

@@ -711,6 +711,30 @@ export function repairCoopConformance(
 ): { coopSets: CoopSetDraft[]; warnings: string[] } {
   const warnings: string[] = []
   const demotedKeys = new Set<string>()
+
+  // A SOLO ADVENTURE HAS NO COOPERATIVE CONTENT TO CONFORM (2026-07-31).
+  //
+  // The prompt tells a min_players=1 chapter "do not create content that REQUIRES multiple
+  // simultaneous characters" and, in the same breath, withholds the rules a coop set must satisfy -
+  // they live in the multiplayer branch. So a model that authors one anyway is judged against
+  // requirements it was never shown. Live today: three sets on a solo one-shot, two demoted for
+  // members being `secret`/`rumor` without a `reveals_to`, reported to the creator as if there were
+  // something to fix, and the third - a complementary_obstacle, an obstacle needing two characters
+  // at once - kept, in a one-player adventure.
+  //
+  // Cooperative content in a solo guide is not nonconforming, it is inapplicable. Dropped whole,
+  // with one note, instead of three conformance verdicts about content that should not exist.
+  if (minPlayers <= 1 && coopSets.length > 0) {
+    for (const ing of ingredients) ing.coopSetKey = null
+    return {
+      coopSets: [],
+      warnings: [
+        `${coopSets.length} cooperative set(s) were dropped: this adventure can be played solo ` +
+        '(min_players 1), so nothing may require two characters acting at once. Their clues stay ' +
+        'in the pool as ordinary ingredients.',
+      ],
+    }
+  }
   const demote = (set: CoopSetDraft, reason: string) => {
     demotedKeys.add(set.key)
     for (const ing of ingredients) {
