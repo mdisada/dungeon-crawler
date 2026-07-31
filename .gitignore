@@ -229,3 +229,18 @@ tests/integration/.playtest-logs/
 
 # Adventure Lab run logs (paid simulated playthroughs, one JSONL + summary per run)
 tests/lab/logs/
+
+# Node / workspace deps (each package also ignores its own, but the workspace root
+# had no rule - which is how a vitest cache file under node_modules got committed)
+node_modules/
+*.tsbuildinfo
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+*.swp
+
+# Claude Code machine-local settings. Shared skills under .claude/skills stay tracked;
+# settings.local.json is per-machine permissions and must not be.
+.claude/settings.local.json
+.claude/settings.local.json.backup
