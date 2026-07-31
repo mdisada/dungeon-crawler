@@ -3,7 +3,7 @@ import { useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { hpBandLabel, quantizedHpFraction } from '@rules/combat'
 import { GRID_SIZE, moveCost } from '@rules/state'
-import type { CombatState, TokenState } from '@rules/state'
+import type { CombatState, MapFit, TokenState } from '@rules/state'
 
 import { sendCombatAction, sendMoveIntent } from '../api/session'
 import type { CombatActionIntent } from '../api/session'
@@ -13,6 +13,12 @@ import { CombatActionBar } from './combat-action-bar'
 import { TurnBanner } from './turn-banner'
 
 const CELL_PX = 32
+
+const FIT_CLASS: Record<MapFit, string> = {
+  fill: 'object-fill',
+  cover: 'object-cover',
+  contain: 'object-contain',
+}
 
 /**
  * F06 SS3.1 tactical renderer: 1024x1024 map under a 32x32 grid, pan/zoom, controller-gated
@@ -52,6 +58,12 @@ export function BattleMap({ combat }: { combat: CombatState }) {
 
   const obstacleSet = useMemo(() => new Set(combat.obstacles.map(([x, y]) => `${x},${y}`)), [combat.obstacles])
 
+  // The board is as big as the assigned map says, not as big as the renderer used to assume. An
+  // engine fight already runs on these bounds; drawing 32x32 over a 20x15 map stretched the art
+  // across squares no token could ever reach.
+  const cols = combat.gridWidth ?? GRID_SIZE
+  const rows = combat.gridHeight ?? GRID_SIZE
+
   const rangeCells = useMemo(() => {
     if (!activeToken || !(isDm || activeToken.controllerUserId === userId)) return []
     const cells: { x: number; y: number }[] = []
@@ -60,13 +72,13 @@ export function BattleMap({ combat }: { combat: CombatState }) {
       for (let dy = -budget; dy <= budget; dy++) {
         const x = activeToken.x + dx
         const y = activeToken.y + dy
-        if (x < 0 || y < 0 || x >= GRID_SIZE || y >= GRID_SIZE) continue
+        if (x < 0 || y < 0 || x >= cols || y >= rows) continue
         if (obstacleSet.has(`${x},${y}`)) continue
         if (moveCost(activeToken, { x, y }) <= budget) cells.push({ x, y })
       }
     }
     return cells
-  }, [activeToken, combat.economy.move, isDm, userId, obstacleSet])
+  }, [activeToken, combat.economy.move, isDm, userId, obstacleSet, cols, rows])
 
   async function commitMove(token: TokenState, to: { x: number; y: number }) {
     if (to.x === token.x && to.y === token.y) return
@@ -167,13 +179,18 @@ export function BattleMap({ combat }: { combat: CombatState }) {
         <div
           className="relative origin-top-left"
           style={{
-            width: GRID_SIZE * CELL_PX,
-            height: GRID_SIZE * CELL_PX,
+            width: cols * CELL_PX,
+            height: rows * CELL_PX,
             transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
           }}
         >
           {combat.mapUrl ? (
-            <img src={combat.mapUrl} alt="Battle map" className="absolute inset-0 h-full w-full object-cover" draggable={false} />
+            <img
+              src={combat.mapUrl}
+              alt="Battle map"
+              className={cn('absolute inset-0 h-full w-full', FIT_CLASS[combat.mapFit ?? 'cover'])}
+              draggable={false}
+            />
           ) : (
             <div aria-hidden className="absolute inset-0 bg-gradient-to-br from-emerald-950 to-slate-900" />
           )}

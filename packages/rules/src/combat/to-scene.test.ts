@@ -55,6 +55,22 @@ describe('combatStateFromEngine', () => {
     const scene = combatStateFromEngine(engine, { locationId: null, mapUrl: null })
     expect(scene.tokens.find((t) => t.id === 'e1')?.refId).toBe('')
   })
+
+  it('carries the assigned map: its artwork, its fit, and the board the engine actually plays on', () => {
+    // The renderer used to assume 32x32 and object-cover. The engine has always played on the
+    // assigned map's authored grid, so those two disagreed for every map that was not 32x32.
+    const sized = { ...engine, gridWidth: 20, gridHeight: 15 } as CombatEngineState
+    const scene = combatStateFromEngine(sized, {
+      locationId: 'loc-1', mapUrl: 'https://signed/crypt.png', mapFit: 'contain',
+    })
+    expect(scene).toMatchObject({
+      mapUrl: 'https://signed/crypt.png', mapFit: 'contain', gridWidth: 20, gridHeight: 15,
+    })
+  })
+
+  it('falls back to cover when the map row does not say how to fit', () => {
+    expect(combatStateFromEngine(engine, { locationId: null, mapUrl: null }).mapFit).toBe('cover')
+  })
 })
 
 const playable = {

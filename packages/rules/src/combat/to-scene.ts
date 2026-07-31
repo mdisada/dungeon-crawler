@@ -11,19 +11,25 @@
 
 import { formatDiceExpr } from './dice.ts'
 import type { CombatEngineState } from './types.ts'
-import type { CombatState, TokenState, TurnOptions } from '../state/types.ts'
+import type { CombatState, MapFit, TokenState, TurnOptions } from '../state/types.ts'
 
 export interface ToSceneOptions {
   /** Where the fight happens, for the scene banner. */
   locationId: string | null
   /**
-   * Signed URL of the battle map, or null to render the bare grid.
+   * Signed URL of the battle map's artwork, or null to render the bare grid.
    *
-   * Null is the honest default for now: maps live in a private bucket and only the client signs
-   * them today, so a server-side URL is a separate decision. The grid and every token still
-   * render without it.
+   * The fight's map is authored: stage 5 binds each battle encounter to a `battle_maps` row by tag
+   * match against its fiction and its location, and the initiator already reads that row's grid,
+   * obstacles and spawn cells. The caller signs `battle_maps.path` server-side (the same
+   * resolveMediaUrl path backgrounds and portraits take) and passes the URL here.
+   *
+   * Null stays a working state, not a broken one - grid and tokens render without artwork, which
+   * is what an unassigned fight on the open field gets.
    */
   mapUrl: string | null
+  /** How the artwork lays over the grid; 'cover' when the map row does not say. */
+  mapFit?: MapFit
   /**
    * Who may drive each token, keyed by combatant id. Anything absent is 'ai'.
    *
@@ -103,5 +109,10 @@ export function combatStateFromEngine(engine: CombatEngineState, opts: ToSceneOp
     // for a rule the engine does not implement yet, and claiming it were used would be a lie.
     economy: { ...engine.economy, reaction: true },
     options: turnOptions(engine),
+    // The board the ENGINE is playing on, not the renderer's default - these come from the
+    // assigned map's authored grid and are what every bounds check upstream already honours.
+    gridWidth: engine.gridWidth,
+    gridHeight: engine.gridHeight,
+    mapFit: opts.mapFit ?? 'cover',
   }
 }

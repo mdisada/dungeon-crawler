@@ -17,7 +17,9 @@ import {
   awaitsPlayer, bossNpcStateForOutcome, combatStateFromEngine, deriveResult, fightIsOver,
   recapLines, resolveAction, runAiTurns, stepRng,
 } from '../_shared/combat/index.ts'
-import type { CombatAction, CombatEngineState, CombatEvent } from '../_shared/combat/index.ts'
+import type {
+  CombatAction, CombatEngineState, CombatEvent, ToSceneOptions,
+} from '../_shared/combat/index.ts'
 import type { GameState, Json, LiveCombatState } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { loadCombatControllers } from './combat.ts'
@@ -74,12 +76,20 @@ function parseCombatAction(body: Record<string, unknown>): CombatAction | null {
 }
 
 /**
- * The combat state patch is a whole-object REPLACE in effect (every field is written), but
- * locationId/mapUrl are not the engine's to know - they come from the fight that was started. Both
- * are carried forward from what is already on the wire so a turn cannot blank the scene banner.
+ * The combat state patch is a whole-object REPLACE in effect (every field is written), but where
+ * the fight is and what it looks like are not the engine's to know - they were settled when it
+ * started. Carried forward from what is already on the wire so a turn cannot blank the map.
+ *
+ * The signed URL rides along unchanged for the length of the fight. It is good for an hour, the
+ * same TTL every background and portrait in this app carries; a fight that outlasts one loses its
+ * artwork and keeps its grid, which is the same way a long scene loses its backdrop today.
  */
-function sceneCarryOver(state: GameState): { locationId: string | null; mapUrl: string | null } {
-  return { locationId: state.combat?.locationId ?? null, mapUrl: state.combat?.mapUrl ?? null }
+function sceneCarryOver(state: GameState): Pick<ToSceneOptions, 'locationId' | 'mapUrl' | 'mapFit'> {
+  return {
+    locationId: state.combat?.locationId ?? null,
+    mapUrl: state.combat?.mapUrl ?? null,
+    mapFit: state.combat?.mapFit ?? 'cover',
+  }
 }
 
 export async function combatAction(

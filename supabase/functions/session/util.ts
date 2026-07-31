@@ -235,7 +235,7 @@ export async function loadStateFresh(service: SupabaseClient, adventureId: strin
  */
 export async function resolveMediaUrl(
   service: SupabaseClient,
-  bucket: 'adventure-media' | 'characters',
+  bucket: 'adventure-media' | 'characters' | 'battle-maps',
   path: string | null,
 ): Promise<string | null> {
   if (!path) return null

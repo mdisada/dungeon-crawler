@@ -14,7 +14,7 @@ export type {
   ActionEconomy, CheckRulingReview, CombatState, ContextWindowState, ConversationState,
   DialogueLine, DialogueState,
   DiffDomain, DmSettingsState, DmState, EncounterKind, EncounterSpecState, EncounterState,
-  FxEvent, GameState, HpState, Json, LiveCombatState, ObjectivesState,
+  FxEvent, GameState, HpState, Json, LiveCombatState, MapFit, ObjectivesState,
   ObjectiveView, NarrationReview, NpcReplyReview, OfferBannerView, OpeningState, PendingPromptState,
   PendingReviewState, PersonalStake, PlayersState, PlayerView, ProposalEntry, QuestJournalView, ReviewCandidate,
   SceneMode, SceneState, SessionState, SpeakerSlot, StateDiff, SuggestedChoice, TokenState,

@@ -22,8 +22,9 @@ import type {
 import { deriveNpcStatBlock } from '../_shared/guide/npc-stats.ts'
 import type { NpcStatBlock } from '../_shared/guide/npc-stats.ts'
 import { seededRng } from '../_shared/play/index.ts'
-import type { GameState, Json } from '../_shared/state/index.ts'
+import type { GameState, Json, MapFit } from '../_shared/state/index.ts'
 import { activePcIds } from './orchestrate.ts'
+import { resolveMediaUrl } from './util.ts'
 
 const RESOLVE_TURN_CAP = 1000
 
@@ -75,26 +76,83 @@ const OPEN_FIELD: ManifestMapInput = {
 }
 
 /**
- * The encounter's assigned `battle_maps` row -> ManifestMapInput (F09 SS3.4).
+ * The ground a fight is fought on, from whichever of the two authored sources has it.
  *
- * Before this, the map came from `locations.map` jsonb - a column NOTHING has ever written, so
- * every engine-resolved fight ran on OPEN_FIELD with both sides on the fallback columns. The
- * assignment now lives on the encounter (stage 5, tag match) and the painted obstacles/spawns and
- * authored grid come from the map itself.
+ * THE PLACE COMES FIRST. A location carries its own battle map on `locations.map` - drawn by the
+ * guide from that location's background plate, seen from overhead, its tile count read off the art
+ * (2026-07-31), and hand-editable per location in the guide's Locations tab. That is the map of
+ * THIS room. `encounters.battle_map_id` is the shared library assignment stage 5 makes by tag match
+ * ("a crypt fight gets a crypt map"), which is a good guess about the kind of ground, not a picture
+ * of the place. When the guide drew the room, the guess loses.
+ *
+ * The `locations.map` branch is why the F09 SS3.4 migration's note that "NOTHING has ever written
+ * that column" no longer holds - it was true the day it was written and stopped being true the next.
  */
-function toMapInput(row: BattleMapRow | null): ManifestMapInput {
-  if (!row) return OPEN_FIELD
-  const cells = (v: unknown): Cell[] => (Array.isArray(v) ? v.filter(isCell) : [])
-  const rawSpawns = row.spawns
-  const spawns = Array.isArray(rawSpawns)
-    ? { party: cells(rawSpawns), enemy: [] } // legacy flat spawns -> party side
-    : { party: cells(asRecord(rawSpawns).party), enemy: cells(asRecord(rawSpawns).enemy) }
+type MapBucket = 'adventure-media' | 'battle-maps'
+
+interface ResolvedMap {
+  input: ManifestMapInput
+  bucket: MapBucket
+  /** Storage path of the artwork, or null for a map row with no image yet. */
+  path: string | null
+  fit: MapFit
+  source: 'location' | 'library' | 'open_field'
+}
+
+const OPEN_FIELD_MAP: ResolvedMap = {
+  input: OPEN_FIELD, bucket: 'adventure-media', path: null, fit: 'cover', source: 'open_field',
+}
+
+const cells = (v: unknown): Cell[] => (Array.isArray(v) ? v.filter(isCell) : [])
+
+/** Both shapes store spawns the same way, including the same legacy flat-array form. */
+function toSpawns(raw: unknown): ManifestMapInput['spawns'] {
+  return Array.isArray(raw)
+    ? { party: cells(raw), enemy: [] } // legacy flat spawns -> party side
+    : { party: cells(asRecord(raw).party), enemy: cells(asRecord(raw).enemy) }
+}
+
+function fitOf(value: unknown): MapFit {
+  return value === 'fill' || value === 'contain' || value === 'cover' ? value : 'cover'
+}
+
+/** `locations.map` jsonb -> the fight's ground. Null when the location has no map drawn yet. */
+function fromLocationMap(raw: Json | null): ResolvedMap | null {
+  const map = asRecord(raw)
+  const imagePath = typeof map.imagePath === 'string' && map.imagePath ? map.imagePath : null
+  if (!imagePath) return null
   return {
-    mapId: row.id,
-    obstacles: cells(row.obstacles),
-    spawns,
-    gridWidth: typeof row.grid_cols === 'number' ? row.grid_cols : OPEN_FIELD.gridWidth,
-    gridHeight: typeof row.grid_rows === 'number' ? row.grid_rows : OPEN_FIELD.gridHeight,
+    input: {
+      // The location's own map has no `battle_maps` row, so there is no library id to report.
+      mapId: null,
+      obstacles: cells(map.obstacles),
+      spawns: toSpawns(map.spawns),
+      gridWidth: typeof map.gridCols === 'number' ? map.gridCols : OPEN_FIELD.gridWidth,
+      gridHeight: typeof map.gridRows === 'number' ? map.gridRows : OPEN_FIELD.gridHeight,
+    },
+    bucket: 'adventure-media',
+    path: imagePath,
+    // The authoring default here is 'fill', not 'cover': the art was drawn to the grid.
+    fit: fitOf(map.imageFit ?? 'fill'),
+    source: 'location',
+  }
+}
+
+/** The encounter's assigned `battle_maps` row -> the fight's ground (F09 SS3.4). */
+function fromLibraryMap(row: BattleMapRow | null): ResolvedMap | null {
+  if (!row) return null
+  return {
+    input: {
+      mapId: row.id,
+      obstacles: cells(row.obstacles),
+      spawns: toSpawns(row.spawns),
+      gridWidth: typeof row.grid_cols === 'number' ? row.grid_cols : OPEN_FIELD.gridWidth,
+      gridHeight: typeof row.grid_rows === 'number' ? row.grid_rows : OPEN_FIELD.gridHeight,
+    },
+    bucket: 'battle-maps',
+    path: row.path,
+    fit: fitOf(row.image_fit),
+    source: 'library',
   }
 }
 
@@ -152,6 +210,9 @@ interface BattleMapRow {
   grid_rows: number
   obstacles: Json
   spawns: Json
+  /** Storage path inside the private `battle-maps` bucket; signed server-side for the scene. */
+  path: string | null
+  image_fit: string | null
 }
 
 interface NpcJoinRow {
@@ -172,6 +233,13 @@ interface PartyRow {
   hp_current: number | null
 }
 
+interface BuiltManifest {
+  manifest: CombatManifest
+  boss: { id: string; name: string } | null
+  /** The ground the fight is on, kept so the caller can sign its artwork for the scene. */
+  map: ResolvedMap
+}
+
 /**
  * Build the fight's CombatManifest from the current combat beat (objective -> authored encounter).
  * Returns null when there is no authored fight to run (ad-hoc beat, no enemies, no party, or a load
@@ -183,7 +251,7 @@ async function buildLiveManifest(
   state: GameState,
   beatSpec: BeatSpecInput,
   bossNpcId: string | null,
-): Promise<{ manifest: CombatManifest; boss: { id: string; name: string } | null } | null> {
+): Promise<BuiltManifest | null> {
   const objectiveId = state.objectives?.currentId ?? null
   if (!objectiveId) return null
 
@@ -222,15 +290,26 @@ async function buildLiveManifest(
 
   const srdMonsters = await loadSrdMonsters(service, enemies)
 
-  let battleMap: BattleMapRow | null = null
-  if (battle.battle_map_id) {
-    const { data } = await service
-      .from('battle_maps')
-      .select('id, grid_cols, grid_rows, obstacles, spawns')
-      .eq('id', battle.battle_map_id)
-      .maybeSingle()
-    battleMap = (data as BattleMapRow | null) ?? null
-  }
+  // Where the fight happens: the encounter's own location if it names one, else where the party is
+  // standing. That location's drawn map is the first choice of ground; the library assignment is
+  // the fallback. Both are loaded together - one of them is a null id and costs nothing.
+  const mapLocationId = battle.location_id ?? locId
+  const [{ data: locationRow }, { data: libraryRow }] = await Promise.all([
+    mapLocationId
+      ? service.from('locations').select('map').eq('id', mapLocationId).maybeSingle()
+      : Promise.resolve({ data: null }),
+    battle.battle_map_id
+      ? service.from('battle_maps')
+        .select('id, grid_cols, grid_rows, obstacles, spawns, path, image_fit')
+        .eq('id', battle.battle_map_id)
+        .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ])
+  const battleMap = (libraryRow as BattleMapRow | null) ?? null
+  const resolvedMap =
+    fromLocationMap(((locationRow as { map?: Json } | null)?.map ?? null)) ??
+    fromLibraryMap(battleMap) ??
+    OPEN_FIELD_MAP
 
   // class_key is load-bearing, not decoration: without it every PC drops to unarmoured 10 + DEX,
   // and characterToSetup measures each point of AC at roughly +8 points of party win rate. The
@@ -256,7 +335,6 @@ async function buildLiveManifest(
   }))
 
   const preset = asRecord((adventure as { difficulty_setting?: unknown } | null)?.difficulty_setting).preset
-  const map = toMapInput(battleMap)
 
   const manifest = buildManifest({
     encounterId: battle.id,
@@ -264,7 +342,7 @@ async function buildLiveManifest(
     npcs,
     srdMonsters,
     party,
-    map,
+    map: resolvedMap.input,
     // The boss the CALLER identified from the beat's authored cast. Without it a boss is marked
     // only when a role='boss' npc happens to be named in spec.enemies, so a climax could be won
     // with bossOutcome 'none' and no npcStates write - the 2026-07-24 regression, on the path that
@@ -277,10 +355,11 @@ async function buildLiveManifest(
     beatSpec,
   })
 
-  if (!battleMap) {
+  if (resolvedMap.source === 'open_field') {
     manifest.warnings.push(battle.battle_map_id
       ? 'Assigned battle map could not be loaded; fought on an open field.'
-      : 'No battle map assigned to this encounter; fought on an open field.')
+      : 'This location has no map drawn and no library map is assigned to the encounter; ' +
+        'fought on an open field.')
   }
   if (here.length > 1 || (here.length === 0 && battles.length > 1)) {
     manifest.warnings.push(
@@ -292,7 +371,7 @@ async function buildLiveManifest(
   // Boss (if any) is auto-marked by buildManifest when a role='boss' npc is named in spec.enemies.
   const bossSetup = manifest.bossRef ? manifest.enemies.find((e) => e.id === manifest.bossRef) : null
   const boss = bossSetup && bossSetup.refId ? { id: bossSetup.refId, name: bossSetup.name } : null
-  return { manifest, boss }
+  return { manifest, boss, map: resolvedMap }
 }
 
 /** Token control keyed by engine combatant id - the argument combatStateFromEngine takes. */
@@ -338,6 +417,11 @@ export interface StartedCombat {
   engine: CombatEngineState
   controllers: CombatControllers
   locationId: string | null
+  /** Signed artwork for the assigned map, or null for a fight with no map (the open field). */
+  mapUrl: string | null
+  mapFit: MapFit
+  /** Which of the two authored sources supplied the ground - logged so a bare grid is explainable. */
+  mapSource: 'location' | 'library' | 'open_field'
   bossRef: string | null
   boss: { id: string; name: string } | null
   encounterId: string | null
@@ -388,6 +472,12 @@ export async function startLiveCombat(
     engine: opened.state,
     controllers,
     locationId: state.scene?.locationId ?? null,
+    // The map's artwork, signed with the service role the same way backgrounds and portraits are.
+    // The grid, obstacles and spawns from this row are already inside the engine state above -
+    // this is the picture that goes under them.
+    mapUrl: await resolveMediaUrl(service, built.map.bucket, built.map.path),
+    mapFit: built.map.fit,
+    mapSource: built.map.source,
     bossRef: built.manifest.bossRef,
     boss: bossSetup?.refId ? { id: bossSetup.refId, name: bossSetup.name } : null,
     encounterId: built.manifest.encounterId,

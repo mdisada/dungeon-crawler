@@ -181,6 +181,9 @@ export interface TurnOptions {
   standCost: number
 }
 
+/** How an uploaded map image is laid over its grid area - mirrors `battle_maps.image_fit`. */
+export type MapFit = 'fill' | 'cover' | 'contain'
+
 export interface CombatState {
   locationId: string | null
   mapUrl: string | null
@@ -193,6 +196,17 @@ export interface CombatState {
   economy: ActionEconomy
   /** Absent on scripted/demo combat, which has no engine behind it. */
   options?: TurnOptions | null
+  /**
+   * The board's real size in squares, from the assigned battle map (2026-08-01).
+   *
+   * Absent means GRID_SIZE, which is what every pre-engine caller assumed. It cannot stay assumed:
+   * the engine already plays on the map's authored `grid_cols`/`grid_rows`, so a 20x15 map drawn as
+   * 32x32 would stretch the art across a board two-thirds of which no token can ever stand on.
+   */
+  gridWidth?: number
+  gridHeight?: number
+  /** Absent means 'cover' - the behaviour before the field existed. */
+  mapFit?: MapFit
 }
 
 /** One character's private stake (2026-07-26). Party-visible like a name or class - the client
