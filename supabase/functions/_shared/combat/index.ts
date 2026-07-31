@@ -41,3 +41,5 @@ export type {
   EngineResult, RollBreakdown, SaveModifiers, SpellArea, SpellSpec, TurnEconomy,
 } from './types.ts'
 export { ABILITY_KEYS } from './types.ts'
+export { combatStateFromEngine } from './to-scene.ts'
+export type { ToSceneOptions } from './to-scene.ts'

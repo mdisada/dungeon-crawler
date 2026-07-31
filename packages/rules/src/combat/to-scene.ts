@@ -1,0 +1,76 @@
+// Engine state -> the app's scene-level CombatState (F09, 2026-07-31).
+//
+// The engine and the app describe the same fight in two different shapes, and nothing joined them:
+// `resolveManifest` ran the whole battle inside one function and returned only a CombatResult, so
+// the state holding tokens, positions and initiative was discarded when it returned. `state.combat`
+// - and with it the play battle map - was written by the scripted demo and by nothing else.
+//
+// This is that join, kept pure so it can be tested without a session. Combat stays an isolated
+// black box: this module reads engine types and emits state types, and imports nothing from the
+// story spine.
+
+import type { CombatEngineState } from './types.ts'
+import type { CombatState, TokenState } from '../state/types.ts'
+
+export interface ToSceneOptions {
+  /** Where the fight happens, for the scene banner. */
+  locationId: string | null
+  /**
+   * Signed URL of the battle map, or null to render the bare grid.
+   *
+   * Null is the honest default for now: maps live in a private bucket and only the client signs
+   * them today, so a server-side URL is a separate decision. The grid and every token still
+   * render without it.
+   */
+  mapUrl: string | null
+  /**
+   * Who may drive each token, keyed by combatant id. Anything absent is 'ai'.
+   *
+   * READ-ONLY BY DEFAULT, deliberately. `battle-map.tsx` gates token drags on
+   * `controller === 'player' && controllerUserId === <the actor>`, so handing a PC token to a
+   * player is what makes the map interactive - and until a combat action route exists to receive
+   * that input, an interactive map would let a player drag a token into a fight nothing is
+   * listening to. Grant control in the same change that lands the route, not before.
+   */
+  controllers?: Record<string, { controller: TokenState['controller']; userId: string | null }>
+}
+
+const SIDE_TO_ALLEGIANCE: Record<string, TokenState['allegiance']> = {
+  party: 'party',
+  enemy: 'enemy',
+}
+
+export function combatStateFromEngine(engine: CombatEngineState, opts: ToSceneOptions): CombatState {
+  const activeId = engine.initiative[engine.turnIndex]?.id ?? engine.combatants[0]?.id ?? ''
+  return {
+    locationId: opts.locationId,
+    mapUrl: opts.mapUrl,
+    obstacles: engine.obstacles,
+    tokens: engine.combatants.map((c): TokenState => {
+      const control = opts.controllers?.[c.id]
+      return {
+        id: c.id,
+        kind: c.kind,
+        // The engine allows a null refId for ad-hoc tokens; the scene shape does not, and an empty
+        // string is the value the demo script already uses for a token with nothing behind it.
+        refId: c.refId ?? '',
+        name: c.name,
+        imageUrl: c.imageUrl,
+        x: c.x,
+        y: c.y,
+        hp: { current: c.hp.current, max: c.hp.max, temp: c.hp.temp },
+        conditions: [...(c.conditions ?? [])],
+        allegiance: SIDE_TO_ALLEGIANCE[c.side] ?? 'neutral',
+        controller: control?.controller ?? 'ai',
+        controllerUserId: control?.userId ?? null,
+        speed: c.speed,
+      }
+    }),
+    initiative: engine.initiative.map((i) => ({ tokenId: i.id, roll: i.total })),
+    round: engine.round,
+    activeTokenId: activeId,
+    // The engine tracks no reaction, so it is reported unspent - the scene shape carries the field
+    // for a rule the engine does not implement yet, and claiming it were used would be a lie.
+    economy: { ...engine.economy, reaction: true },
+  }
+}
