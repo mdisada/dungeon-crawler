@@ -437,3 +437,40 @@ describe('npc_never_staged', () => {
     expect(findings.some((f) => f.code === 'npc_never_staged')).toBe(false)
   })
 })
+
+describe('a chapter is populated by who its scenes stage, not by row ownership (2026-07-31)', () => {
+  // A finale that brings back an established character owns no npc row of its own - stage 4's
+  // reuse instruction deliberately writes none - and counting rows alone refused a whole guide.
+  const base = {
+    chapters: [{ id: 'ch1', index: 0, title: 'Opening' }, { id: 'ch2', index: 1, title: 'The Last Entry' }],
+    objectives: [
+      { id: 'o1', chapterId: 'ch1', index: 0, title: 'Begin', completionPredicates: { all: [{ flag: 'a', eq: true }] } },
+      { id: 'o2', chapterId: 'ch2', index: 1, title: 'Finish', completionPredicates: { all: [{ flag: 'b', eq: true }] } },
+    ],
+    npcs: [{ id: 'npc1', name: 'Mara Venn', chapterId: 'ch1', initialState: 'alive' }],
+    encounters: [], ingredients: [], endings: [],
+  }
+  const node = (key: string, objectiveId: string, npcIds: string[]) => ({
+    id: key, key, objectiveId, kind: 'social' as const, role: 'route' as const,
+    onSuccess: [], onPartial: [], onFailure: ['setback'], establishes: ['b'], npcIds,
+    transitions: [{ on: 'full' as const, toNodeKey: null, arrivalContext: '' }],
+  })
+
+  it('accepts a chapter whose scenes stage a living NPC introduced earlier', () => {
+    const findings = lintStoryGraph({
+      ...base,
+      nodes: [node('o1#n0', 'o1', ['npc1']), node('o1#n1', 'o1', ['npc1']),
+        node('o2#n0', 'o2', ['npc1']), node('o2#n1', 'o2', ['npc1'])],
+    })
+    expect(findings.some((f) => f.code === 'chapter_no_living_npc')).toBe(false)
+  })
+
+  it('still refuses a chapter nothing stages anyone in', () => {
+    const findings = lintStoryGraph({
+      ...base,
+      nodes: [node('o1#n0', 'o1', ['npc1']), node('o1#n1', 'o1', ['npc1']),
+        node('o2#n0', 'o2', []), node('o2#n1', 'o2', [])],
+    })
+    expect(findings.some((f) => f.code === 'chapter_no_living_npc')).toBe(true)
+  })
+})

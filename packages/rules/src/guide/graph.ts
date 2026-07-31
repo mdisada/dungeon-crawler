@@ -283,8 +283,21 @@ export function lintStoryGraph(graph: StoryGraph): LintFinding[] {
   const globalLiving = graph.npcs.some(
     (n) => !n.chapterId && n.initialState !== 'dead' && n.initialState !== 'absent',
   )
+  // A chapter is also populated when its SCENES stage someone living, wherever that person's row
+  // lives (2026-07-31). A finale that brings back the harbourmaster owns no npc row of its own -
+  // reuse deliberately writes none - and counting rows alone refused a guide whose chapter 4 staged
+  // three established characters. Runtime staging is by npc id and chapter-gates nothing, so the
+  // row's chapter says where someone was INTRODUCED, not where they can appear.
+  const npcLiving = new Map(graph.npcs.map((n) => [n.id, n.initialState !== 'dead' && n.initialState !== 'absent']))
+  const chapterOfObjective = new Map(graph.objectives.map((o) => [o.id, o.chapterId]))
+  const stagesLiving = new Set<string>()
+  for (const node of graph.nodes ?? []) {
+    if (!node.npcIds.some((id) => npcLiving.get(id))) continue
+    const chapterId = chapterOfObjective.get(node.objectiveId)
+    if (chapterId) stagesLiving.add(chapterId)
+  }
   for (const chapter of graph.chapters) {
-    if ((liveByChapter.get(chapter.id) ?? 0) === 0 && !globalLiving) {
+    if ((liveByChapter.get(chapter.id) ?? 0) === 0 && !globalLiving && !stagesLiving.has(chapter.id)) {
       findings.push({
         severity: 'error',
         code: 'chapter_no_living_npc',

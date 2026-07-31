@@ -501,11 +501,48 @@ export async function runStage5(env: StageEnv, chapterId: string): Promise<void>
   // --- Author the playable story-node graph for this chapter (overhaul 2026-07-26) ---
   // The beat planner + encounter designer, moved out of runtime: >= 2 route nodes per objective
   // plus the materialized rescue node, all pre-linted before guide_ready.
-  const keyedNpcs: KeyedNpc[] = npcKeys.list.map(({ key, name, row }) => ({
-    key, name, id: row.id, initialState: row.initial_state,
-    // WHO they are travels with WHAT they are called - see Stage5NodesContext.npcs.
-    role: row.role as string | undefined, description: row.description as string | undefined,
-  }))
+  // A RETURNING CHARACTER IS STILL A CHARACTER (2026-07-31).
+  //
+  // Stage 4 tells a later chapter to "reuse existing NPCs by their key instead of duplicating
+  // them", and a finale that brings back the harbourmaster is doing exactly what it was asked. But
+  // reuse writes no row for THIS chapter - the row still belongs to chapter 1 - and this roster was
+  // scoped `.eq('chapter_id', chapterId)`. So the node author for a reusing chapter was handed an
+  // empty cast list, staged nobody in any scene, and the stage-8 gate refused the finished guide:
+  // `Chapter 4 ("The Last Entry") has no living, present NPC` - 19 jobs after the mistake.
+  //
+  // Earlier chapters only. Later ones do not exist yet in story time, and on a RE-RUN their rows do
+  // exist, so an unfiltered load would let chapter 2 stage someone the party has not met.
+  const { data: chapterRows } = await env.db
+    .from('chapters').select('id, index').eq('adventure_id', env.adventure.id)
+  const indexById = new Map((chapterRows ?? []).map((c) => [c.id as string, c.index as number]))
+  const { data: earlierNpcs } = await env.db
+    .from('npcs')
+    .select('id, name, role, description, initial_state, chapter_id')
+    .eq('adventure_id', env.adventure.id)
+    .neq('chapter_id', chapterId)
+    .order('created_at')
+  const returning = ((earlierNpcs ?? []) as {
+    id: string; name: string; role: string; description: string; initial_state: string; chapter_id: string | null
+  }[]).filter((n) => {
+    if (n.initial_state === 'dead' || n.initial_state === 'absent') return false
+    if (n.chapter_id === null) return true // global cast is available everywhere
+    const idx = indexById.get(n.chapter_id)
+    return idx !== undefined && idx < chapter.index
+  })
+  const returningKeys = slugKeys(returning, 'npc')
+
+  const keyedNpcs: KeyedNpc[] = [
+    ...npcKeys.list.map(({ key, name, row }) => ({
+      key, name, id: row.id, initialState: row.initial_state,
+      // WHO they are travels with WHAT they are called - see Stage5NodesContext.npcs.
+      role: row.role as string | undefined, description: row.description as string | undefined,
+    })),
+    ...returningKeys.list.map(({ key, name, row }) => ({
+      key, name, id: row.id, initialState: row.initial_state,
+      role: row.role as string | undefined,
+      description: `${row.description ?? ''} (established in an earlier chapter)`.trim(),
+    })),
+  ]
   const keyedLocations: KeyedLocation[] = locationKeys.list.map(({ key, name, row }) => ({
     key, name, id: row.id as string,
   }))

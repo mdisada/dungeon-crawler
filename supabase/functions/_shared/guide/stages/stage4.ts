@@ -611,6 +611,17 @@ function parseSections(
   // no way to author its way out - Below the Sunken Chapel shipped with exactly two NPCs, one
   // dead and one absent, and its only social route to the objective could never open (live
   // 2026-07-22). Hard error into the existing regeneration loop.
+  // ZERO NPCs USED TO PASS THIS CHECK BY VACUOUS TRUTH (2026-07-31). `every` over an empty list is
+  // true, so the guard below - written for a chapter whose cast was all corpses - never fired on a
+  // chapter with no cast at all. Chapter 4 of a multi-chapter guide authored none, reusing earlier
+  // characters as the prompt invites, and the gate refused the whole guide 19 jobs later. Reuse is
+  // legitimate, so this fails only when there is nobody to reuse either.
+  if (sections.cast && npcs.length === 0 && ctx.existingNpcs.length === 0) {
+    c.errors.push(
+      '$.npcs: this chapter has no NPCs and there are none from earlier chapters to reuse - the ' +
+        'party would have nobody to meet. Author at least one living, reachable person.',
+    )
+  }
   if (sections.cast && npcs.length > 0 && npcs.every((n) => n.initialState === 'dead' || n.initialState === 'absent')) {
     c.errors.push(
       '$.npcs: every NPC in this chapter is dead or absent - the party would have nobody to ' +
