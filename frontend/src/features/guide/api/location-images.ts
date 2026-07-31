@@ -16,8 +16,10 @@ import { composePrompt } from '@/features/image'
 import { timeJob } from '@/lib/job-timer'
 import { writeLocationScenePrompt } from './image-prompt'
 import { requestImage, toBlob, uploadAdventureMedia } from './images'
+import { addToLocationMedia } from './location-media'
 import { saveGeneratedMedia } from './save-guide-row'
 import { locationImageSubject } from '../location-prompt'
+import { tagsFromText } from '../media-tags'
 import type { LocationRow } from '../types'
 
 /** How many superseded plates stay in `previous_background_urls` (F04 SS5.3). */
@@ -36,13 +38,18 @@ export function locationBackgroundPrompt(location: LocationRow, castNames: strin
  * clause like "where agents watch" survives name-stripping and paints twenty people into the plate
  * (measured 2026-07-31 - see image-prompt.ts). Falls back to the deterministic strip.
  */
-async function backgroundPrompt(location: LocationRow, castNames: string[]): Promise<string> {
+async function backgroundPrompt(
+  location: LocationRow,
+  castNames: string[],
+): Promise<{ prompt: string; tags: string[] }> {
   const fallback = locationBackgroundPrompt(location, castNames)
-  if (!fallback) return ''
+  if (!fallback) return { prompt: '', tags: [] }
   const { result: written } = await timeJob('write-location-image-prompt', () =>
     writeLocationScenePrompt(location, castNames),
   )
-  return written ? composePrompt('background', written) : fallback
+  return written
+    ? { prompt: composePrompt('background', written.brief), tags: written.tags }
+    : { prompt: fallback, tags: tagsFromText(`${location.name} ${location.description}`) }
 }
 
 /**
@@ -54,7 +61,7 @@ export async function generateLocationBackground(
   location: LocationRow,
   castNames: string[],
 ): Promise<string | null> {
-  const prompt = await backgroundPrompt(location, castNames)
+  const { prompt, tags } = await backgroundPrompt(location, castNames)
   if (!prompt) return null
 
   const { result: blob } = await timeJob('generate-location-background', async () => {
@@ -75,6 +82,16 @@ export async function generateLocationBackground(
   await saveGeneratedMedia('locations', location.id, {
     background_url: path,
     previous_background_urls: previous,
+  })
+  // Filed on the shared shelf so the next adventure that needs this kind of place can take it
+  // rather than pay to draw it again.
+  await addToLocationMedia({
+    adventureId,
+    name: location.name,
+    kind: 'background',
+    path,
+    tags,
+    prompt,
   })
   return path
 }

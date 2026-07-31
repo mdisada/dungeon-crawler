@@ -16,10 +16,12 @@
 
 import { callEdgeFunction } from '@/lib/edge-function'
 import { locationImageSubject } from '../location-prompt'
+import { LOCATION_TAGS, normalizeTags, tagsFromText, type LocationTag } from '../media-tags'
 import type { LocationRow } from '../types'
 
 const SYSTEM_PROMPT = [
-  'You rewrite an RPG location note into a short visual brief for a background painting.',
+  'You rewrite an RPG location note into a short visual brief for a background painting, and file it',
+  'under the kind of place it is.',
   '',
   'The painting sits BEHIND the dialogue in a visual novel. Who is present is decided by play, so',
   'the plate must be a place, not a scene:',
@@ -32,14 +34,28 @@ const SYSTEM_PROMPT = [
   '- Never use proper nouns, names, factions or titles. Never mention text, signs or lettering.',
   '- No camera or style words (no "cinematic", "painterly", "wide shot") - those are added later.',
   '',
-  'Answer with one sentence of 25-45 words. No preamble, no quotes, no list.',
+  '',
+  'Answer with JSON only: {"brief": "one sentence of 25-45 words", "tags": ["..."]}.',
+  `Tags describe the kind of place, 1-3 of them, chosen ONLY from: ${LOCATION_TAGS.join(', ')}.`,
 ].join('\n')
 
+export interface SceneBrief {
+  brief: string
+  /** What kind of place it is, for the reusable library (media-tags.ts). Possibly empty. */
+  tags: LocationTag[]
+}
+
 /**
- * Returns a people-free scene brief, or null when the model is unavailable or unhelpful - the
- * caller then uses the deterministic strip instead.
+ * Returns a people-free scene brief and its tags, or null when the model is unavailable or
+ * unhelpful - the caller then uses the deterministic strip instead.
+ *
+ * The tags ride along on this call rather than taking one of their own: the model is already reading
+ * the location to write the brief, and classifying it costs nothing extra.
  */
-export async function writeLocationScenePrompt(location: LocationRow, castNames: string[]): Promise<string | null> {
+export async function writeLocationScenePrompt(
+  location: LocationRow,
+  castNames: string[],
+): Promise<SceneBrief | null> {
   const source = locationImageSubject(location, castNames)
   if (!source) return null
 
@@ -66,9 +82,17 @@ export async function writeLocationScenePrompt(location: LocationRow, castNames:
     const content = json.choices?.[0]?.message?.content?.trim()
     if (!content) return null
 
-    // A model that answered with a paragraph, a refusal or a quote is not worth $0.015 of image.
-    const cleaned = content.replace(/^["'\s]+|["'\s]+$/g, '').replace(/\s+/g, ' ')
-    return cleaned.length >= 20 && cleaned.length <= 600 ? cleaned : null
+    // Models like to wrap JSON in a fenced block; take the object and ignore the packaging.
+    const objectText = /\{[\s\S]*\}/.exec(content)?.[0]
+    if (!objectText) return null
+    const parsed = JSON.parse(objectText) as { brief?: unknown; tags?: unknown }
+
+    const brief = typeof parsed.brief === 'string' ? parsed.brief.replace(/\s+/g, ' ').trim() : ''
+    // A model that answered with a paragraph, a refusal or an empty string is not worth an image.
+    if (brief.length < 20 || brief.length > 600) return null
+
+    const tags = normalizeTags(parsed.tags)
+    return { brief, tags: tags.length > 0 ? tags : tagsFromText(`${location.name} ${location.description}`) }
   } catch {
     return null
   }

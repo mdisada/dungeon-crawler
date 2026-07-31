@@ -1920,3 +1920,60 @@ from the npc-only pass, now a combined queue), `components/locations-tab.tsx`,
 `api/save-guide-row.ts` (`saveGuideImages` → `saveGeneratedMedia`, still no `human_edited`),
 `settings/model-routing.ts` + `supabase/functions/_shared/model-routing.ts` (the new role, both
 copies), `docs/F04-adventure-guide-pipeline-editor.md` §5.3.
+
+---
+
+## 2026-07-31 — Maps are drawn from the background, the app reads their grid, and nothing generates itself
+
+Four decisions in one sitting, all the owner's call after seeing the evidence.
+
+**1. A map is the background, redrawn from overhead.** The plate goes to Nano Banana as the only
+reference (`api/location-maps.ts`). The alternative measured that day was to also hand the model a
+blank 32x32 lattice as a skeleton: that DOES work — autocorrelating the finished image puts it at a
+32px period, 32 cells, phase-locked to our lattice, against 25 cells when the same prompt runs with
+no lattice — but the art is worse. Reference-only cuts the roofs away and furnishes the interiors;
+lattice-guided leaves roofs on and rotates buildings off-axis. The better picture won, and the grid
+problem moved downstream.
+
+**2. So the app reads the tile count off the map** (`map-editor/grid-detect.ts`). Grid lines are
+darker than the floor and evenly spaced, so the column-luminance profile is periodic and
+autocorrelation over candidate CELL COUNTS finds it. One gate decides map-from-picture, and the
+separation is wide: real ruled maps measured 11.7–18.6 grey levels between line and cell interior,
+while a background plate, and a map whose ruling was dissolved, measured 0.3–2.6. It reads 25, 32,
+32 and 32 off four real generations and refuses the three non-maps. `suggestGrid` (dimensions, VTT
+tile sizes) stays as the fallback for uploads and for anything unreadable.
+
+**How that detector got written is worth recording.** Two rounds of tuning against synthetic
+fixtures produced a version that passed every synthetic case and failed all four real maps. On a
+noise-free floor with pixel-exact lines every divisor of the true spacing correlates EXACTLY as well
+as the spacing itself, so a clean fixture forces an arbitrary tie-break; what separates them on
+painted art is that the floor is mottled and the ruling wanders. The tests now carry real captured
+luminance profiles, which is why there are 3 KB of digits in `grid-detect.test.ts`.
+
+**3. Nothing generates itself.** The automatic pass added earlier that day is gone: portraits,
+backgrounds and maps all follow a click, either per row or as one batch from the guide header
+("Draw all N"). The reason is the one the automation ignored — a guide often reuses art it already
+has, and every image is paid for. What replaces the automation is a signal: a count on each tab, and
+`art-readiness.ts`, which blocks Start Adventure while any NPC lacks a portrait or any location
+lacks a background. A missing MAP does not block: most places never host a fight, and a map is the
+asset a DM most often brings from elsewhere.
+
+**4. Art is filed for reuse.** Every generated background and map lands in `location_media`
+(migration `20260731210000`) tagged from a closed vocabulary, and a location can pick one off the
+shelf instead of drawing it. Tags cost nothing extra: the model already rewriting the note into a
+people-free brief returns them in the same call, validated against the vocabulary, with the
+location's own words as the fallback. Reuse shares the storage path rather than copying the object.
+Modelled on `battle_maps`, which solved the same problem for the combat lab a week earlier.
+
+**Cost, for the record:** a background is $0.015 and ~10 s, a map $0.034 and ~7 s, the brief that
+precedes a background $0.00013. A guide of six locations and fourteen NPCs is roughly $0.50 if every
+piece is drawn fresh — which is exactly why (3) and (4) exist.
+
+**Also committed:** `scripts/make-grid-template.mjs` and three grid templates under
+`frontend/public/templates/`. The lattice lost the map argument but is a real asset (32x32 at
+1024px, one cell = 5 ft, matching `battle_maps.obstacles`), and the script writes the PNG with zlib
+so it needs no image dependency.
+
+**Not done:** the picker only offers backgrounds so far — maps are filed with their grid but the
+"reuse a map" surface is not wired into the map dialog yet. And none of this has run against a live
+guide; every piece is verified in isolation.

@@ -8,7 +8,8 @@ import { useState } from 'react'
 import { applyPaint, clampGrid, readImageSize, rowsFromAspect, suggestGrid } from '@/features/map-editor'
 import type { BattleMapRecord, EditorTool, MapImageFit } from '@/features/map-editor'
 
-import { generateGuideImage, uploadAdventureMedia } from '../api/images'
+import { uploadAdventureMedia } from '../api/images'
+import { generateLocationMap, type GeneratedMap } from '../api/location-maps'
 import { saveGuideRow } from '../api/save-guide-row'
 import { DEFAULT_BATTLE_MAP } from '../types'
 import type { BattleMap, LocationRow } from '../types'
@@ -18,6 +19,8 @@ const mapPath = (location: LocationRow) => `locations/${location.id}/map.png`
 export function useLocationMap(adventureId: string, location: LocationRow, onSaved: () => void) {
   const [draft, setDraft] = useState<BattleMap>(location.map ?? DEFAULT_BATTLE_MAP)
   const [savedJson, setSavedJson] = useState(() => JSON.stringify(location.map ?? DEFAULT_BATTLE_MAP))
+  // What the detector read off the generated map, so the editor can say where the grid came from.
+  const [detectedGrid, setDetectedGrid] = useState<GeneratedMap['detectedGrid']>(null)
   const [tool, setTool] = useState<EditorTool>('pan')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -75,14 +78,21 @@ export function useLocationMap(adventureId: string, location: LocationRow, onSav
       await persist(next)
     })
 
+  /**
+   * Redraws the location's background plate as a top-down map (api/location-maps.ts), reading the
+   * tile count back off the result. Needs a background: that plate is what the model redraws.
+   */
   const generateImage = () =>
     withBusy(async () => {
-      const blob = await generateGuideImage(adventureId, location.imagePrompt || location.description, 'map')
-      const path = await uploadAdventureMedia(adventureId, mapPath(location), blob)
-      // Guide map images are prompted 1:1 at 1024px.
-      const next: BattleMap = { ...draft, imagePath: path, imageWidth: 1024, imageHeight: 1024 }
-      setDraft(next)
-      await persist(next)
+      if (!location.backgroundPath) {
+        throw new Error('Generate this location’s background first — the map is drawn from it.')
+      }
+      const generated = await generateLocationMap(adventureId, location)
+      if (!generated) return
+      setDraft(generated.map)
+      setSavedJson(JSON.stringify(generated.map))
+      setDetectedGrid(generated.detectedGrid)
+      onSaved()
     })
 
   // Copy a shared/starter map into this adventure: fetch its image, re-upload to the location's
@@ -104,6 +114,6 @@ export function useLocationMap(adventureId: string, location: LocationRow, onSav
 
   return {
     draft, tool, setTool, busy, error, isDirty,
-    paint, setCols, setRows, setImageFit, save, uploadImage, generateImage, seedFromStarter,
+    paint, setCols, setRows, setImageFit, save, uploadImage, generateImage, seedFromStarter, detectedGrid,
   }
 }

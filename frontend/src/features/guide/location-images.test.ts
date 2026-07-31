@@ -23,7 +23,10 @@ function location(overrides: Partial<LocationRow> = {}): LocationRow {
   }
 }
 
-const reply = (content: string) => ({
+/** The model answers with JSON: a brief plus the tags it filed the place under. */
+const reply = (brief: string, tags: string[] = ['coast']) => replyRaw(JSON.stringify({ brief, tags }))
+
+const replyRaw = (content: string) => ({
   ok: true,
   json: () => Promise.resolve({ choices: [{ message: { content } }] }),
 })
@@ -67,7 +70,8 @@ describe('writeLocationScenePrompt', () => {
     callEdgeFunction.mockResolvedValue(reply('An empty harbour of half-sunken warehouses at dusk, lanterns guttering.'))
     const result = await writeLocationScenePrompt(location(), ['Maren'])
 
-    expect(result).toBe('An empty harbour of half-sunken warehouses at dusk, lanterns guttering.')
+    expect(result?.brief).toBe('An empty harbour of half-sunken warehouses at dusk, lanterns guttering.')
+    expect(result?.tags).toEqual(['coast'])
     const body = JSON.parse((callEdgeFunction.mock.calls[0][1] as { body: string }).body)
     expect(body.agent_role).toBe('image_prompter')
     expect(body.payload.messages[1].content).not.toContain('Maren')
@@ -95,9 +99,20 @@ describe('writeLocationScenePrompt', () => {
     expect(await writeLocationScenePrompt(location(), [])).toBeNull()
   })
 
-  it('strips the quotes a model likes to wrap an answer in', async () => {
-    callEdgeFunction.mockResolvedValue(reply('  "An empty stone bridge over a frozen river."  '))
-    expect(await writeLocationScenePrompt(location(), [])).toBe('An empty stone bridge over a frozen river.')
+  it('unwraps the fenced block a model likes to answer in', async () => {
+    const fenced = ['```json', JSON.stringify({ brief: 'An empty stone bridge over a frozen river.', tags: ['river'] }), '```'].join('\n')
+    callEdgeFunction.mockResolvedValue(replyRaw(fenced))
+
+    const result = await writeLocationScenePrompt(location(), [])
+    expect(result?.brief).toBe('An empty stone bridge over a frozen river.')
+    expect(result?.tags).toEqual(['river'])
+  })
+
+  it('keeps only tags from the closed vocabulary, and falls back to the location text', async () => {
+    // "spooky" is not a shelf. With nothing usable left, the words of the place itself decide.
+    callEdgeFunction.mockResolvedValue(reply('An empty flooded dockside of half-sunken warehouses.', ['spooky', 'vibes']))
+    const result = await writeLocationScenePrompt(location({ name: 'The Drowned Forest' }), [])
+    expect(result?.tags).toEqual(['forest'])
   })
 
   it('does not call out at all when there is nothing to draw', async () => {

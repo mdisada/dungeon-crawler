@@ -115,11 +115,18 @@ export function useGuideImagePass(
       ]
     : []
 
-  useEffect(() => {
-    if (!enabled || pending.length === 0 || isRunning.current || stopped.current) return
-    void run(pending)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `pending` is rebuilt every render; the refs above own re-entry
-  }, [enabled, pending.length, run])
+  /**
+   * Starts the batch. Deliberately NOT an effect (2026-07-31, owner's call): art used to fill in by
+   * itself once the pipeline landed, which spent on every NPC and location whether or not the DM
+   * wanted that one drawn - and a guide often reuses art it already has. Every generation now
+   * follows a click, here or on the row itself.
+   */
+  const pendingRef = useRef(pending)
+  pendingRef.current = pending
+  const start = useCallback(() => {
+    if (!enabled || pendingRef.current.length === 0 || isRunning.current) return
+    void run(pendingRef.current)
+  }, [enabled, run])
 
   // Clearing the flag on mount matters in StrictMode, where the dev double-invoke runs the cleanup
   // between two mounts: without the reset, the pass would stop after its first item and never resume.
@@ -134,5 +141,5 @@ export function useGuideImagePass(
     setState(IDLE)
   }, [])
 
-  return { state, stop, retryAll, pendingCount: pending.length }
+  return { state, start, stop, retryAll, pendingCount: pending.length }
 }

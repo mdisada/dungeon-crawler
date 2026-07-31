@@ -6,7 +6,10 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { generateLocationBackground } from '../api/location-images'
 import { regenerateRow } from '../api/pipeline'
-import { deleteGuideRow, insertGuideRow, saveGuideRow } from '../api/save-guide-row'
+import type { LocationMedia } from '../api/location-media'
+import { deleteGuideRow, insertGuideRow, saveGeneratedMedia, saveGuideRow } from '../api/save-guide-row'
+import { tagsFromText } from '../media-tags'
+import { LocationMediaPicker } from './location-media-picker'
 import { useMediaUrl } from '../hooks/use-media-url'
 import type { GuideData, LocationRow } from '../types'
 import { LocationMapDialog } from './location-map-dialog'
@@ -21,6 +24,7 @@ function LocationOverview({ adventureId, location, userId, castNames, onChanged 
   const [isBusy, setIsBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isMapOpen, setIsMapOpen] = useState(false)
+  const [isPickingBackground, setIsPickingBackground] = useState(false)
   const backgroundUrl = useMediaUrl(location.backgroundPath)
   const spawnCount = location.map ? location.map.spawns.party.length + location.map.spawns.enemy.length : 0
 
@@ -30,9 +34,33 @@ function LocationOverview({ adventureId, location, userId, castNames, onChanged 
       .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Save failed'))
   }
 
-  // F04 SS5.3: the automatic pass draws any location that has none (use-guide-image-pass); this is
-  // the override for one row. Both go through generateLocationBackground, so a hand-triggered plate
-  // gets the same 16:9 frame and the same people-free prompt as an automatic one.
+  /**
+   * Points the location at a plate that already exists. The path is shared, not copied: the storage
+   * policy on `location_media` is what lets another adventure read it, and duplicating the object
+   * would cost storage to gain nothing.
+   */
+  async function applyExistingBackground(media: LocationMedia) {
+    setIsBusy(true)
+    setError(null)
+    try {
+      const previous = location.backgroundPath
+        ? [location.backgroundPath, ...location.previousBackgroundPaths].slice(0, 3)
+        : location.previousBackgroundPaths
+      await saveGeneratedMedia('locations', location.id, {
+        background_url: media.path,
+        previous_background_urls: previous,
+      })
+      setIsPickingBackground(false)
+      onChanged()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not use that background')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  // F04 SS5.3: one row's worth of the batch on the guide header, and the same function underneath,
+  // so a hand-triggered plate gets the same 16:9 frame and people-free prompt as a batched one.
   async function generateBackground() {
     setIsBusy(true)
     setError(null)
@@ -96,11 +124,22 @@ function LocationOverview({ adventureId, location, userId, castNames, onChanged 
             onChange={(e) => setFields((p) => ({ ...p, imagePrompt: e.target.value }))}
           />
         </label>
-        <div>
+        <div className="flex flex-wrap gap-2">
           <Button size="sm" disabled={isBusy || fields.imagePrompt.trim().length === 0} onClick={() => void generateBackground()}>
             {location.backgroundPath ? 'Regenerate background' : 'Generate background'}
           </Button>
+          <Button size="sm" variant="outline" disabled={isBusy} onClick={() => setIsPickingBackground((v) => !v)}>
+            {isPickingBackground ? 'Cancel' : 'Reuse existing'}
+          </Button>
         </div>
+        {isPickingBackground && (
+          <LocationMediaPicker
+            kind="background"
+            suggestedTags={tagsFromText(`${location.name} ${location.description} ${location.imagePrompt}`)}
+            onClose={() => setIsPickingBackground(false)}
+            onPick={(media) => void applyExistingBackground(media)}
+          />
+        )}
         {location.previousBackgroundPaths.length > 0 && (
           <p className="text-xs text-muted-foreground">{location.previousBackgroundPaths.length} previous version(s) kept.</p>
         )}

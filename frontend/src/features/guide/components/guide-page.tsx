@@ -6,10 +6,12 @@ import { validateGuideReady } from '@rules/guide'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { activateAdventure } from '@/features/play'
+import { artBlockers, artReadiness } from '../art-readiness'
 import { startPipeline } from '../api/pipeline'
 import { useGuide } from '../hooks/use-guide'
 import { useGuideImagePass } from '../hooks/use-guide-image-pass'
 import { GuideImagePassBanner } from './guide-image-pass-banner'
+import { MissingArtDot } from './missing-art-dot'
 import { EndingsTab } from './endings-tab'
 import { IngredientsDrawer } from './ingredients-drawer'
 import { LocationsTab } from './locations-tab'
@@ -106,8 +108,11 @@ export function GuidePage() {
           .filter((objectiveId): objectiveId is string => objectiveId !== null),
       })),
     })
-    setValidationErrors(errors)
-    if (errors.length > 0 || !id) return
+    // Art gaps block the same way a missing objective does: a portrait-less NPC speaks from an
+    // empty frame, and a background-less location opens on a blank scene box (art-readiness.ts).
+    const blockers = [...errors, ...artBlockers(data)]
+    setValidationErrors(blockers)
+    if (blockers.length > 0 || !id) return
     // Valid guide -> activate (membership + state bootstrap) and open the lobby (F05).
     setIsStarting(true)
     setError(null)
@@ -140,6 +145,7 @@ export function GuidePage() {
   // Stage-8 reachability warnings render inside the Endings tab, not in the header. Everything
   // else splits by kind: 'warning' feeds the sequential review popup (Approve/Edit, one at a
   // time); 'info' is the record of what generation already fixed, collapsed out of the way.
+  const readiness = artReadiness(data)
   const reviewQueue = data.warnings.filter((w) => !w.resolved && w.kind === 'warning' && w.stage !== 8)
   const autoResolved = data.warnings.filter((w) => !w.resolved && w.kind === 'info' && w.stage !== 8)
   if (reviewOpen === null && !isGenerating && reviewQueue.length > 0) setReviewOpen(true)
@@ -188,7 +194,13 @@ export function GuidePage() {
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       {showPipeline && <PipelineProgress jobs={data.jobs} chapters={data.chapters} onChanged={() => void refresh()} />}
-      <GuideImagePassBanner state={imagePass.state} onStop={imagePass.stop} onRetry={imagePass.retryAll} />
+      <GuideImagePassBanner
+        state={imagePass.state}
+        pendingCount={imagePass.pendingCount}
+        onStart={imagePass.start}
+        onStop={imagePass.stop}
+        onRetry={imagePass.retryAll}
+      />
 
       {reviewQueue.length > 0 && (
         <section className="flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
@@ -226,8 +238,13 @@ export function GuidePage() {
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList>
               <TabsTab value="plot">Plot &amp; Objectives</TabsTab>
-              <TabsTab value="npcs">NPCs ({data.npcs.length})</TabsTab>
-              <TabsTab value="locations">Locations ({data.locations.length})</TabsTab>
+              <TabsTab value="npcs">
+                NPCs ({data.npcs.length}){readiness.npcsMissing > 0 ? <MissingArtDot count={readiness.npcsMissing} /> : null}
+              </TabsTab>
+              <TabsTab value="locations">
+                Locations ({data.locations.length})
+                {readiness.backgroundsMissing > 0 ? <MissingArtDot count={readiness.backgroundsMissing} /> : null}
+              </TabsTab>
               <TabsTab value="endings">Endings ({data.endings.length})</TabsTab>
             </TabsList>
             <TabsPanel value="plot">

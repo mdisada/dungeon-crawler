@@ -78,6 +78,22 @@ export function renderCrop(
  * Throws BackdropNotKeyableError when the image is not a green-screen generation - keying a picture
  * that has real scenery behind it would punch holes in it rather than cut it out.
  */
+/** Pixels out of an encoded image, for anything that needs to measure rather than display it. */
+export async function decodeImageData(source: Blob): Promise<ImageData> {
+  const bitmap = await createImageBitmap(source)
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = bitmap.width
+    canvas.height = bitmap.height
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) throw new Error('Canvas 2D context unavailable')
+    ctx.drawImage(bitmap, 0, 0)
+    return ctx.getImageData(0, 0, canvas.width, canvas.height)
+  } finally {
+    bitmap.close()
+  }
+}
+
 export async function cutOutBackdrop(source: Blob): Promise<{ blob: Blob; image: ImageData }> {
   const bitmap = await createImageBitmap(source)
   try {

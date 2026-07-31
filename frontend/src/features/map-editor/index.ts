@@ -6,6 +6,8 @@ export { MapToolsPanel } from './components/map-tools-panel'
 export type { MapGeometry } from './components/map-tools-panel'
 export { useBattleMaps } from './hooks/use-battle-maps'
 export { applyPaint } from './paint'
+export { detectGrid } from './grid-detect'
+export type { Bitmap, GridDetection } from './grid-detect'
 export {
   CELL_PX, DEFAULT_GRID_COLS, DEFAULT_GRID_ROWS, MAP_TAG_SUGGESTIONS, MAX_GRID, MIN_GRID,
   clampGrid, rowsFromAspect, suggestGrid,

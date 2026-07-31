@@ -8,6 +8,7 @@ export {
   BackdropNotKeyableError,
   clampRect,
   cutOutBackdrop,
+  decodeImageData,
   DEFAULT_TOKEN_BACKGROUND,
   loadImage,
   removeImageBackground,
