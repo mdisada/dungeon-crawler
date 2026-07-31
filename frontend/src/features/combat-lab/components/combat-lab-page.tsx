@@ -8,8 +8,8 @@ import { useSession } from '@/features/auth'
 import { useBattleMaps } from '@/features/map-editor'
 import {
   activeCombatant, attackAdvantageDetail, blockedCells, cellKey, chebyshev, deriveResult, fightIsOver,
-  findPath, gridBounds, lineOfSight, predictOpportunityAttacks, reachableCells, spellAffects,
-  spellArea, spellTargets,
+  findPath, gridBounds, hpBandLabel, lineOfSight, predictOpportunityAttacks, quantizedHpFraction,
+  reachableCells, spellAffects, spellArea, spellTargets,
 } from '@rules/combat'
 import type { Cell, CombatantPatch, CombatEngineState, ManifestMapInput } from '@rules/combat'
 
@@ -17,7 +17,6 @@ import { isLabUser } from '../debug'
 import { useCombatLab } from '../hooks/use-combat-lab'
 import { useEncounterReplay } from '../hooks/use-encounter-replay'
 import { useRoster } from '../hooks/use-roster'
-import { hpBandLabel, quantizedHpFraction } from '../redaction'
 import { CELL_PX } from '../types'
 import { ActionBar } from './action-bar'
 import type { CastingState, PendingMove } from './action-bar'

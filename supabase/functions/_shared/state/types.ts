@@ -150,6 +150,37 @@ export interface ActionEconomy {
   reaction: boolean
 }
 
+/** One entry in the active combatant's attack menu. Party stats only - see TurnOptions. */
+export interface TurnAttackOption {
+  index: number
+  name: string
+  kind: string
+  toHit: number
+  /** Pre-formatted dice ("1d8+3") - the client never needs the expression's parts. */
+  damage: string
+  range: number
+  longRange: number | null
+}
+
+/**
+ * What the ACTIVE combatant may do this turn, published for whoever controls it (F09, 2026-08-01).
+ *
+ * The engine holds every combatant's attacks, spells and AC; the action bar needs exactly one
+ * combatant's - the one whose turn it is - and only ever a party one, because an AI turn is
+ * resolved server-side and never offered to a client. Computing this on the server is what keeps
+ * the 2026-07-22 redaction decision intact: enemy numbers stay behind the edge function instead of
+ * being shipped so the UI can decline to render them.
+ *
+ * Absent (null) whenever the active combatant is AI-driven - there is nothing for a client to pick.
+ */
+export interface TurnOptions {
+  tokenId: string
+  attacks: TurnAttackOption[]
+  /** Prone and able to pay for it; `standCost` is the movement it takes either way. */
+  canStandUp: boolean
+  standCost: number
+}
+
 export interface CombatState {
   locationId: string | null
   mapUrl: string | null
@@ -160,6 +191,8 @@ export interface CombatState {
   round: number
   activeTokenId: string
   economy: ActionEconomy
+  /** Absent on scripted/demo combat, which has no engine behind it. */
+  options?: TurnOptions | null
 }
 
 /** One character's private stake (2026-07-26). Party-visible like a name or class - the client
@@ -350,6 +383,38 @@ export interface EncounterSpecState {
   nodeKey?: string
 }
 
+/**
+ * The engine half of a live interactive fight (F09, 2026-08-01), kept on the dm domain so it never
+ * reaches a player client.
+ *
+ * A fight now spans many requests, so the engine state has to outlive the one that started it -
+ * `resolveManifest` used to run the whole battle inside a single call and discard everything but a
+ * CombatResult. It is PERSISTED rather than rebuilt from the manifest each turn: rebuilding would
+ * let what the engine believes drift from what the table watched happen, the same class of bug as
+ * prose disagreeing with canon.
+ *
+ * `engine` is a serialized CombatEngineState, opaque here on purpose - the state contract must not
+ * depend on the combat engine's types (combat/to-scene.ts imports this direction, not the reverse).
+ * combat/turn.ts owns reading it back.
+ */
+export interface LiveCombatState {
+  engine: Json
+  encounterId: string | null
+  /** The boss combatant's engine id, for fightIsOver/deriveResult. */
+  bossRef: string | null
+  /** The npc row behind the boss, for the applyNpcState seam when the fight ends. */
+  boss: { id: string; name: string } | null
+  /**
+   * Deterministic dice across a fight that spans requests: action N rolls on stepRng(seed, step).
+   * A single seeded stream cannot survive serialization - its internal cursor is not in the state -
+   * so the step counter is the cursor, and the whole fight stays replayable from (seed, actions).
+   */
+  seed: number
+  step: number
+  startedAt: string
+  warnings: string[]
+}
+
 /** DM-only domains, stripped from player resyncs and broadcast on dm:{id} only. */
 export interface DmState {
   /** Full objective checklist incl. hidden ones (DM overview tab). */
@@ -392,6 +457,8 @@ export interface DmState {
   }
   /** Hidden spec of the open encounter; null/absent when no encounter is open. */
   encounterSpec?: EncounterSpecState | null
+  /** Engine state behind the open combat encounter; null/absent when no fight is being played. */
+  combat?: LiveCombatState | null
   /**
    * Compacted agent context (optional, absent pre-compaction). Closed phases collapse to a
    * one-line digest and their raw transcript stops being sent to agents - the payload, not the

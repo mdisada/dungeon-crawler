@@ -223,6 +223,19 @@ export async function playerIntent(
   // escapes physical actions out of conversations; the adjudicator's talk flag and the
   // puzzle judge's talk result turn questions into answered DM talk). Explicit Roll stays
   // the one mechanical fast path.
+  // WORDS DURING A FIGHT ANSWER, THEY DO NOT ADVANCE (2026-08-01). Combat is played through the
+  // action bar (combat_action), so free text arriving mid-fight is table talk - "is there cover
+  // behind the pillar?". The adjudicator would happily spec a skill check for it and open a pending
+  // prompt across the initiative order; the chat route would drop it in the log unanswered. Neither
+  // is right, and an input that vanishes is the failure this codebase keeps re-learning.
+  if (row.state.combat && row.state.scene.mode === 'battle' && (kind === 'say' || kind === 'do')) {
+    const env: AgentEnv = { service, adventureId, creatorId: play.adventure.creator_id, demo: play.demo, mode: play.adventure.mode }
+    await logEvent(service, adventureId, play.sessionId, 'intent_submitted', {
+      kind: 'say', raw_kind: kind, route: 'encounter_talk', character_id: character.id, text: text.slice(0, 200),
+    })
+    return handleEncounterTalk(service, env, play.sessionId, character, text)
+  }
+
   const narrativeMode = ['narration', 'roleplay', 'downtime', 'puzzle'].includes(row.state.scene.mode)
   if (narrativeMode && (kind === 'say' || kind === 'do' || (kind === 'roll' && !skill))) {
     const conversational = row.state.dialogue.speakers.length > 0 && kind !== 'roll'

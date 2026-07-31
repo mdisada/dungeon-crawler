@@ -41,5 +41,10 @@ export type {
   EngineResult, RollBreakdown, SaveModifiers, SpellArea, SpellSpec, TurnEconomy,
 } from './types.ts'
 export { ABILITY_KEYS } from './types.ts'
-export { combatStateFromEngine } from './to-scene.ts'
+export { recapLine, recapLines } from './recap.ts'
+export type { RecapContext } from './recap.ts'
+export { hpBandLabel, quantizedHpFraction } from './redaction.ts'
+export { combatStateFromEngine, turnOptions } from './to-scene.ts'
 export type { ToSceneOptions } from './to-scene.ts'
+export { awaitsPlayer, runAiTurns, stepRng } from './turn.ts'
+export type { AiTurnsResult } from './turn.ts'

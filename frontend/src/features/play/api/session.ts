@@ -81,6 +81,28 @@ export function sendMoveIntent(
   return callSession({ action: 'move_intent', adventure_id: adventureId, token_id: tokenId, to })
 }
 
+/**
+ * One decision in a live fight (F09). The client sends an INTENT and never engine state - the
+ * server rehydrates the engine, resolves this action, plays the AI turns that answer it, and
+ * broadcasts the committed result. A refusal ("No action left", "Out of range") comes back as
+ * `ok: false` with a reason, exactly like a rejected move.
+ */
+export function sendCombatAction(
+  adventureId: string,
+  action: CombatActionIntent,
+): Promise<{ ok: boolean; reason?: string; resolved?: string }> {
+  return callSession({ action: 'combat_action', adventure_id: adventureId, combat_action: action })
+}
+
+export type CombatActionIntent =
+  | { type: 'move'; to: [number, number] }
+  | { type: 'attack'; targetId: string; attackIndex: number }
+  | { type: 'dodge' }
+  | { type: 'dash' }
+  | { type: 'disengage' }
+  | { type: 'stand_up' }
+  | { type: 'end_turn' }
+
 export function setScene(
   adventureId: string,
   patch: { location_id?: string; active_visual?: 'background' | 'map'; music_track?: string | null },

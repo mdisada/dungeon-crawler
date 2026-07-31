@@ -1,8 +1,6 @@
 import { cn } from '@/lib/utils'
-import { expectedDamage, formatDiceExpr } from '@rules/combat'
+import { expectedDamage, formatDiceExpr, hpBandLabel } from '@rules/combat'
 import type { AdvantageReason, AttackSpec, Combatant } from '@rules/combat'
-
-import { hpBandLabel } from '../redaction'
 
 interface ForecastCardProps {
   attack: AttackSpec

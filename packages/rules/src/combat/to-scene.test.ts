@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { combatStateFromEngine } from './to-scene.ts'
+import { combatStateFromEngine, turnOptions } from './to-scene.ts'
 import type { CombatEngineState } from './types.ts'
 
 const engine = {
@@ -54,5 +54,45 @@ describe('combatStateFromEngine', () => {
   it('survives an ad-hoc combatant with no row behind it', () => {
     const scene = combatStateFromEngine(engine, { locationId: null, mapUrl: null })
     expect(scene.tokens.find((t) => t.id === 'e1')?.refId).toBe('')
+  })
+})
+
+const playable = {
+  ...engine,
+  status: 'active',
+  combatants: [
+    { ...engine.combatants[0], auto: false, speed: 6, conditions: ['prone'],
+      attacks: [{ name: 'Longsword', kind: 'melee', toHit: 5, damage: { count: 1, sides: 8, bonus: 3 }, range: 1 }] },
+    { ...engine.combatants[1], auto: true, attacks: [] },
+  ],
+} as unknown as CombatEngineState
+
+describe('turnOptions', () => {
+  it('offers the active player combatant its own attacks and nothing else', () => {
+    const options = turnOptions(playable)
+    expect(options?.tokenId).toBe('pc1')
+    expect(options?.attacks).toEqual([
+      { index: 0, name: 'Longsword', kind: 'melee', toHit: 5, damage: '1d8+3', range: 1, longRange: null },
+    ])
+  })
+
+  it('is null on an AI turn - there is nothing for a client to pick', () => {
+    // Enemy stat blocks must never be published (redaction, 2026-07-22), and an AI turn is
+    // resolved server-side anyway.
+    expect(turnOptions({ ...playable, turnIndex: 0 } as CombatEngineState)).toBeNull()
+  })
+
+  it('is null once the fight has ended', () => {
+    expect(turnOptions({ ...playable, status: 'ended' } as CombatEngineState)).toBeNull()
+  })
+
+  it('offers Stand up only when the movement to pay for it is there', () => {
+    expect(turnOptions(playable)).toMatchObject({ canStandUp: true, standCost: 3 })
+    const spent = { ...playable, economy: { ...playable.economy, move: 2 } } as CombatEngineState
+    expect(turnOptions(spent)).toMatchObject({ canStandUp: false, standCost: 3 })
+  })
+
+  it('rides along on the scene state, so the action bar needs no second read', () => {
+    expect(combatStateFromEngine(playable, { locationId: null, mapUrl: null }).options?.tokenId).toBe('pc1')
   })
 })

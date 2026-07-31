@@ -1,7 +1,6 @@
 import { cn } from '@/lib/utils'
+import { quantizedHpFraction } from '@rules/combat'
 import type { CombatEngineState } from '@rules/combat'
-
-import { quantizedHpFraction } from '../redaction'
 
 interface InitiativeRailProps {
   engine: CombatEngineState

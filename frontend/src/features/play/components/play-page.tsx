@@ -210,8 +210,11 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
                 gets their own objectives/quests/stake. Only one of the two ever renders. */}
             {showDmUi && !inLobby && <DmOverviewPanel />}
             {!showDmUi && !inLobby && <PlayerObjectivesPanel />}
-            {/* Live input overlay (Phase 5); battle keeps token-drag as its input until F09. */}
-            {state.scene.mode !== 'battle' && !inLobby && <IntentInputRow />}
+            {/* Live input overlay (Phase 5). A fight is played through the map's action bar, so
+                the text box steps aside for it - but ONLY while there is a fight to play. Battle
+                mode with no `state.combat` renders no map either, and hiding the input there would
+                be a table with nothing to press. */}
+            {(state.scene.mode !== 'battle' || !state.combat) && !inLobby && <IntentInputRow />}
             <FxLayer fx={game.fx} />
             {inLobby && !game.endedCard && (
               <LobbyModal adventure={adventure} userId={userId} role={game.role} isSpectator={game.spectator} />

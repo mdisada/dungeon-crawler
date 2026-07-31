@@ -14,8 +14,9 @@ export type {
   ActionEconomy, CheckRulingReview, CombatState, ContextWindowState, ConversationState,
   DialogueLine, DialogueState,
   DiffDomain, DmSettingsState, DmState, EncounterKind, EncounterSpecState, EncounterState,
-  FxEvent, GameState, HpState, Json, ObjectivesState,
+  FxEvent, GameState, HpState, Json, LiveCombatState, ObjectivesState,
   ObjectiveView, NarrationReview, NpcReplyReview, OfferBannerView, OpeningState, PendingPromptState,
   PendingReviewState, PersonalStake, PlayersState, PlayerView, ProposalEntry, QuestJournalView, ReviewCandidate,
   SceneMode, SceneState, SessionState, SpeakerSlot, StateDiff, SuggestedChoice, TokenState,
+  TurnAttackOption, TurnOptions,
 } from './types.ts'

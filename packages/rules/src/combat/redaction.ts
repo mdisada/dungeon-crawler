@@ -1,7 +1,11 @@
 // Player-facing enemy redaction (decided 2026-07-22): players never see exact enemy numbers.
 // Enemy HP renders as a quarter-quantized bar + a 5e-flavored band label; AC, exact HP, and
 // attack lists stay hidden. Party info is always exact (it's the player's own team). The DM
-// surface (left sidebar editor) is unredacted.
+// surface (the Lab's roster editor) is unredacted.
+//
+// Lifted out of the Lab (2026-08-01) because the rule now has to hold on BOTH sides of the wire:
+// the play combat recap is built server-side, so the band that stands in for an enemy's HP is
+// computed in the edge function, and it must be the same band the Lab draws.
 
 export function quantizedHpFraction(current: number, max: number): number {
   if (current <= 0) return 0

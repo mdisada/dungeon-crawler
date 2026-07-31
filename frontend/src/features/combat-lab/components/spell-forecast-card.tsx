@@ -1,7 +1,5 @@
-import { expectedDamage, formatDiceExpr } from '@rules/combat'
+import { expectedDamage, formatDiceExpr, hpBandLabel } from '@rules/combat'
 import type { Combatant, SpellSpec } from '@rules/combat'
-
-import { hpBandLabel } from '../redaction'
 
 /**
  * Single-target spell preview on hover. Player-facing: shows only your own spell math (attack

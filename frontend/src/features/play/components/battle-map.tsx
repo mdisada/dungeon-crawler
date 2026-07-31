@@ -1,12 +1,15 @@
 import { useMemo, useRef, useState } from 'react'
 
 import { cn } from '@/lib/utils'
+import { hpBandLabel, quantizedHpFraction } from '@rules/combat'
 import { GRID_SIZE, moveCost } from '@rules/state'
 import type { CombatState, TokenState } from '@rules/state'
 
-import { sendMoveIntent } from '../api/session'
+import { sendCombatAction, sendMoveIntent } from '../api/session'
+import type { CombatActionIntent } from '../api/session'
 import { useMapViewport } from '../hooks/use-map-viewport'
 import { usePlay } from '../hooks/use-play-context'
+import { CombatActionBar } from './combat-action-bar'
 import { TurnBanner } from './turn-banner'
 
 const CELL_PX = 32
@@ -23,12 +26,29 @@ export function BattleMap({ combat }: { combat: CombatState }) {
   // Optimistic position while the server round-trips; snapped back on rejection.
   const [optimistic, setOptimistic] = useState<{ tokenId: string; x: number; y: number } | null>(null)
   const [rejection, setRejection] = useState<string | null>(null)
+  const [targetingAttack, setTargetingAttack] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
   const dragRef = useRef<{ tokenId: string; pointerId: number } | null>(null)
 
   const isDm = role === 'dm'
   const activeToken = combat.tokens.find((t) => t.id === combat.activeTokenId)
   const canDrag = (token: TokenState) =>
     !isSpectator && (isDm || (token.controllerUserId === userId && token.id === combat.activeTokenId))
+
+  // The turn is mine when the server says the active combatant is player-driven AND I hold it. The
+  // options themselves come from the server (see TurnOptions) - the client never derives what a
+  // character may do from stats it should not have.
+  const myTurn =
+    !isSpectator && combat.options !== null && combat.options !== undefined &&
+    combat.options.tokenId === combat.activeTokenId &&
+    (isDm || activeToken?.controllerUserId === userId)
+  const targetIds = useMemo(
+    () =>
+      new Set(
+        combat.tokens.filter((t) => t.allegiance === 'enemy' && (t.hp?.current ?? 1) > 0).map((t) => t.id),
+      ),
+    [combat.tokens],
+  )
 
   const obstacleSet = useMemo(() => new Set(combat.obstacles.map(([x, y]) => `${x},${y}`)), [combat.obstacles])
 
@@ -65,6 +85,30 @@ export function BattleMap({ combat }: { combat: CombatState }) {
       setOptimistic(null)
       setRejection('Move failed to send')
     }
+  }
+
+  async function act(action: CombatActionIntent) {
+    setBusy(true)
+    setRejection(null)
+    try {
+      const result = await sendCombatAction(adventure.id, action)
+      if (!result.ok) {
+        setRejection(result.reason ?? 'That action was refused')
+        setTimeout(() => setRejection(null), 2500)
+      }
+    } catch {
+      setRejection('Action failed to send')
+      setTimeout(() => setRejection(null), 2500)
+    } finally {
+      setBusy(false)
+      setTargetingAttack(null)
+    }
+  }
+
+  /** Click, not pointerdown, so a target can be chosen with the keyboard as well as the mouse. */
+  function tokenClick(token: TokenState) {
+    if (targetingAttack === null || !targetIds.has(token.id)) return
+    void act({ type: 'attack', targetId: token.id, attackIndex: targetingAttack })
   }
 
   function tokenPointerDown(e: React.PointerEvent, token: TokenState) {
@@ -160,12 +204,18 @@ export function BattleMap({ combat }: { combat: CombatState }) {
           ))}
           {combat.tokens.map((token) => {
             const pos = positionOf(token)
+            const isTarget = targetingAttack !== null && targetIds.has(token.id)
             return (
               <button
                 key={token.id}
                 type="button"
-                aria-label={`${token.name} at column ${pos.x + 1}, row ${pos.y + 1}${canDrag(token) ? '. Use arrow keys to move' : ''}`}
-                disabled={!canDrag(token)}
+                aria-label={
+                  `${token.name} at column ${pos.x + 1}, row ${pos.y + 1}` +
+                  (isTarget ? '. Press Enter to attack' : canDrag(token) ? '. Use arrow keys to move' : '') +
+                  (token.hp ? `. ${hpDescription(token)}` : '')
+                }
+                disabled={!canDrag(token) && !isTarget}
+                onClick={() => tokenClick(token)}
                 onPointerDown={(e) => tokenPointerDown(e, token)}
                 onPointerMove={(e) => tokenPointerMove(e, token)}
                 onPointerUp={(e) => tokenPointerUp(e, token)}
@@ -174,7 +224,9 @@ export function BattleMap({ combat }: { combat: CombatState }) {
                   'absolute z-10 rounded-full border-2 transition-transform focus-visible:ring-2 focus-visible:ring-sky-300',
                   token.allegiance === 'party' ? 'border-emerald-400' : token.allegiance === 'enemy' ? 'border-red-500' : 'border-amber-300',
                   token.id === combat.activeTokenId && 'shadow-[0_0_12px_4px_rgb(56_189_248/0.6)]',
-                  canDrag(token) ? 'cursor-move' : 'cursor-default',
+                  isTarget && 'ring-2 ring-amber-300',
+                  isTarget ? 'cursor-crosshair' : canDrag(token) ? 'cursor-move' : 'cursor-default',
+                  (token.hp?.current ?? 1) <= 0 && 'opacity-40 grayscale',
                 )}
                 style={{ left: pos.x * CELL_PX, top: pos.y * CELL_PX, width: CELL_PX, height: CELL_PX }}
               >
@@ -191,12 +243,55 @@ export function BattleMap({ combat }: { combat: CombatState }) {
                     className="absolute -right-1 -top-1 h-3 w-3 rounded-full bg-purple-500 ring-1 ring-white"
                   />
                 )}
+                {token.hp && <HpPip token={token} />}
               </button>
             )
           })}
         </div>
       </div>
+
+      {myTurn && combat.options && (
+        <CombatActionBar
+          combat={combat}
+          options={combat.options}
+          targetingAttack={targetingAttack}
+          busy={busy}
+          onPickAttack={setTargetingAttack}
+          onAct={act}
+        />
+      )}
     </div>
+  )
+}
+
+/**
+ * The party's exact HP, the enemy's a quarter-quantized bar (redaction, 2026-07-22). Deliberately
+ * not a number for the enemy: "how much does it have left" is the one question the shipped rule
+ * answers in bands, and a bar that reads exactly is the same leak in a smaller font.
+ */
+function hpDescription(token: TokenState): string {
+  if (!token.hp) return ''
+  return token.allegiance === 'party'
+    ? `${token.hp.current} of ${token.hp.max} hit points`
+    : hpBandLabel(token.hp.current, token.hp.max)
+}
+
+function HpPip({ token }: { token: TokenState }) {
+  if (!token.hp) return null
+  const fraction = token.allegiance === 'party'
+    ? Math.max(0, token.hp.current) / Math.max(1, token.hp.max)
+    : quantizedHpFraction(token.hp.current, token.hp.max)
+  return (
+    <span
+      aria-hidden
+      title={hpDescription(token)}
+      className="absolute -bottom-1 left-1/2 h-1 w-6 -translate-x-1/2 overflow-hidden rounded-full bg-black/70"
+    >
+      <span
+        className={cn('block h-full', token.allegiance === 'party' ? 'bg-emerald-400' : 'bg-red-500')}
+        style={{ width: `${Math.round(fraction * 100)}%` }}
+      />
+    </span>
   )
 }
 

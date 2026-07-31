@@ -12,8 +12,9 @@
 // black box: this module reads engine types and emits state types, and imports nothing from the
 // story spine.
 
+import { formatDiceExpr } from './dice.ts'
 import type { CombatEngineState } from './types.ts'
-import type { CombatState, TokenState } from '../state/types.ts'
+import type { CombatState, TokenState, TurnOptions } from '../state/types.ts'
 
 export interface ToSceneOptions {
   /** Where the fight happens, for the scene banner. */
@@ -41,6 +42,35 @@ export interface ToSceneOptions {
 const SIDE_TO_ALLEGIANCE: Record<string, TokenState['allegiance']> = {
   party: 'party',
   enemy: 'enemy',
+}
+
+/**
+ * The active combatant's own action menu, or null when the turn belongs to the AI.
+ *
+ * Only ever ONE combatant's stats, and only ever the one whose turn it is - which is why this can
+ * be published to players at all. The Lab's forecast card computes hit chances client-side from
+ * every enemy's full block; doing that here would ship exactly the numbers the 2026-07-22 redaction
+ * decision keeps hidden.
+ */
+export function turnOptions(engine: CombatEngineState): TurnOptions | null {
+  if (engine.status !== 'active') return null
+  const active = engine.combatants.find((c) => c.id === engine.initiative[engine.turnIndex]?.id)
+  if (!active || active.auto) return null
+  const standCost = Math.ceil(active.speed / 2)
+  return {
+    tokenId: active.id,
+    attacks: active.attacks.map((a, index) => ({
+      index,
+      name: a.name,
+      kind: a.kind,
+      toHit: a.toHit,
+      damage: formatDiceExpr(a.damage),
+      range: a.range,
+      longRange: a.longRange ?? null,
+    })),
+    canStandUp: active.conditions.includes('prone') && engine.economy.move >= standCost,
+    standCost,
+  }
 }
 
 export function combatStateFromEngine(engine: CombatEngineState, opts: ToSceneOptions): CombatState {
@@ -75,5 +105,6 @@ export function combatStateFromEngine(engine: CombatEngineState, opts: ToSceneOp
     // The engine tracks no reaction, so it is reported unspent - the scene shape carries the field
     // for a rule the engine does not implement yet, and claiming it were used would be a lie.
     economy: { ...engine.economy, reaction: true },
+    options: turnOptions(engine),
   }
 }

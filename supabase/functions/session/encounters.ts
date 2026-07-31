@@ -34,9 +34,9 @@ import { evaluateStoryProgress } from './progress.ts'
 import { recordProposal } from './proposals.ts'
 import type { ChallengeCheckStash } from './stashes.ts'
 import { commitDiffs, loadState, logEvent } from './util.ts'
-import { bossNpcStateForOutcome } from '../_shared/combat/index.ts'
-import { resolveLiveCombat } from './combat.ts'
-import type { LiveCombatResult } from './combat.ts'
+import { bossNpcStateForOutcome, combatStateFromEngine } from '../_shared/combat/index.ts'
+import { resolveLiveCombat, startLiveCombat } from './combat.ts'
+import type { LiveCombatResult, StartedCombat } from './combat.ts'
 import { applyNpcState, bossAmongNpcIds, bossReferencedBy } from './npc-state.ts'
 
 export function activeEncounter(state: GameState): EncounterState | null {
@@ -199,8 +199,15 @@ export async function resolveOpenEncounter(
   await commitDiffs(service, env.adventureId, (s) => [
     ...encounterReplaceDiffs(restored),
     ...specReplaceDiffs(restored ? restoredSpec : null),
-    // Puzzle mode follows its encounter (battle mode is Phase 7's problem).
-    ...(s.scene.mode === 'puzzle' && restored?.kind !== 'puzzle'
+    // Scene mode follows its encounter. Battle joined puzzle here on 2026-08-01, when combat
+    // started being PLAYED rather than resolved inside one request: `mode: 'battle'` is now set
+    // for the length of a fight, and it is excluded from narrative routing (intent.ts), so a mode
+    // left standing after the fight ends diverts every later input away from the story path.
+    // Battle drops out unconditionally, unlike puzzle: `state.combat` and the engine behind it are
+    // already gone by the time this runs, and battle mode with no fight under it renders neither a
+    // map nor an input row. Leaving it standing to restore an interrupted fight would trade a
+    // re-narrated encounter for a dead table.
+    ...((s.scene.mode === 'puzzle' && restored?.kind !== 'puzzle') || s.scene.mode === 'battle'
       ? [{ domain: 'scene' as const, patch: { mode: 'narration' } as Json }]
       : []),
     ...(restored?.kind === 'puzzle' && s.scene.mode !== 'puzzle'
@@ -469,10 +476,34 @@ export async function runCombatPlaceholderEncounter(
     ? (spec.params.npc_ids as Json[]).filter((v): v is string => typeof v === 'string')
     : []
   const castBoss = await bossAmongNpcIds(service, env.adventureId, castNpcIds)
+  const beatSpec = {
+    label: spec.label, stakes: spec.stakes,
+    onSuccess: spec.onSuccess, onPartial: spec.onPartial, onFailure: spec.onFailure,
+  }
+
+  // PLAY IT, if the table can (2026-08-01). startLiveCombat rolls initiative, plays out any AI that
+  // won it, and hands back a live engine waiting on a person - at which point this request STOPS.
+  // The fight resumes on combat_action (combat-turn.ts), which owns the two spine seams below when
+  // it ends. That break is the whole point: a client only sees state BETWEEN requests, so a fight
+  // that opened and finished inside this one could never render a map, whatever it wrote.
+  //
+  // Returns null when nobody at the table controls a party combatant, and everything below is
+  // unchanged - the headless resolve, then the auto-win. A fight with no human in the initiative
+  // order must never become an interactive one; it would be a session waiting forever.
+  const started = await startLiveCombat(
+    service, env, (await loadState(service, env.adventureId)).state, beatSpec,
+    { bossNpcId: castBoss?.id ?? null },
+  ).catch((err: unknown) => {
+    console.error('interactive combat start failed; falling back to headless resolve', err)
+    return null
+  })
+  if (started) {
+    await openInteractiveCombat(service, env, sessionId, spec, started)
+    return
+  }
 
   const live: LiveCombatResult | null = await resolveLiveCombat(
-    service, env, (await loadState(service, env.adventureId)).state,
-    { label: spec.label, stakes: spec.stakes, onSuccess: spec.onSuccess, onPartial: spec.onPartial, onFailure: spec.onFailure },
+    service, env, (await loadState(service, env.adventureId)).state, beatSpec,
     { bossNpcId: castBoss?.id ?? null },
   ).catch((err: unknown) => {
     console.error('combat resolve failed; using placeholder auto-win', err)
@@ -519,6 +550,57 @@ export async function runCombatPlaceholderEncounter(
       'defeated, what the victory cost and what it opens - as the scene settles. Do not re-narrate ' +
       'the blow-by-blow of the fight itself.',
   )
+}
+
+/**
+ * Put a started fight on the table: tokens on the map, the engine on the dm domain, the scene in
+ * battle mode. The encounter frame stays OPEN across every turn of the fight - which is also what
+ * retires the re-open loop for combat (live 2026-07-27 the climax opened nine times, because a
+ * combat encounter closed in the same request that opened it and the next input re-opened it).
+ *
+ * All three land in ONE commit. Battle mode without `state.combat` renders neither a map nor an
+ * input row, and an engine without a scene to read it is the state the map has been missing since
+ * F06 - a partial write here is a dead table, not a slower one.
+ */
+async function openInteractiveCombat(
+  service: SupabaseClient,
+  env: AgentEnv,
+  sessionId: string,
+  spec: StoredBeatSpec,
+  started: StartedCombat,
+): Promise<void> {
+  const combat = combatStateFromEngine(started.engine, {
+    locationId: started.locationId,
+    // Maps live in a private bucket and only the client signs them today; the grid and every token
+    // render without one. A server-signed URL is a separate decision (F09 map artwork).
+    mapUrl: null,
+    controllers: started.controllers,
+  })
+  await commitDiffs(service, env.adventureId, () => [
+    { domain: 'combat', patch: combat as unknown as Json },
+    { domain: 'scene', patch: { mode: 'battle' } as unknown as Json },
+    {
+      domain: 'dm',
+      patch: {
+        combat: {
+          engine: started.engine as unknown as Json,
+          encounterId: started.encounterId,
+          bossRef: started.bossRef,
+          boss: started.boss,
+          seed: started.seed,
+          step: started.step,
+          startedAt: new Date().toISOString(),
+          warnings: started.warnings,
+        },
+      } as unknown as Json,
+    },
+  ])
+  await logEvent(service, env.adventureId, sessionId, 'combat_started', {
+    label: spec.label, encounter_id: started.encounterId, seed: started.seed,
+    combatants: started.engine.combatants.length,
+    player_controlled: Object.keys(started.controllers).length,
+    boss: started.boss?.name ?? null, warnings: started.warnings, resolver: 'engine_interactive',
+  })
 }
 
 /** The aftermath narration context for a real result - resolveOpenEncounter prepends its tierText. */

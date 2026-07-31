@@ -8,6 +8,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import { corsHeaders } from '../_shared/cors.ts'
 import { idleNudgeAction } from './beats.ts'
+import { combatAction, liveCombat } from './combat-turn.ts'
 import { hintAction } from './hints.ts'
 import { debugUsage } from './debug.ts'
 import { labInspect, labList } from './lab-inspect.ts'
@@ -21,7 +22,7 @@ import { createGenericNpc, endEncounter, startSocial } from './social-staging.ts
 import { decideProposal } from './proposals.ts'
 import { claimAssist, resolvePending, rollPending } from './prompts.ts'
 import { demoStep, moveIntent, resync, setScene } from './state.ts'
-import { resetRequestCaches, takeStatePerf } from './util.ts'
+import { loadState, resetRequestCaches, takeStatePerf } from './util.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
@@ -154,15 +155,29 @@ Deno.serve(async (req) => {
       case 'resync':
         result = requireAdventure() ?? (await resync(service, adventureId, userId))
         break
-      case 'move_intent':
-        result =
-          requireAdventure() ??
-          (body.token_id && body.to
-            ? await moveIntent(service, adventureId, userId, String(body.token_id), {
-                x: Number(body.to.x),
-                y: Number(body.to.y),
-              })
-            : { status: 400, body: { error: 'token_id and to required' } })
+      // A token drag. While an engine fight is live it must go THROUGH the engine - the legacy
+      // path writes state.combat directly, which was the whole truth about where tokens are until
+      // an engine started holding the same positions, and is a silent desync now. Dispatching here
+      // (rather than inside moveIntent) keeps state.ts free of the combat chain: combat-turn.ts
+      // reaches encounters.ts, which reaches back to state.ts through entry.ts.
+      case 'move_intent': {
+        const missing = requireAdventure()
+        if (missing) { result = missing; break }
+        if (!body.token_id || !body.to) {
+          result = { status: 400, body: { error: 'token_id and to required' } }
+          break
+        }
+        const to = { x: Number(body.to.x), y: Number(body.to.y) }
+        result = liveCombat((await loadState(service, adventureId)).state)
+          ? await combatAction(service, adventureId, userId, {
+              token_id: String(body.token_id),
+              combat_action: { type: 'move', to: [to.x, to.y] },
+            })
+          : await moveIntent(service, adventureId, userId, String(body.token_id), to)
+        break
+      }
+      case 'combat_action':
+        result = requireAdventure() ?? (await combatAction(service, adventureId, userId, body))
         break
       case 'set_scene':
         result =

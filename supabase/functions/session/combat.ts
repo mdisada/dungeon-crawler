@@ -12,12 +12,12 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 import {
-  buildManifest, createCombat, deriveResult, fightIsOver, manifestToSetup, runAutoTurn,
-  srdLookupNames,
+  awaitsPlayer, buildManifest, createCombat, deriveResult, fightIsOver, manifestToSetup, runAiTurns,
+  runAutoTurn, srdLookupNames, stepRng,
 } from '../_shared/combat/index.ts'
 import type {
-  Cell, CombatManifest, CombatResult, ManifestEnemyGroup, ManifestMapInput, ManifestNpcRow,
-  PartyMemberInput, SrdMonsterRow,
+  Cell, CombatEngineState, CombatManifest, CombatResult, ManifestEnemyGroup, ManifestMapInput,
+  ManifestNpcRow, PartyMemberInput, SrdMonsterRow,
 } from '../_shared/combat/index.ts'
 import { deriveNpcStatBlock } from '../_shared/guide/npc-stats.ts'
 import type { NpcStatBlock } from '../_shared/guide/npc-stats.ts'
@@ -293,6 +293,108 @@ async function buildLiveManifest(
   const bossSetup = manifest.bossRef ? manifest.enemies.find((e) => e.id === manifest.bossRef) : null
   const boss = bossSetup && bossSetup.refId ? { id: bossSetup.refId, name: bossSetup.name } : null
   return { manifest, boss }
+}
+
+/** Token control keyed by engine combatant id - the argument combatStateFromEngine takes. */
+export type CombatControllers = Record<string, { controller: 'player' | 'dm' | 'ai'; userId: string | null }>
+
+interface MemberSeatRow {
+  user_id: string
+  character_id: string | null
+}
+
+/**
+ * Which seats at the table drive which combatants. A PC combatant carries the `characters` row id
+ * in `refId`, and a member holds exactly one character - so this is that join.
+ *
+ * Re-read every turn rather than frozen into the fight: a player who reconnects (or claims a seat)
+ * mid-battle gets their token, and a spectator never does. Everything absent stays 'ai', which is
+ * what makes an unclaimed PC keep fighting instead of stalling the initiative order.
+ */
+export async function loadCombatControllers(
+  service: SupabaseClient,
+  adventureId: string,
+  engine: CombatEngineState,
+): Promise<CombatControllers> {
+  const { data } = await service
+    .from('adventure_members')
+    .select('user_id, character_id')
+    .eq('adventure_id', adventureId)
+    .eq('spectator', false)
+    .not('character_id', 'is', null)
+  const byCharacter = new Map<string, string>()
+  for (const row of (data ?? []) as MemberSeatRow[]) {
+    if (row.character_id) byCharacter.set(row.character_id, row.user_id)
+  }
+  const controllers: CombatControllers = {}
+  for (const c of engine.combatants) {
+    const userId = c.kind === 'pc' && c.refId ? byCharacter.get(c.refId) : undefined
+    if (userId) controllers[c.id] = { controller: 'player', userId }
+  }
+  return controllers
+}
+
+export interface StartedCombat {
+  engine: CombatEngineState
+  controllers: CombatControllers
+  locationId: string | null
+  bossRef: string | null
+  boss: { id: string; name: string } | null
+  encounterId: string | null
+  seed: number
+  /** Advanced past any AI combatants that won initiative, so the party opens on its own turn. */
+  step: number
+  warnings: string[]
+}
+
+/**
+ * Start a fight the table PLAYS: build the manifest, roll initiative, play out any AI turns that
+ * come before the first human one, and hand back the live engine state for the caller to persist.
+ *
+ * Returns null - so the caller falls back to the headless resolve or the auto-win - when there is
+ * no authored fight, and also when NOBODY at the table controls a party combatant. That second gate
+ * matters: an interactive fight with no human in the initiative order is not a fight, it is a
+ * session that has stopped, waiting forever for an input no one can give.
+ */
+export async function startLiveCombat(
+  service: SupabaseClient,
+  env: { adventureId: string },
+  state: GameState,
+  beatSpec: BeatSpecInput,
+  opts?: { bossNpcId?: string | null },
+): Promise<StartedCombat | null> {
+  const built = await buildLiveManifest(service, env.adventureId, state, beatSpec, opts?.bossNpcId ?? null)
+  if (!built) return null
+
+  const seed = Math.floor(Math.random() * 0x7fffffff)
+  const created = createCombat(manifestToSetup(built.manifest), stepRng(seed, 0))
+  const controllers = await loadCombatControllers(service, env.adventureId, created.state)
+  if (Object.keys(controllers).length === 0) return null
+
+  // Mark the seated PCs as human-driven before anything runs: manifestToSetup takes the default
+  // from characterToSetup (auto: false for every PC), but an unclaimed PC has to keep acting on
+  // its own or the order deadlocks on an empty chair.
+  const engine: CombatEngineState = {
+    ...created.state,
+    combatants: created.state.combatants.map((c) => ({ ...c, auto: !controllers[c.id] })),
+  }
+  const opened = runAiTurns(engine, seed, 1, built.manifest.bossRef)
+  if (!awaitsPlayer(opened.state, built.manifest.bossRef)) return null
+
+  const bossSetup = built.manifest.bossRef
+    ? built.manifest.enemies.find((e) => e.id === built.manifest.bossRef)
+    : null
+  return {
+    engine: opened.state,
+    controllers,
+    locationId: state.scene?.locationId ?? null,
+    bossRef: built.manifest.bossRef,
+    boss: bossSetup?.refId ? { id: bossSetup.refId, name: bossSetup.name } : null,
+    encounterId: built.manifest.encounterId,
+    seed,
+    step: opened.step,
+    warnings: built.manifest.warnings,
+  }
 }
 
 /** Run a built manifest to completion headless (single-writer, seeded) -> CombatResult. */
