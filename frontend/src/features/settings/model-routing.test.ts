@@ -56,7 +56,9 @@ describe('two seats instead of fourteen rows', () => {
     expect(tierOfRole('narrator')).toBe('primary')
     expect(tierOfRole('story_director')).toBe('primary')
     expect(tierOfRole('adjudicator')).toBe('secondary')
-    expect(tierOfRole('consistency_checker')).toBe('secondary')
+    expect(tierOfRole('summarizer')).toBe('secondary')
+    // Primary since 570ca7f: this role runs the stage-6 group classifier, which deletes npc rows.
+    expect(tierOfRole('consistency_checker')).toBe('primary')
     expect(ROLES_BY_TIER.primary.length + ROLES_BY_TIER.secondary.length)
       .toBe(Object.keys(SYSTEM_DEFAULT_MODEL_MAP).length)
   })
