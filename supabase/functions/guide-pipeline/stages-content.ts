@@ -642,7 +642,7 @@ async function authorChapterNodes(
   // WITHIN one objective - "route 2's seed must still be true after route 1 was lost" is about an
   // objective's own ladder. What a per-objective call loses is sight of its SIBLINGS, so their
   // titles travel in `otherObjectiveTitles` to stop the threads reusing each other's ground.
-  const output: Stage5NodesOutput = { nodes: [], localAtoms: [] }
+  const output: Stage5NodesOutput = { nodes: [], localAtoms: [], warnings: [] }
   for (const objective of ctx.objectives) {
     const clues = cluesFor.get(objective.id) ?? { npc: new Map<string, number>(), loc: new Map<string, number>() }
     const single: Stage5NodesContext = {
@@ -664,6 +664,7 @@ async function authorChapterNodes(
     )
     output.nodes.push(...part.nodes)
     output.localAtoms.push(...part.localAtoms)
+    output.warnings.push(...part.warnings)
     for (const { node } of part.nodes) {
       if (node.role !== 'route') continue
       authoredKinds[node.kind] = (authoredKinds[node.kind] ?? 0) + 1
@@ -740,6 +741,18 @@ async function authorChapterNodes(
     const { error } = await env.db.from('story_nodes').insert(rows)
     assertOk(error, 'story_nodes insert failed')
   }
+  // Route-ladder trims and anything else the node author had repaired: surfaced to the creator on
+  // the same channel as the encounter budget verdicts, never a reason to fail the stage.
+  if (output.warnings.length > 0) {
+    const { error: warnError } = await env.db.from('guide_warnings').insert(
+      output.warnings.map((message) => ({
+        adventure_id: env.adventure.id, stage: 5, target_table: 'story_nodes', target_id: null,
+        message: `Chapter ${chapter.index + 1} scenes: ${message}`, kind: 'info',
+      })),
+    )
+    assertOk(warnError, 'stage-5 node warnings insert failed')
+  }
+
   await logPipelineEvent(env.db, env.adventure.id, 'story_nodes_authored', {
     chapter_id: chapterId, route_nodes: output.nodes.length, rescue_nodes: rows.length - output.nodes.length,
   })

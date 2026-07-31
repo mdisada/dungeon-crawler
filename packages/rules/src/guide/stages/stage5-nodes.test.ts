@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 
-import { buildRescueNode, buildStage5NodesPrompt, objectiveKeyOf, parseSocialExits, parseStage5Nodes } from './stage5-nodes'
+import {
+  buildRescueNode, buildStage5NodesPrompt, MAX_ROUTE_NODES, MIN_ROUTE_NODES, objectiveKeyOf,
+  parseSocialExits, parseStage5Nodes,
+} from './stage5-nodes'
 import type { Stage5NodesContext } from './stage5-nodes'
 import { atomsSatisfy, buildGuaranteedRoute } from '../guaranteed-route'
 import { validateNodeGraph } from '../nodes'
@@ -410,6 +413,40 @@ describe('the chapter plan reaches the node author', () => {
 
   it('omits the block entirely when a chapter has no scenes on file', () => {
     expect(buildStage5NodesPrompt(ctx).user).not.toContain('planned around')
+  })
+})
+
+describe('the route ladder has a ceiling, and the prompt says so', () => {
+  // Measured on gpt-5.6-luna: 3 of 7 runs of one objective failed with "$.objectives[0].nodes:
+  // expected an array of length 2-5" - a cap the prompt never mentioned. flash-lite passed by
+  // happening to write three.
+  it('states the maximum, not just the minimum', () => {
+    const { system } = buildStage5NodesPrompt(ctx)
+    expect(system).toContain(`${MIN_ROUTE_NODES}-${MAX_ROUTE_NODES} DISTINCT route nodes`)
+    expect(system).toContain('hard ceiling')
+  })
+
+  it('trims an over-long ladder instead of failing the chapter', () => {
+    const node = (i: number) => ({
+      kind: 'skill_challenge', narration_seed: `seed ${i}`, stakes: 's',
+      affordances: [{ key: `k${i}`, hint: `do the thing ${i}` }],
+      setback: { name: `setback_${i}`, kind: 'flag' }, setback_line: `line ${i}`,
+      outcome: { win: `win ${i}`, loss: `loss ${i}` },
+    })
+    const doc = JSON.stringify({
+      objectives: [{ objective_number: 1, nodes: Array.from({ length: 7 }, (_, i) => node(i)) }],
+    })
+    const result = parseStage5Nodes(doc, ctx)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.nodes).toHaveLength(MAX_ROUTE_NODES)
+    expect(result.data.warnings.some((w) => w.includes('were dropped'))).toBe(true)
+  })
+
+  it('still fails a ladder with only one route', () => {
+    const doc = JSON.stringify({ objectives: [{ objective_number: 1, nodes: [{ kind: 'social' }] }] })
+    const result = parseStage5Nodes(doc, ctx)
+    expect(result.ok).toBe(false)
   })
 })
 

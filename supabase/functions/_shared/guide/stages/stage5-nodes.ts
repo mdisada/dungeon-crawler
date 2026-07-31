@@ -24,6 +24,17 @@ import type { AtomKind, AtomProposal } from '../../story/atoms.ts'
 import type { Json, ParseResult } from '../types.ts'
 
 export const MIN_ROUTE_NODES = 2
+/**
+ * The ceiling the parser enforces - and, until 2026-07-31, the one number the PROMPT never
+ * mentioned. It asked for "at least 2 distinct route nodes" and stopped there, so a model generous
+ * with routes hit a cap it had never been told about. Measured on gpt-5.6-luna, seven runs of one
+ * objective: 3 failed, every one with `$.objectives[0].nodes: expected an array of length 2-5`,
+ * and every failure was among the longest replies. flash-lite passed by writing three.
+ *
+ * A fourth or fifth route is not a defect worth discarding a chapter for, so the extras are TRIMMED
+ * with a warning - the same call the ingredient pool got the same day.
+ */
+export const MAX_ROUTE_NODES = 5
 
 export interface Stage5NodesObjective {
   id: string
@@ -115,6 +126,8 @@ export interface Stage5NodesOutput {
   nodes: AuthoredNode[]
   /** All local atoms declared across the chapter, for one registry pass. */
   localAtoms: AtomProposal[]
+  /** Repairs the creator should see - trimmed route ladders, so far. Never a reason to fail. */
+  warnings: string[]
 }
 
 export const objectiveKeyOf = (id: string): string => `obj:${id}`
@@ -251,7 +264,7 @@ export function buildStage5NodesPrompt(ctx: Stage5NodesContext): { system: strin
   const system = `You are the Story Architect for a tabletop RPG platform. For one chapter, author the playable NODE GRAPH: the concrete scenes the party moves through to achieve each objective.
 
 Rules:
-- For EACH objective, author at least ${MIN_ROUTE_NODES} DISTINCT route nodes - genuinely different ways to achieve it (a stealth route AND a social route; a clever route AND a forceful route). This is the Three-Clue Rule: a party that flubs one way still has another.
+- For EACH objective, author ${MIN_ROUTE_NODES}-${MAX_ROUTE_NODES} DISTINCT route nodes - genuinely different ways to achieve it (a stealth route AND a social route; a clever route AND a forceful route). This is the Three-Clue Rule: a party that flubs one way still has another. ${MAX_ROUTE_NODES} is a hard ceiling and anything past it is discarded: the routes are played as a LADDER, one after each failure, so a sixth is a scene no party will ever reach. Three is usually right.
 - Those routes are INTERCHANGEABLE. Whichever one the party wins, they come away knowing and holding the SAME things - this objective's conclusion. Everything authored after this point is written against that shared conclusion and CANNOT TELL which route was taken, so a route that teaches something the others do not leaves every later scene guessing. If only one of your routes reveals who was really responsible, that is a bug: either they all reveal it, or none of them does and it belongs to a later objective.
 - SAME CONCLUSION, DIFFERENT COST. What legitimately differs between routes is the method, who helps and who is crossed, what is spent, and what it costs the party to get there. The "setback" is where a route's identity lives - keep it specific to THAT route and never make two routes cost the same thing.
 - THE ROUTES ARE A LADDER, NOT A MENU. At the table the party plays route 1 first. They only ever reach route 2 by FAILING route 1, arriving on its setback_line; route 3 only after failing both. So write route 2's narration_seed so it is still true AFTER route 1 has been lost, and route 3's after route 1 and 2 have been. Never open a later route as though the objective were untouched, and never have it announce as still-to-come something an earlier setback already said had happened.
@@ -370,6 +383,7 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
   const locationKeySet = new Set(ctx.locations.map((l) => l.key))
   const nodes: AuthoredNode[] = []
   const localAtoms: AtomProposal[] = []
+  const warnings: string[] = []
   const authoredLosses: { key: string; objKey: string; loss: string }[] = []
 
   const objectiveBlocks = c.arr(root.objectives, '$.objectives', 1, ctx.objectives.length)
@@ -394,7 +408,16 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
     // Now it rides on `establishes` and the runtime credits it at ANY tier. An empty set still
     // costs nothing - see the 2026-07-27 note this replaces.
     const establishes = (minimalSatisfyingAtoms(objective.completionPredicates) ?? []) as string[]
-    const rawNodes = c.arr(block.nodes, `$.objectives[${bi}].nodes`, MIN_ROUTE_NODES, 5)
+    // Too FEW routes is fatal (the Three-Clue Rule is the point of this stage); too many is trimmed.
+    const authoredNodes = c.arr(block.nodes, `$.objectives[${bi}].nodes`, MIN_ROUTE_NODES)
+    if (authoredNodes.length > MAX_ROUTE_NODES) {
+      warnings.push(
+        `objective "${objective.title}": ${authoredNodes.length} route nodes were authored and the ` +
+        `last ${authoredNodes.length - MAX_ROUTE_NODES} were dropped - the routes play as a ladder, ` +
+        `so past ${MAX_ROUTE_NODES} they are scenes no party reaches.`,
+      )
+    }
+    const rawNodes = authoredNodes.slice(0, MAX_ROUTE_NODES)
     const nodeCount = rawNodes.length
 
     rawNodes.forEach((rawNode, ni) => {
@@ -648,5 +671,5 @@ export function parseStage5Nodes(raw: string, ctx: Stage5NodesContext): ParseRes
     }
   }
 
-  return c.result({ nodes, localAtoms })
+  return c.result({ nodes, localAtoms, warnings })
 }
