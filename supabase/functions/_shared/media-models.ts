@@ -11,6 +11,9 @@
 // permits exactly what the app already uses.
 
 const DEFAULT_ALLOWLIST = [
+  // Default image model since 2026-07-31 (text-to-image only).
+  'krea/krea-2-medium-turbo',
+  // Still requested by name whenever a request carries reference images, which Krea silently ignores.
   'google/gemini-3.1-flash-lite-image',
   'mistralai/voxtral-mini-tts-2603',
   // Fish Audio TTS engines (default cloud TTS since 2026-07-24). ai-proxy routes these to Fish.

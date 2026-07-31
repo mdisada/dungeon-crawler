@@ -1,4 +1,4 @@
-export { editImage, generateImage, uploadImageReference } from './api/generate-image'
+export { editImage, generateImage, REFERENCE_IMAGE_MODEL, uploadImageReference } from './api/generate-image'
 export { useImageGeneration } from './hooks/use-image-generation'
 export type { ImageRunOutcome } from './hooks/use-image-generation'
 export { composePrompt, IMAGE_PRESET_KEYS, IMAGE_PRESETS } from './presets'

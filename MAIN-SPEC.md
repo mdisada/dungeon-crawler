@@ -74,7 +74,7 @@ what preceded it was not freedom but fragility — stories that silently stalled
 | AI gateway | OpenRouter (v1); optional local Python server via Supabase Realtime (v2) |
 | Text models | Default Xiaomi MiMo-V2.5; alternates DeepSeek V4 Flash/Pro, Gemini 2.5 FlashLite, Mistral Nemo — **assigned per agent role** (§4.7) |
 | TTS | Voxtral Mini TTS (streaming, zero-shot voice cloning) |
-| Images | Nano Banana 2 Lite |
+| Images | Krea 2 Medium Turbo (default, text-to-image); Nano Banana 2 Lite when a request carries reference images (maps, avatars, cutscenes, edits) |
 | Embeddings | Qwen3-Embedding 8B → pgvector |
 | Rules data | D&D SRD 5.2.1 (CC-BY-4.0): monsters, spells, items, classes, progression tables, encounter math |
 

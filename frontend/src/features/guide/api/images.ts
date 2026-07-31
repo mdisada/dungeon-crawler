@@ -1,14 +1,25 @@
 import { env } from '@/config/env'
+import { REFERENCE_IMAGE_MODEL } from '@/features/image'
 import { callEdgeFunction } from '@/lib/edge-function'
 import { supabase } from '@/lib/supabase'
 
 const SIGNED_URL_TTL_SECONDS = 3600
 
-async function requestImage(adventureId: string, payload: Record<string, unknown>): Promise<string> {
+async function requestImage(
+  adventureId: string,
+  payload: Record<string, unknown>,
+  model?: string,
+): Promise<string> {
   const res = await callEdgeFunction('ai-proxy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ kind: 'image', agent_role: 'user_direct', adventure_id: adventureId, payload }),
+    body: JSON.stringify({
+      kind: 'image',
+      agent_role: 'user_direct',
+      adventure_id: adventureId,
+      ...(model ? { model } : {}),
+      payload,
+    }),
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -58,6 +69,13 @@ export async function generateGuideImage(
     kind === 'map'
       ? `Top-down tactical battle map, orthographic view, 1024x1024, painted fantasy style, clear open floor areas and obstacles, no grid lines, no text or labels. ${prompt}`
       : prompt
-  const imageUrl = await requestImage(adventureId, { prompt: fullPrompt, aspect_ratio: aspectRatio, output_format: 'png' })
+  // Backgrounds and NPCs take the account's default image model (Krea 2). A map is drawn to match
+  // a location that already exists and will be given that background as a reference image, so it
+  // stays on the reference-capable model even while it is still prompt-only.
+  const imageUrl = await requestImage(
+    adventureId,
+    { prompt: fullPrompt, aspect_ratio: aspectRatio, output_format: 'png' },
+    kind === 'map' ? REFERENCE_IMAGE_MODEL : undefined,
+  )
   return toBlob(imageUrl)
 }

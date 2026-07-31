@@ -65,7 +65,7 @@ Sections:
 
 1. **Provider** — radio: `OpenRouter (cloud)` / `Local server`. Local shows connection state + "how to run the worker" help.
 2. **Model map** — table of agent roles → model dropdown (curated list: MiMo-V2.5, DeepSeek V4 Flash, DeepSeek V4 Pro, Gemini 2.5 FlashLite, Mistral Nemo). "Reset to defaults" button. Stored in `user_settings.model_map (jsonb)`.
-3. **Media models** — TTS model (Voxtral Mini TTS default), image model (Nano Banana 2 Lite default), embedding model (fixed: Qwen3-Embedding 8B — changing it invalidates existing vectors; show warning + "re-embed" job trigger if ever changed).
+3. **Media models** — TTS model (Voxtral Mini TTS default), image model (Krea 2 Medium Turbo default; reference-carrying requests pin Nano Banana 2 Lite in code), embedding model (fixed: Qwen3-Embedding 8B — changing it invalidates existing vectors; show warning + "re-embed" job trigger if ever changed).
 4. **API keys** — own OpenRouter key (server-stored) management; Advanced localStorage fallback.
 5. **Audio** — default volumes (narration / music / SFX), autoplay policy note.
 

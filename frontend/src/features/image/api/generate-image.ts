@@ -10,6 +10,16 @@ import type { GenerateImageArgs, ImagePresetKey, ImageResult } from '../types'
 // route are free to use whatever resolution the preset calls for.
 const CLOUD_IMAGE_SIZE = 1024
 
+/**
+ * The default image model (user_settings.image_model, Krea 2 since 2026-07-31) does not honour
+ * reference images. Measured 2026-07-31: it accepts `input_references`, returns HTTP 200, and
+ * ignores them - a "portrait of this same character" request came back as an unrelated person. A
+ * silent miss is worse than a rejection, so a request that carries references names Nano Banana 2
+ * Lite instead of falling through to the user's default. Requests without references keep sending
+ * no model at all, so the Settings choice still governs them.
+ */
+export const REFERENCE_IMAGE_MODEL = 'google/gemini-3.1-flash-lite-image'
+
 const PLACEHOLDER_BY_PRESET: Record<ImagePresetKey, string> = {
   base_char: '/placeholders/fullbody.png',
   avatar_char: '/placeholders/avatar.png',
@@ -107,7 +117,11 @@ export async function generateImage({
   const startedAt = performance.now()
   const referenceUrls = await Promise.all(allowed.map((path) => getAssetUrl(path)))
   onProgress?.('generating')
-  const blob = await requestCloudImage(composePrompt(preset, prompt), model, referenceUrls)
+  const blob = await requestCloudImage(
+    composePrompt(preset, prompt),
+    model ?? (referenceUrls.length > 0 ? REFERENCE_IMAGE_MODEL : undefined),
+    referenceUrls,
+  )
   const generatedAtMs = performance.now() - startedAt
   onProgress?.('uploading')
 
@@ -149,7 +163,7 @@ export async function editImage(
   rest.onProgress?.('generating')
   // No preset suffix here: an edit instruction describes a change to an existing image, and
   // re-appending the framing clause fights the reference rather than reinforcing it.
-  const blob = await requestCloudImage(instruction, rest.model, [referenceUrl])
+  const blob = await requestCloudImage(instruction, rest.model ?? REFERENCE_IMAGE_MODEL, [referenceUrl])
   const generatedAtMs = performance.now() - startedAt
   rest.onProgress?.('uploading')
 
