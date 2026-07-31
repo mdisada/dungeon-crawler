@@ -24,16 +24,19 @@ const GROUP_WARNING_PREFIX = 'NPC that is really a group: '
  */
 async function reclassifyGroupNpcs(env: StageEnv): Promise<void> {
   const [npcResult, encounterResult] = await Promise.all([
-    env.db.from('npcs').select('id, name, role, description, faction, human_edited').eq('adventure_id', env.adventure.id),
+    env.db.from('npcs').select('id, name, role, description, faction, human_edited, chapter_id, initial_state').eq('adventure_id', env.adventure.id),
     env.db.from('encounters').select('spec').eq('adventure_id', env.adventure.id),
   ])
   assertOk(npcResult.error, 'group-check npcs load failed')
   assertOk(encounterResult.error, 'group-check encounters load failed')
 
   // Bosses are individuals by definition, even when fought - never a candidate for removal.
-  const candidates = ((npcResult.data ?? []) as {
-    id: string; name: string; description: string; faction: string; role: string; human_edited: boolean
-  }[]).filter((n) => n.role !== 'boss')
+  type NpcRow = {
+    id: string; name: string; description: string; faction: string; role: string
+    human_edited: boolean; chapter_id: string | null; initial_state: string
+  }
+  const allNpcs = (npcResult.data ?? []) as NpcRow[]
+  const candidates = allNpcs.filter((n) => n.role !== 'boss')
   const encounters = ((encounterResult.data ?? []) as { spec: EncounterSpec | null }[]).map((e) => e.spec ?? {})
 
   // Deterministic tell (count>=2 enemy) - near-zero false positives.
@@ -66,8 +69,45 @@ async function reclassifyGroupNpcs(env: StageEnv): Promise<void> {
   if (groupIds.size === 0) return
 
   const groups = candidates.filter((n) => groupIds.has(n.id))
-  // Human-edited rows are kept (the creator is in charge) and only warned; the rest are removed.
-  const removed = groups.filter((n) => !n.human_edited)
+
+  // NEVER DELETE A CHAPTER'S LAST LIVING PERSON (2026-07-31).
+  //
+  // The classifier is a model, so it is sometimes wrong, and one wrong call here is unrecoverable:
+  // the row is gone and no later stage can put it back. Live today, on a guide whose stage 4 had
+  // authored a perfectly good cast - Batman [alive] and Dr. Jonathan Crane [absent] - this pass
+  // decided BATMAN was "a group or force", deleted him, logged that it had orphaned six scenes, and
+  // carried on. That left one absent villain, so the chapter had nobody to talk to, and the stage-8
+  // gate refused the whole guide two stages later: `chapter_no_living_npc`.
+  //
+  // The gate's rule is the one this pass has to respect BEFORE it deletes, not after. It is exactly
+  // decidable - count who is left - so a suspected group that is the last living person in its
+  // chapter is kept and reported instead. A group with a heartbeat is a bad row; a chapter with
+  // nobody in it is not a guide at all.
+  const isPresent = (n: NpcRow) => n.initial_state !== 'dead' && n.initial_state !== 'absent'
+  const presentByChapter = new Map<string, number>()
+  let globalPresent = 0
+  for (const npc of allNpcs) {
+    if (!isPresent(npc)) continue
+    if (npc.chapter_id) presentByChapter.set(npc.chapter_id, (presentByChapter.get(npc.chapter_id) ?? 0) + 1)
+    else globalPresent++
+  }
+  const keptForRoster: NpcRow[] = []
+  const removed: NpcRow[] = []
+  for (const npc of groups) {
+    if (npc.human_edited) continue // kept anyway - the creator is in charge
+    // A global (chapter-less) living NPC satisfies every chapter, mirroring the gate's own check.
+    const wouldEmpty = isPresent(npc) && globalPresent === 0 && npc.chapter_id !== null &&
+      (presentByChapter.get(npc.chapter_id) ?? 0) <= 1
+    if (wouldEmpty) {
+      keptForRoster.push(npc)
+      continue
+    }
+    if (isPresent(npc)) {
+      if (npc.chapter_id) presentByChapter.set(npc.chapter_id, (presentByChapter.get(npc.chapter_id) ?? 1) - 1)
+      else globalPresent--
+    }
+    removed.push(npc)
+  }
   const deleteIds = removed.map((n) => n.id)
 
   if (deleteIds.length > 0) {
@@ -149,7 +189,18 @@ async function reclassifyGroupNpcs(env: StageEnv): Promise<void> {
     }
   }
 
-  const warningRows = groups.map((n) => ({
+  const rosterWarningRows = keptForRoster.map((n) => ({
+    adventure_id: env.adventure.id,
+    stage: 6,
+    target_table: 'npcs',
+    target_id: n.id,
+    message: `${GROUP_WARNING_PREFIX}"${n.name}" reads as a group or force rather than a single person, but ` +
+      `was KEPT: they are the only living, present character in their chapter, and removing them would ` +
+      `leave the party with nobody to talk to - which the reachability gate refuses. Either give the ` +
+      `chapter a named individual the party can meet and re-run this stage, or rewrite this row as one.`,
+    kind: 'warning',
+  }))
+  const warningRows = groups.filter((n) => !keptForRoster.includes(n)).map((n) => ({
     adventure_id: env.adventure.id,
     stage: 6,
     target_table: 'npcs',
@@ -176,12 +227,14 @@ async function reclassifyGroupNpcs(env: StageEnv): Promise<void> {
       `the force itself rather than a person.`,
     kind: 'warning',
   }))
-  const { error: warnError } = await env.db.from('guide_warnings').insert([...warningRows, ...proseWarningRows])
+  const { error: warnError } = await env.db.from('guide_warnings').insert([...warningRows, ...rosterWarningRows, ...proseWarningRows])
   assertOk(warnError, 'group warnings insert failed')
 
   await logPipelineEvent(env.db, env.adventure.id, 'group_npc_reclassified', {
     removed: removed.map((n) => n.name),
     kept_human_edited: groups.filter((n) => n.human_edited).map((n) => n.name),
+    // Kept because deleting them would have left a chapter with nobody alive to talk to.
+    kept_last_living: keptForRoster.map((n) => n.name),
     // Named so the size of the residue is on the record, not just its existence.
     orphaned_scenes: proseWarnings.map((p) => `${p.node}:${p.name}`),
   })
