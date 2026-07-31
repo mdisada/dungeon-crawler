@@ -6,6 +6,7 @@ import { validateGuideReady } from '@rules/guide'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { activateAdventure } from '@/features/play'
+import { EditorLock } from './editor-lock'
 import { artBlockers, artReadiness } from '../art-readiness'
 import { startPipeline } from '../api/pipeline'
 import { useGuide } from '../hooks/use-guide'
@@ -156,7 +157,16 @@ export function GuidePage() {
   // every refresh.
   const showArtDots = !hasUnfinishedJobs
   const reviewQueue = data.warnings.filter((w) => !w.resolved && w.kind === 'warning' && w.stage !== 8)
-  if (reviewOpen === null && !isGenerating && reviewQueue.length > 0) setReviewOpen(true)
+
+  // Nothing is editable while something is writing (owner's call, 2026-08-01). A stage reads the
+  // rows it is about to replace, so a save landing mid-stage is either overwritten or marks the row
+  // human_edited and freezes a half-written draft in place - and the batch art pass rewrites
+  // npcs.images and locations.background_url under whatever tab is open.
+  //
+  // A queue PAUSED on a failure is deliberately not locked: nothing is in flight, and the retry
+  // button plus the partial results below it are the whole recovery path.
+  const isLocked = isGenerating || imagePass.state.status === 'running'
+  if (reviewOpen === null && !isLocked && reviewQueue.length > 0) setReviewOpen(true)
 
   const editWarning = (w: GuideWarning) => {
     if (w.targetTable === 'ingredients') setIsDrawerOpen(true)
@@ -169,11 +179,17 @@ export function GuidePage() {
         <h1 className="text-xl font-bold">Adventure Guide</h1>
         <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs">{STATUS_LABELS[data.adventure.status] ?? data.adventure.status}</span>
         <div className="ml-auto flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={() => setIsDrawerOpen((v) => !v)} aria-expanded={isDrawerOpen}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isLocked}
+            onClick={() => setIsDrawerOpen((v) => !v)}
+            aria-expanded={isDrawerOpen}
+          >
             Ingredients ({data.ingredients.length})
           </Button>
           {data.adventure.status === 'guide_ready' && (
-            <Button variant="outline" size="sm" disabled={isRestarting} onClick={() => void restartPipeline()}>
+            <Button variant="outline" size="sm" disabled={isLocked || isRestarting} onClick={() => void restartPipeline()}>
               Regenerate guide
             </Button>
           )}
@@ -182,7 +198,7 @@ export function GuidePage() {
               Open table
             </Button>
           ) : (
-            <Button size="sm" disabled={isGenerating || isStarting} onClick={() => void validateStart()}>
+            <Button size="sm" disabled={isLocked || isStarting} onClick={() => void validateStart()}>
               {isStarting ? 'Opening lobby…' : 'Start Adventure'}
             </Button>
           )}
@@ -210,62 +226,70 @@ export function GuidePage() {
         onRetry={imagePass.retryAll}
       />
 
-      {reviewQueue.length > 0 && (
-        <section className="flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-          <p>
-            <span className="font-medium">{reviewQueue.length} finding{reviewQueue.length === 1 ? '' : 's'}</span>{' '}
-            <span className="text-muted-foreground">from generation need your judgment.</span>
-          </p>
-          <Button variant="outline" size="sm" onClick={() => setReviewOpen(true)}>
-            Review
-          </Button>
-        </section>
+      {isLocked && (
+        <p role="status" className="text-xs text-muted-foreground">
+          Editing is paused while this runs — a stage still writing would overwrite your changes.
+        </p>
       )}
-      <WarningReviewDialog
-        open={reviewOpen === true}
-        onOpenChange={setReviewOpen}
-        queue={reviewQueue}
-        onResolved={() => void refresh()}
-        onEdit={editWarning}
-      />
 
-      <div className="flex gap-6">
-        <div className="min-w-0 flex-1">
-          <Tabs value={tab} onValueChange={setTab}>
-            <TabsList>
-              <TabsTab value="plot">Plot &amp; Objectives</TabsTab>
-              <TabsTab value="npcs">
-                NPCs ({data.npcs.length})
-                {showArtDots && readiness.npcsMissing > 0 ? <MissingArtDot count={readiness.npcsMissing} /> : null}
-              </TabsTab>
-              <TabsTab value="locations">
-                Locations ({data.locations.length})
-                {showArtDots && readiness.backgroundsMissing > 0 ? (
-                  <MissingArtDot count={readiness.backgroundsMissing} />
-                ) : null}
-              </TabsTab>
-              <TabsTab value="endings">Endings ({data.endings.length})</TabsTab>
-            </TabsList>
-            <TabsPanel value="plot">
-              <PlotTab data={data} onChanged={() => void refresh()} />
-            </TabsPanel>
-            <TabsPanel value="npcs">
-              <NpcsTab data={data} onChanged={() => void refresh()} />
-            </TabsPanel>
-            <TabsPanel value="locations">
-              <LocationsTab data={data} onChanged={() => void refresh()} />
-            </TabsPanel>
-            <TabsPanel value="endings">
-              <EndingsTab data={data} onChanged={() => void refresh()} />
-            </TabsPanel>
-          </Tabs>
-        </div>
-        {isDrawerOpen && (
-          <aside className="w-80 shrink-0 rounded-lg border p-3" aria-label="Ingredients drawer">
-            <IngredientsDrawer data={data} onChanged={() => void refresh()} />
-          </aside>
+      <EditorLock isLocked={isLocked}>
+        {reviewQueue.length > 0 && (
+          <section className="flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+            <p>
+              <span className="font-medium">{reviewQueue.length} finding{reviewQueue.length === 1 ? '' : 's'}</span>{' '}
+              <span className="text-muted-foreground">from generation need your judgment.</span>
+            </p>
+            <Button variant="outline" size="sm" onClick={() => setReviewOpen(true)}>
+              Review
+            </Button>
+          </section>
         )}
-      </div>
+        <WarningReviewDialog
+          open={reviewOpen === true && !isLocked}
+          onOpenChange={setReviewOpen}
+          queue={reviewQueue}
+          onResolved={() => void refresh()}
+          onEdit={editWarning}
+        />
+
+        <div className="flex gap-6">
+          <div className="min-w-0 flex-1">
+            <Tabs value={tab} onValueChange={setTab}>
+              <TabsList>
+                <TabsTab value="plot">Plot &amp; Objectives</TabsTab>
+                <TabsTab value="npcs">
+                  NPCs ({data.npcs.length})
+                  {showArtDots && readiness.npcsMissing > 0 ? <MissingArtDot count={readiness.npcsMissing} /> : null}
+                </TabsTab>
+                <TabsTab value="locations">
+                  Locations ({data.locations.length})
+                  {showArtDots && readiness.backgroundsMissing > 0 ? (
+                    <MissingArtDot count={readiness.backgroundsMissing} />
+                  ) : null}
+                </TabsTab>
+                <TabsTab value="endings">Endings ({data.endings.length})</TabsTab>
+              </TabsList>
+              <TabsPanel value="plot">
+                <PlotTab data={data} onChanged={() => void refresh()} />
+              </TabsPanel>
+              <TabsPanel value="npcs">
+                <NpcsTab data={data} onChanged={() => void refresh()} />
+              </TabsPanel>
+              <TabsPanel value="locations">
+                <LocationsTab data={data} onChanged={() => void refresh()} />
+              </TabsPanel>
+              <TabsPanel value="endings">
+                <EndingsTab data={data} onChanged={() => void refresh()} />
+              </TabsPanel>
+            </Tabs>
+          </div>
+          {isDrawerOpen && (
+            <aside className="w-80 shrink-0 rounded-lg border p-3" aria-label="Ingredients drawer">
+              <IngredientsDrawer data={data} onChanged={() => void refresh()} />
+            </aside>
+          )}
+        </div>
+      </EditorLock>
     </div>
   )
 }

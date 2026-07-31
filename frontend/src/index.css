@@ -220,6 +220,23 @@ h1 {
   }
 }
 
+/* Guide generation (F04 SS2): a sheen travelling the filled part of the bar. A pipeline stage can
+   hold one percentage for a minute, and a bar that never moves reads as a hang. */
+@keyframes progress-sheen {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+.progress-sheen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.45), transparent);
+  animation: progress-sheen 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-sheen::after { animation: none; }
+}
+
 @keyframes fx-float {
   0% { transform: translateY(0); opacity: 0; }
   15% { opacity: 1; }
