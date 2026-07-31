@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+
 import { buildRescueNode, buildStage5NodesPrompt, objectiveKeyOf, parseSocialExits, parseStage5Nodes } from './stage5-nodes'
 import type { Stage5NodesContext } from './stage5-nodes'
 import { atomsSatisfy, buildGuaranteedRoute } from '../guaranteed-route'
@@ -409,6 +410,40 @@ describe('the chapter plan reaches the node author', () => {
 
   it('omits the block entirely when a chapter has no scenes on file', () => {
     expect(buildStage5NodesPrompt(ctx).user).not.toContain('planned around')
+  })
+})
+
+describe('what the rest of the guide already built reaches the node author', () => {
+  // Live: Dr. Elara Vance held 2 of a chapter's 8 clues and appeared in none of its 12 nodes. A
+  // clue on a person only ever comes out in conversation, so nothing could reach those two.
+  it('marks who is holding the evidence, and where it is hidden', () => {
+    const { user } = buildStage5NodesPrompt({
+      ...ctx,
+      npcs: [{ key: 'npc:mara', name: 'Harbormaster Mara', clues: 2 }, { key: 'npc:tam', name: 'Tam', clues: 0 }],
+      locations: [{ key: 'loc:office', name: 'The Office', clues: 1 }, { key: 'loc:dock', name: 'The Dock', clues: 0 }],
+    })
+    expect(user).toContain('holds 2 clues')
+    expect(user).toContain('1 clue here')
+    // Nothing is claimed about the empty-handed ones.
+    expect(user).not.toContain('holds 0')
+    expect(user).not.toContain('0 clues here')
+  })
+
+  // Stage 5 runs once per objective, so "at least one combat somewhere" was an instruction no
+  // single call could follow. The Frayed Threads shipped 0 combat nodes.
+  it('says a fight is still owed when nothing has drawn steel yet', () => {
+    const { user } = buildStage5NodesPrompt({ ...ctx, authoredKinds: { social: 2, skill_challenge: 3 } })
+    expect(user).toContain('social x2')
+    expect(user).toContain('No COMBAT scene exists yet')
+  })
+
+  it('says combat is covered once one exists, and closed once the ceiling is hit', () => {
+    expect(buildStage5NodesPrompt({ ...ctx, authoredKinds: { combat: 1 } }).user).toContain('Combat is covered')
+    expect(buildStage5NodesPrompt({ ...ctx, authoredKinds: { combat: 3 } }).user).toContain('at its ceiling')
+  })
+
+  it('omits the tally entirely for a caller that does not track it', () => {
+    expect(buildStage5NodesPrompt(ctx).user).not.toContain('already authored elsewhere')
   })
 })
 

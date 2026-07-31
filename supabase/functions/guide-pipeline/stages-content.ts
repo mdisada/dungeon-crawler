@@ -569,12 +569,60 @@ async function authorChapterNodes(
   const living = npcs.filter((n) => n.initialState !== 'dead' && n.initialState !== 'absent')
   const npcIdByKey = new Map(npcs.map((n) => [n.key, n.id]))
   const locationIdByKey = new Map(locations.map((l) => [l.key, l.id]))
+
+  // WHERE THIS CHAPTER'S EVIDENCE LIVES (2026-07-31). Stage 4 has already placed the clues by the
+  // time nodes are authored, and the node author never saw any of it - so it staged whoever the
+  // scenes suggested and the clue-holders were whoever happened to be left. A clue on a person is
+  // released in conversation and nowhere else, so an unstaged holder is evidence with no door.
+  //
+  // Counted PER OBJECTIVE, because stage 5 authors per objective: a chapter-wide tally tells the
+  // author that somebody is holding evidence without saying whether it is evidence for the scenes
+  // they are writing now. Ingredients carry `objective_links`; anything unlinked counts for every
+  // objective, since it belongs to the chapter as a whole.
+  const { data: chapterIngredients } = await env.db
+    .from('ingredients')
+    .select('placement, objective_links')
+    .eq('chapter_id', chapterId)
+  const cluesFor = new Map<string, { npc: Map<string, number>; loc: Map<string, number> }>()
+  const bump = (objectiveId: string, npcId: string | null, locationId: string | null) => {
+    const entry = cluesFor.get(objectiveId) ?? { npc: new Map<string, number>(), loc: new Map<string, number>() }
+    if (npcId) entry.npc.set(npcId, (entry.npc.get(npcId) ?? 0) + 1)
+    if (locationId) entry.loc.set(locationId, (entry.loc.get(locationId) ?? 0) + 1)
+    cluesFor.set(objectiveId, entry)
+  }
+  for (const row of (chapterIngredients ?? []) as {
+    placement: Record<string, unknown> | null; objective_links: string[] | null
+  }[]) {
+    const placement = row.placement ?? {}
+    const npcId = typeof placement.npc_id === 'string' ? placement.npc_id : null
+    const locationId = typeof placement.location_id === 'string' ? placement.location_id : null
+    if (!npcId && !locationId) continue
+    const links = (row.objective_links ?? []).filter(Boolean)
+    for (const objectiveId of links.length > 0 ? links : objectives.map((o) => o.id)) {
+      bump(objectiveId, npcId, locationId)
+    }
+  }
+
+  // Route-node kinds authored for OTHER chapters. Earlier objectives in THIS chapter are added as
+  // the loop below runs, because their nodes are only written to the database once the whole
+  // chapter is authored.
+  const { data: priorNodes } = await env.db
+    .from('story_nodes')
+    .select('kind, role, chapter_id')
+    .eq('adventure_id', env.adventure.id)
+    .neq('chapter_id', chapterId)
+  const authoredKinds: Record<string, number> = {}
+  for (const row of (priorNodes ?? []) as { kind: string; role: string }[]) {
+    if (row.role !== 'route') continue
+    authoredKinds[row.kind] = (authoredKinds[row.kind] ?? 0) + 1
+  }
   const ctx: Stage5NodesContext = {
     chapterNumber: chapter.index + 1,
     chapterTitle: chapter.title,
     objectives: objectives.map((o) => ({
       id: o.id, title: o.title, hiddenDescription: o.hiddenDescription, completionPredicates: o.completionPredicates,
     })),
+    // Per-objective clue counts are filled in per call below; the chapter-level context carries none.
     npcs: living.map(({ key, name, role, description }) => ({ key, name, role, description })),
     locations: locations.map(({ key, name }) => ({ key, name })),
     // Stage 2 planned this chapter's scenes and stages 3 and 4 were both given them; only the
@@ -596,10 +644,18 @@ async function authorChapterNodes(
   // titles travel in `otherObjectiveTitles` to stop the threads reusing each other's ground.
   const output: Stage5NodesOutput = { nodes: [], localAtoms: [] }
   for (const objective of ctx.objectives) {
+    const clues = cluesFor.get(objective.id) ?? { npc: new Map<string, number>(), loc: new Map<string, number>() }
     const single: Stage5NodesContext = {
       ...ctx,
       objectives: [objective],
       otherObjectiveTitles: ctx.objectives.filter((o) => o.id !== objective.id).map((o) => o.title),
+      npcs: living.map(({ key, name, role, description, id }) => ({
+        key, name, role, description, clues: clues.npc.get(id) ?? 0,
+      })),
+      locations: locations.map(({ key, name, id }) => ({ key, name, clues: clues.loc.get(id) ?? 0 })),
+      // A fresh copy per call: the tally grows as this chapter's objectives are authored, so the
+      // last one can see that nobody has drawn steel yet.
+      authoredKinds: { ...authoredKinds },
     }
     const part = await env.generate(
       'beat_planner',
@@ -608,6 +664,10 @@ async function authorChapterNodes(
     )
     output.nodes.push(...part.nodes)
     output.localAtoms.push(...part.localAtoms)
+    for (const { node } of part.nodes) {
+      if (node.role !== 'route') continue
+      authoredKinds[node.kind] = (authoredKinds[node.kind] ?? 0) + 1
+    }
   }
 
   // Register every declared setback atom (scope 'local') so the stage-8 gate does not flag it as

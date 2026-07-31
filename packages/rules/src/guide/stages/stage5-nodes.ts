@@ -9,6 +9,7 @@
 // setbacks a failure costs, and how the party moves between nodes.
 
 import { Check } from '../json.ts'
+import { COMBAT_BUDGET, COMBAT_FLOOR } from '../graph.ts'
 import { minimalSatisfyingAtoms } from '../guaranteed-route.ts'
 import type { GuaranteedRoute } from '../guaranteed-route.ts'
 import { ENCOUNTER_KINDS } from '../../story/beats.ts'
@@ -46,9 +47,25 @@ export interface Stage5NodesContext {
    * Not one entered at stage 1, 2, 3 or 4, where the hand-offs are governed. The fix needed no
    * new authored field and no new schema: stop discarding what stage 4 already wrote.
    */
-  npcs: { key: string; name: string; role?: string; description?: string }[]
-  /** Places this chapter can stage a node at. Closed vocabulary - a node may pick no other. */
-  locations: { key: string; name: string }[]
+  /**
+   * `clues` is how many of this chapter's ingredients this person is holding.
+   *
+   * WHY THE NODE AUTHOR NEEDS IT (2026-07-31): a clue on a person is released by the reveal gate
+   * in CONVERSATION and nowhere else, so an NPC no scene stages can never hand over what they
+   * know. The roster said nothing about it, and live on The Frayed Threads, Dr. Elara Vance held
+   * two of the chapter's eight clues and appeared in none of its twelve nodes - the stage-8 gate
+   * reported `npc_never_staged` after the fact, which is a warning on a finished guide rather
+   * than a fact the author had while writing.
+   */
+  npcs: { key: string; name: string; role?: string; description?: string; clues?: number }[]
+  /**
+   * Places this chapter can stage a node at. Closed vocabulary - a node may pick no other.
+   *
+   * `clues` counts the ingredients hidden here. Travel is open at runtime, so the party CAN reach
+   * a room no scene visits - but nothing ever points them at it: no open node's pull, arrival line
+   * or affordance mentions it. Evidence there is found only if a player invents the idea.
+   */
+  locations: { key: string; name: string; clues?: number }[]
   /**
    * Titles of the chapter's OTHER objectives, authored in their own calls (2026-07-29).
    *
@@ -73,6 +90,16 @@ export interface Stage5NodesContext {
    */
   scenes: string[]
   partySkills: string[]
+  /**
+   * Route-node kinds already authored for this ADVENTURE, by kind.
+   *
+   * Stage 5 runs once per objective, so "at least one combat somewhere in the adventure" was an
+   * instruction no single call was positioned to follow - each one authors two or three scenes and
+   * has never seen the others. The Frayed Threads shipped with 0 combat nodes and the stage-8 gate
+   * reported `combat_floor_unmet`; live play then force-injects a fight at the climax, which is
+   * pacing by fallback rather than by authoring.
+   */
+  authoredKinds?: Record<string, number>
 }
 
 /** A parsed node plus the raw npc keys the orchestrator resolves to ids against the DB. */
@@ -233,6 +260,7 @@ Rules:
 - Each node has ONE kind: "skill_challenge", "social", "puzzle", or "combat". Vary them - do not make every route a skill_challenge. At least one combat somewhere in the adventure.
 - A "social" node MUST name at least one living NPC by key from the list.
 - A "social" node MUST also author "exits": 2-4 ways the conversation can END, each { "outcome": short_snake_case_name, "description": one line, "tier": "success" | "partial" | "failure" }. At least one must be "success" or "partial", or the scene is one nobody can talk their way out of. These are FLAVOUR, not progression - the story advances either way - so make them read as genuinely different endings to the same conversation ("she_names_the_buyer" / "she_talks_but_wants_paying" / "she_closes_ranks"), never as degrees of the same one.
+- STAGE THE PEOPLE HOLDING THIS OBJECTIVE'S EVIDENCE. A roster entry marked "holds N clues" is carrying evidence written for THIS objective, and the game releases a clue on a person ONLY in conversation with them - so a holder no scene stages is evidence the party is never offered, however well written. One of your routes should reach each holder. Same for a place marked "N clues here": the party can wander in unprompted, but nothing will ever point them at a room no scene uses.
 - CAST ONLY FROM THE ROSTER. The people below are everyone this chapter has. If a scene needs a harbourmaster, a warden, a fence, look for who already holds that role and use them - do NOT write a new named person into narration_seed, label, setback_line or outcome. A name you invent has no row behind it: nobody can talk to them, they hold no disposition, they cannot be staged, and they vanish when the scene ends. Unnamed background figures (a clerk, two dockhands, the crowd) are fine.
 - You do NOT author outcomes, edges, or what a success awards. The engine derives every one of those. You write the FICTION and pick from the menus.
 - narration_seed: 1-2 sentences the narrator opens the scene on, ending on a hook. stakes: one line - what is at risk.
@@ -269,13 +297,16 @@ Respond with ONLY a JSON object:
     const t = String(s ?? '').trim().split(/(?<=[.!?])\s/)[0] ?? ''
     return t.length > 160 ? `${t.slice(0, 157)}...` : t
   }
+  const clueTag = (n: number | undefined, noun: string) => (n && n > 0 ? ` [${noun.replace('N', String(n))}]` : '')
   const npcList = ctx.npcs.length === 0
     ? 'none'
     : `\n${ctx.npcs.map((n) => {
       const who = [n.role && n.role !== 'npc' ? n.role : '', oneLine(n.description)].filter(Boolean).join(' - ')
-      return `  ${n.key} (${n.name})${who ? ` - ${who}` : ''}`
+      return `  ${n.key} (${n.name})${clueTag(n.clues, n.clues === 1 ? 'holds 1 clue' : 'holds N clues')}${who ? ` - ${who}` : ''}`
     }).join('\n')}`
-  const locationList = ctx.locations.map((l) => `${l.key} (${l.name})`).join(', ') || 'none'
+  const locationList = ctx.locations
+    .map((l) => `${l.key} (${l.name})${clueTag(l.clues, l.clues === 1 ? '1 clue here' : 'N clues here')}`)
+    .join(', ') || 'none'
   // The plan comes BEFORE the objectives deliberately: it is the texture the chapter was built
   // from, and a node that reuses its specifics ("her brother's ship") reads as part of the story
   // rather than beside it.
@@ -292,11 +323,27 @@ ${ctx.scenes.map((s, i) => `${i + 1}. ${s}`).join('\n')}
 Other objectives in this chapter, authored SEPARATELY - do not write nodes for them, and do not spend their material on yours: ${(ctx.otherObjectiveTitles ?? []).join(' | ')}
 `
     : ''
+  // What the rest of the adventure already built. One call per objective means nobody can see the
+  // whole shape, and the pacing rules - at least one fight, at most COMBAT_BUDGET - are about the
+  // whole shape. Stated as a running tally rather than an instruction to obey blindly: a forced
+  // fight in a scene that cannot carry one is worse than a warning on the finished guide.
+  const tally = Object.entries(ctx.authoredKinds ?? {}).filter(([, n]) => n > 0)
+  const combatSoFar = ctx.authoredKinds?.combat ?? 0
+  const pacingBlock = ctx.authoredKinds
+    ? `
+Scenes already authored elsewhere in this adventure: ${tally.length > 0 ? tally.map(([k, n]) => `${k} x${n}`).join(', ') : 'none yet - this is the first'}
+${combatSoFar < COMBAT_FLOOR
+      ? `No COMBAT scene exists yet, and an adventure where nobody draws steel is one the game will force a fight into at the climax. If a fight genuinely fits this objective, make one of your routes "combat" - if it does not, leave it to an objective that suits it better.`
+      : combatSoFar >= COMBAT_BUDGET
+        ? `Combat is at its ceiling (${combatSoFar}) - real-time combat is the slowest thing at the table, so author none here.`
+        : `Combat is covered (${combatSoFar}); add another only where a fight is the honest shape of the scene.`}
+`
+    : ''
   const user = `Chapter ${ctx.chapterNumber}: ${ctx.chapterTitle}
 
 ${sceneBlock}Objectives:
 ${objectiveList}
-${siblingBlock}
+${siblingBlock}${pacingBlock}
 Living NPCs available to stage: ${npcList}
 Places available to stage a node at: ${locationList}
 Party skills: ${ctx.partySkills.join(', ') || 'unknown'}`
