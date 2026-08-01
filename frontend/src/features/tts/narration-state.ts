@@ -97,8 +97,14 @@ export function narrationReducer(state: NarrationState, action: NarrationAction)
     case 'silent':
       return { ...state, phase: 'silent' }
     case 'planned': {
-      // Cache hits come back in the response body itself, already playable.
-      let next: NarrationState = { ...state, phase: 'active', serverTimings: action.timings }
+      // Cache hits come back in the response body itself, already playable. The catch-up request
+      // dispatches this a second time; keep the FIRST request's marks, which are the ones that
+      // describe how long the player actually waited.
+      let next: NarrationState = {
+        ...state,
+        phase: 'active',
+        serverTimings: state.serverTimings ?? action.timings,
+      }
       for (const chunk of action.chunks) {
         if (!chunk.url) continue
         next = settle(next, chunk.index, {

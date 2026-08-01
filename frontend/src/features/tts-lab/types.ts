@@ -10,7 +10,12 @@ export interface LabSettings {
   /** Fish requests in flight after the first chunk. 1 is fully sequential. */
   maxInFlight: number
   model: string
-  voiceProfileId: string | null
+  /**
+   * `undefined` means nothing has been picked yet, and the page resolves it to the first available
+   * voice. `null` means silence was chosen deliberately. The two have to be distinguishable, or
+   * choosing "No voice" would be overwritten by the default on the next render.
+   */
+  voiceProfileId: string | null | undefined
   /** Re-synthesize instead of serving the cache, so a run measures synthesis. */
   force: boolean
   maxChars: number
@@ -36,7 +41,7 @@ export const DEFAULT_LAB_SETTINGS: LabSettings = {
   // The lab runs free by default; play uses s2.1-pro. Same model, no TTFA guarantee - so a timing
   // number taken here is a lower bound on the paid engine, not a substitute for it.
   model: 's2.1-pro-free',
-  voiceProfileId: null,
+  voiceProfileId: undefined,
   force: true,
   maxChars: 240,
   unit: 'box',

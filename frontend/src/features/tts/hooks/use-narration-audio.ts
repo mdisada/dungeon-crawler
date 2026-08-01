@@ -71,7 +71,7 @@ export function useNarrationAudio({
     let cancelled = false
     const since = () => performance.now() - startedAt
 
-    const send = async () => {
+    const send = async (isCatchUp: boolean) => {
       const plan = await requestNarration({
         adventureId,
         lineId,
@@ -80,7 +80,10 @@ export function useNarrationAudio({
         model,
         voiceProfileId,
         maxInFlight,
-        force,
+        // NEVER on the catch-up. `force` busts the cache server-side, and firing it mid-run would
+        // delete the very clips and reservations the first request is still producing - including
+        // storage objects already uploaded, whose signed URLs would then 404 on playback.
+        force: force && !isCatchUp,
       })
       if (cancelled) return
       if (plan.silent) {
@@ -112,7 +115,7 @@ export function useNarrationAudio({
       })
       .subscribe((status) => {
         if (cancelled || status !== 'SUBSCRIBED') return
-        void send().catch((err) => {
+        void send(false).catch((err) => {
           if (!cancelled) {
             dispatch({ type: 'error', message: err instanceof Error ? err.message : 'narration failed' })
           }
@@ -123,7 +126,7 @@ export function useNarrationAudio({
     // free - already-synthesized chunks come back with URLs in the response body - and it is what
     // lets a client that reconnected mid-line catch up instead of sitting on a silent box.
     const catchUp = setTimeout(() => {
-      if (!cancelled) void send().catch(() => undefined)
+      if (!cancelled) void send(true).catch(() => undefined)
     }, Math.max(500, deadlineMs * CATCH_UP_FRACTION))
 
     return () => {

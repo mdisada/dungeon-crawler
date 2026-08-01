@@ -133,7 +133,9 @@ export function LabControls({ settings, onChange, profiles, isRunning }: LabCont
             disabled={isRunning}
             onChange={(e) => set('voiceProfileId', e.target.value || null)}
           >
-            <option value="">Adventure fallback chain (silent here - the lab has no adventure)</option>
+            {/* Explicitly opting into silence. The lab has no adventure to fall back to, so this
+                is the only way to reproduce what an unvoiced adventure does - never a default. */}
+            <option value="">No voice - run silently</option>
             {profiles.map((profile) => (
               <option key={profile.id} value={profile.id}>
                 {profile.name}
