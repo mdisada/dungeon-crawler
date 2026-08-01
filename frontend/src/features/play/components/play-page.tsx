@@ -191,8 +191,14 @@ function PlayScreen({ adventure, userId }: { adventure: MemberAdventure; userId:
       isSpectator={game.spectator}
       connection={game.connection}
       fx={game.fx}
+      narrationVolume={volumes.narration}
+      isMuted={volumes.muted}
     >
       <div className="fixed inset-0 z-30 flex flex-col bg-background">
+        {/* Music-only unlock, deliberately. Narration also reports needsAudioUnlock (on
+            reveal, for a caller that wants it), but blocked narration self-heals: the next
+            advance is itself a user gesture, and by then autoplay is permitted. Wiring a second
+            unlock path for a case that clears itself on the next click is not worth the surface. */}
         <PlayHeader
           volumes={volumes}
           onVolumesChange={setVolumes}

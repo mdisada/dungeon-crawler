@@ -67,6 +67,9 @@ function renderInPlay(state: GameState, ui: React.ReactNode, userId = 'u1', role
       isSpectator={false}
       connection="live"
       fx={[]}
+      // Audio off, so the gate is transparent and these assertions describe the reveal alone.
+      narrationVolume={0}
+      isMuted
     >
       {ui}
     </PlayProvider>,

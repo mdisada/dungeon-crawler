@@ -55,6 +55,9 @@ function renderAsDm(state: GameState, node: ReactNode = <DmMainTab />) {
       isSpectator={false}
       connection="live"
       fx={[]}
+      // Audio off, so the gate is transparent and these assertions describe the reveal alone.
+      narrationVolume={0}
+      isMuted
     >
       {node}
     </PlayProvider>,

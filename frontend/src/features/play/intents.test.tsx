@@ -41,6 +41,9 @@ function renderAsAsh(state: GameState, ui: React.ReactNode) {
       isSpectator={false}
       connection="live"
       fx={[]}
+      // Audio off, so the gate is transparent and these assertions describe the reveal alone.
+      narrationVolume={0}
+      isMuted
     >
       {ui}
     </PlayProvider>,

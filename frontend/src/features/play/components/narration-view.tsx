@@ -30,7 +30,7 @@ interface NarrationViewProps {
  */
 export function NarrationView({ scene, dialogue, players }: NarrationViewProps) {
   const { reveal } = usePlay()
-  const { line: active, chunks, visibleCount, isRevealing, advance } = reveal
+  const { line: active, chunks, visibleCount, canAdvance, advance } = reveal
   const current = visibleCount > 0 ? chunks[visibleCount - 1] : ''
 
   return (
@@ -47,9 +47,9 @@ export function NarrationView({ scene, dialogue, players }: NarrationViewProps) 
         type="button"
         aria-hidden
         tabIndex={-1}
-        disabled={!isRevealing}
+        disabled={!canAdvance}
         onClick={advance}
-        className={cn('absolute inset-0', isRevealing ? 'cursor-pointer' : 'cursor-default')}
+        className={cn('absolute inset-0', canAdvance ? 'cursor-pointer' : 'cursor-default')}
       />
 
       <div className="pointer-events-none relative z-10 mx-auto mb-24 mt-auto flex w-full max-w-4xl flex-col gap-3 px-4">
@@ -57,7 +57,7 @@ export function NarrationView({ scene, dialogue, players }: NarrationViewProps) 
         <SceneTextBox
           speaker={active?.speaker ?? null}
           text={current}
-          isRevealing={isRevealing}
+          canAdvance={canAdvance}
           onAdvance={advance}
         />
       </div>

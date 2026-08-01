@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 
 import type { DialogueLine, GameState } from '@rules/state'
 
-import { useLineReveal } from '../hooks/use-line-reveal'
+import { useNarration } from '../hooks/use-narration'
 import { PlayContext } from '../hooks/use-play-context'
 import type { PlayContextInput } from '../hooks/use-play-context'
 import { usePlayMedia } from '../hooks/use-play-media'
@@ -41,8 +41,14 @@ function narratedLine(state: GameState): DialogueLine | null {
 
 export function PlayProvider({ children, ...value }: PlayProviderProps) {
   // One reveal for the whole play screen: the renderer the player clicks and the input row that
-  // waits on them have to agree on how far into the line the table has got.
-  const reveal = useLineReveal(narratedLine(value.state))
+  // waits on them have to agree on how far into the line the table has got. Since F12 it is also
+  // where narration audio is gated - the line on screen is held until its first clip is playable.
+  const reveal = useNarration({
+    adventureId: value.adventure.id,
+    next: narratedLine(value.state),
+    narrationVolume: value.narrationVolume,
+    isMuted: value.isMuted,
+  })
   // One signing pass for the whole screen: the backdrop, the cast on stage and every token on the
   // battle map are all pointing at storage paths that have to become URLs somewhere.
   const media = usePlayMedia(value.state)
@@ -50,7 +56,7 @@ export function PlayProvider({ children, ...value }: PlayProviderProps) {
   const memoized = useMemo(
     () => ({ ...value, reveal, media }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- enumerate the fields, not the rest-object identity
-    [value.adventure, value.userId, value.state, value.version, value.role, value.isSpectator, value.connection, value.fx, reveal, media],
+    [value.adventure, value.userId, value.state, value.version, value.role, value.isSpectator, value.connection, value.fx, value.narrationVolume, value.isMuted, reveal, media],
   )
   return <PlayContext.Provider value={memoized}>{children}</PlayContext.Provider>
 }

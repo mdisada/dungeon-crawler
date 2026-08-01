@@ -13,6 +13,15 @@ export interface LineReveal {
   visibleCount: number
   /** True while the line still has chunks the player has not advanced to. */
   isRevealing: boolean
+  /**
+   * True when the player may advance right now - what the advance chevron is shown on.
+   *
+   * Distinct from `isRevealing` because narration audio gates the two differently: a line with
+   * chunks left is still "revealing" (so the input row keeps the player from typing over the
+   * story) even while the next chunk's audio has not arrived and the chevron is withheld.
+   * Without audio the two are the same thing.
+   */
+  canAdvance: boolean
   advance: () => void
 }
 
@@ -39,14 +48,9 @@ export function useLineReveal(active: DialogueLine | null): LineReveal {
   }, [chunks.length])
 
   const count = reveal.count
-  return useMemo(
-    () => ({
-      line: active,
-      chunks,
-      visibleCount: count,
-      isRevealing: count < chunks.length,
-      advance,
-    }),
-    [active, chunks, count, advance],
-  )
+  return useMemo(() => {
+    const isRevealing = count < chunks.length
+    // Ungated on its own: only useNarration knows whether the next chunk's audio has landed.
+    return { line: active, chunks, visibleCount: count, isRevealing, canAdvance: isRevealing, advance }
+  }, [active, chunks, count, advance])
 }

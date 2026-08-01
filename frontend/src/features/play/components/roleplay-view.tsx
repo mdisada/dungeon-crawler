@@ -27,7 +27,7 @@ interface RoleplayViewProps {
 export function RoleplayView({ scene, dialogue, players }: RoleplayViewProps) {
   const { reveal } = usePlay()
   // The revealed line, not dialogue.activeLineId: the party's own utterances never take the box.
-  const { line: active, chunks, visibleCount, isRevealing, advance } = reveal
+  const { line: active, chunks, visibleCount, canAdvance, advance } = reveal
   const current = visibleCount > 0 ? chunks[visibleCount - 1] : ''
 
   return (
@@ -43,9 +43,9 @@ export function RoleplayView({ scene, dialogue, players }: RoleplayViewProps) {
         type="button"
         aria-hidden
         tabIndex={-1}
-        disabled={!isRevealing}
+        disabled={!canAdvance}
         onClick={advance}
-        className={cn('absolute inset-0', isRevealing ? 'cursor-pointer' : 'cursor-default')}
+        className={cn('absolute inset-0', canAdvance ? 'cursor-pointer' : 'cursor-default')}
       />
 
       {/* mb clears the input row and its suggestion chips, which overlay the bottom. */}
@@ -54,7 +54,7 @@ export function RoleplayView({ scene, dialogue, players }: RoleplayViewProps) {
         <SceneTextBox
           speaker={active?.speaker ?? null}
           text={current}
-          isRevealing={isRevealing}
+          canAdvance={canAdvance}
           onAdvance={advance}
         />
       </div>

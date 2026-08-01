@@ -3,7 +3,7 @@ import { createContext, useContext } from 'react'
 import type { FxEvent, GameState } from '@rules/state'
 
 import type { ConnectionStatus, MemberAdventure, PlayRole } from '../types'
-import type { LineReveal } from './use-line-reveal'
+import type { NarrationDelivery } from './use-narration'
 import type { MediaResolver } from './use-play-media'
 
 /** What the provider is given; `reveal` is derived from it, so it isn't passed in. */
@@ -16,11 +16,14 @@ export interface PlayContextInput {
   isSpectator: boolean
   connection: ConnectionStatus
   fx: FxEvent[]
+  /** Narration audio level. Zero (or muted) means this client neither waits for nor asks for it. */
+  narrationVolume: number
+  isMuted: boolean
 }
 
 export interface PlayContextValue extends PlayContextInput {
   /** Shared sentence pace for the active line - the renderers drive it, the input row reads it. */
-  reveal: LineReveal
+  reveal: NarrationDelivery
   /** MediaRef -> signed URL, re-signed on a timer. See usePlayMedia. */
   media: MediaResolver
 }

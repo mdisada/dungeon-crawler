@@ -50,6 +50,9 @@ function scene(state: GameState) {
       isSpectator={false}
       connection="live"
       fx={[]}
+      // Audio off, so the gate is transparent and these assertions describe the reveal alone.
+      narrationVolume={0}
+      isMuted
     >
       <NarrationView scene={state.scene} dialogue={state.dialogue} players={state.players} />
     </PlayProvider>

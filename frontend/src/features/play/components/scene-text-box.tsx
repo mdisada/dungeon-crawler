@@ -5,7 +5,12 @@ interface SceneTextBoxProps {
   speaker: string | null
   /** The chunk the player has advanced to - never the whole line. */
   text: string
-  isRevealing: boolean
+  /**
+   * Whether the advance chevron is offered. Not the same as "the line has more to show": since
+   * F12 a line can have chunks left while the next one's narration audio is still being made, and
+   * the chevron waits for it.
+   */
+  canAdvance: boolean
   onAdvance: () => void
 }
 
@@ -18,7 +23,7 @@ interface SceneTextBoxProps {
  * The advance chevron rides beside the text rather than under it - stacking it there sandwiched it
  * against the input row below.
  */
-export function SceneTextBox({ speaker, text, isRevealing, onAdvance }: SceneTextBoxProps) {
+export function SceneTextBox({ speaker, text, canAdvance, onAdvance }: SceneTextBoxProps) {
   if (!text && !speaker) return null
 
   return (
@@ -33,7 +38,7 @@ export function SceneTextBox({ speaker, text, isRevealing, onAdvance }: SceneTex
           <p className="min-h-14 flex-1 text-base leading-relaxed text-white sm:text-lg" aria-live="polite">
             {text}
           </p>
-          {isRevealing && (
+          {canAdvance && (
             <button
               type="button"
               onClick={onAdvance}

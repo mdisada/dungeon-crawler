@@ -132,7 +132,7 @@ export function TtsLabPage() {
           <SceneTextBox
             speaker={null}
             text={current}
-            isRevealing={isRevealing && gateOpen}
+            canAdvance={isRevealing && gateOpen}
             onAdvance={run.advance}
           />
         )}
