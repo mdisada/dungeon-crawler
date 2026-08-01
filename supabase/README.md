@@ -59,6 +59,25 @@ See `docs/DECISIONS.md` (2026-07-17) for why.
 - `seed/seed-demo-adventure.mjs` — one `demo=true` guide_ready adventure with fixture guide
   content (chapter, objectives, NPCs, mapped location, endings) so the Phase 4 scripted demo
   session runs with zero LLM spend. Same usage; idempotent per user+title.
+- `seed/seed-builtin-voices.mjs` — uploads `voices/carl.wav` (normalized to 16 kHz mono WAV,
+  cropped to 15 s) and creates the ownerless `voice_profiles` row every account can narrate with.
+  Goes over the REST/Storage API rather than a db-url, since a clip upload needs Storage:
+  `SUPABASE_SERVICE_ROLE_KEY=... node supabase/seed/seed-builtin-voices.mjs https://<ref>.supabase.co`
+
+## Narration audio retention
+
+`20260801170000_narration_audio.sql` schedules a nightly pg_cron job that posts to the
+`narration-sweep` edge function to delete narration clips older than 7 days. The job reads the
+project URL and service key from Vault so no secret is committed. Run these **once** per project —
+until they exist the job posts to a null URL, which is a silent no-op, not a failure:
+
+```sql
+select vault.create_secret('https://<project-ref>.supabase.co', 'project_url');
+select vault.create_secret('<service-role-key>', 'service_role_key');
+```
+
+Check it is scheduled with `select * from cron.job;`, and sweep by hand any time with a POST to
+`/functions/v1/narration-sweep` carrying the service-role key as the bearer token.
 
 ## Edge functions
 

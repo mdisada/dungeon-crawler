@@ -15,6 +15,7 @@ import { MapEditorPage } from '@/features/map-editor'
 import { JoinPage, PlayPage } from '@/features/play'
 import { ReplayPage, ReplayPickerPage } from '@/features/replay'
 import { SettingsPage } from '@/features/settings'
+import { TtsLabPage } from '@/features/tts-lab'
 
 function App() {
   const { session, isLoading } = useSession()
@@ -44,6 +45,7 @@ function App() {
               <Route path="/combat-lab" element={<CombatLabPage />} />
               <Route path="/adventure-lab" element={<AdventureLabPage />} />
               <Route path="/assets-lab" element={<AssetsLabPage />} />
+              <Route path="/tts-lab" element={<TtsLabPage />} />
             </Routes>
           ) : (
             <AuthScreen />

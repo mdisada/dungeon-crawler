@@ -333,7 +333,11 @@ async function resolveFishReference(
   if (dlError || !clip) throw new Error('Could not read the voice clip')
 
   const referenceId = await createFishVoice((profile.name as string) ?? 'voice', clip)
-  const { error: updateError } = await userClient
+  // Cached with the service role, not the caller's client. The SELECT above already proved the
+  // caller may use this profile; the built-in narrator voice (user_id null, added 2026-08-01) is
+  // readable by everyone and writable by no one, so a user-scoped UPDATE silently matches zero
+  // rows and every preview would re-register the same clip with Fish.
+  const { error: updateError } = await createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     .from('voice_profiles')
     .update({ fish_reference_id: referenceId })
     .eq('id', voiceProfileId)
