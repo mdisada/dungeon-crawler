@@ -6,7 +6,6 @@ import type { VoiceProfile } from '../types'
 // (F04 SS5.1) -- features/tts took over creating and reading them because both generation routes
 // need them; features/guide keeps narrator *assignment*, which is adventure domain.
 const VOICES_BUCKET = 'voices'
-const SIGNED_URL_TTL_SECONDS = 3600
 
 export async function listVoiceProfiles(): Promise<VoiceProfile[]> {
   const { data, error } = await supabase
@@ -15,14 +14,6 @@ export async function listVoiceProfiles(): Promise<VoiceProfile[]> {
     .order('created_at', { ascending: false })
   if (error) throw error
   return (data ?? []).map((row) => ({ id: row.id, name: row.name, storagePath: row.storage_path }))
-}
-
-export async function getVoiceClipUrl(storagePath: string): Promise<string> {
-  const { data, error } = await supabase.storage
-    .from(VOICES_BUCKET)
-    .createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS)
-  if (error) throw error
-  return data.signedUrl
 }
 
 /** Normalizes to 16 kHz mono WAV (cropping past 15s) before storing, so every route gets one shape. */

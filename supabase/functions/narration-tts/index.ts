@@ -125,11 +125,17 @@ Deno.serve(async (req) => {
     if (!isAllowedMediaModel(model)) return json(403, { error: allowlistMessage(model) })
     if (!isFishModel(model)) return json(400, { error: `Narration requires a Fish engine, got '${model}'` })
 
-    const profileId = await resolveVoiceProfileId(service, {
-      adventureId,
-      npcId: typeof body.npc_id === 'string' ? body.npc_id : null,
-      explicitProfileId: typeof body.voice_profile_id === 'string' ? body.voice_profile_id : null,
-    })
+    let profileId: string | null
+    try {
+      profileId = await resolveVoiceProfileId(service, {
+        adventureId,
+        npcId: typeof body.npc_id === 'string' ? body.npc_id : null,
+        explicitProfileId: typeof body.voice_profile_id === 'string' ? body.voice_profile_id : null,
+        callerId: userId,
+      })
+    } catch (err) {
+      return json(403, { error: err instanceof Error ? err.message : 'Voice not available' })
+    }
     // No voice assigned anywhere is a deliberate state, not an error: the line stays silent, the
     // client ungates immediately, and nothing is spent. This is the feature's opt-in switch.
     if (!profileId) {

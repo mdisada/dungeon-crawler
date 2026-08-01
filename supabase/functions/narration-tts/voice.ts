@@ -22,9 +22,28 @@ export interface ResolvedVoice {
  */
 export async function resolveVoiceProfileId(
   service: SupabaseClient,
-  opts: { adventureId: string | null; npcId: string | null; explicitProfileId: string | null },
+  opts: {
+    adventureId: string | null
+    npcId: string | null
+    explicitProfileId: string | null
+    callerId: string
+  },
 ): Promise<string | null> {
-  if (opts.explicitProfileId) return opts.explicitProfileId
+  // An explicit id comes from the CLIENT (the guide's voice picker auditioning a voice, the TTS
+  // lab), and everything downstream runs as the service role, which bypasses RLS. So it is checked
+  // here or not at all: you may use a voice you own, or a built-in one, and nothing else. The
+  // fallbacks below need no such check - adventure membership was already proven by the caller.
+  if (opts.explicitProfileId) {
+    const { data: profile } = await service
+      .from('voice_profiles')
+      .select('user_id')
+      .eq('id', opts.explicitProfileId)
+      .maybeSingle()
+    if (!profile) throw new Error('Voice profile not found')
+    const isBuiltIn = profile.user_id === null
+    if (!isBuiltIn && profile.user_id !== opts.callerId) throw new Error('That voice is not yours')
+    return opts.explicitProfileId
+  }
   if (!opts.adventureId) return null
 
   if (opts.npcId) {

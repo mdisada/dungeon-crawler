@@ -1,16 +1,12 @@
 export { requestNarration } from './api/narrate'
-export { previewVoice } from './api/preview-voice'
-export type { VoicePreview } from './api/preview-voice'
 export { synthesize } from './api/synthesize'
 export { settledCount } from './narration-state'
 export type { NarrationChunkState, NarrationState } from './narration-state'
 export { useNarrationAudio } from './hooks/use-narration-audio'
-export {
-  deleteVoiceProfile,
-  getVoiceClipUrl,
-  listVoiceProfiles,
-  uploadVoiceProfile,
-} from './api/voice-profiles'
+export { deleteVoiceProfile, listVoiceProfiles, uploadVoiceProfile } from './api/voice-profiles'
+export { useVoiceSample } from './hooks/use-voice-sample'
+export type { VoiceSample } from './hooks/use-voice-sample'
+export { VOICE_SAMPLE_COUNT, VOICE_SAMPLE_LINES } from './voice-samples'
 export { useSynthesis } from './hooks/use-synthesis'
 export type { TtsRunOutcome } from './hooks/use-synthesis'
 export { useVoiceProfiles } from './hooks/use-voice-profiles'
