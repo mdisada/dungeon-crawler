@@ -6,6 +6,7 @@ import {
   exitReplay,
   fetchReplayStatus,
   listReplayBattles,
+  restartAdventure,
   startReplayCombat,
   startReplaySession,
 } from '../api/replay'
@@ -23,6 +24,7 @@ export interface ReplayControl {
   startSession: () => void
   endSession: () => void
   startCombat: (battle: ReplayBattle) => void
+  restart: () => void
 }
 
 /**
@@ -106,6 +108,12 @@ export function useReplayControl(adventureId: string): ReplayControl {
       run('start-combat', async () => {
         const { combatants } = await startReplayCombat(adventureId, battle.objectiveId, battle.label)
         return `Fight started with ${combatants} combatants.`
+      }),
+    restart: () =>
+      run('restart', async () => {
+        const { baseline, rows_restored: rows } = await restartAdventure(adventureId)
+        const caveat = baseline === 'backfill' ? ' (reconstructed baseline — approximate)' : ''
+        return `Guide restored: ${rows} rows${caveat}. Start a session to play it again.`
       }),
   }
 }

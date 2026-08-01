@@ -91,6 +91,17 @@ export async function activate(service: SupabaseClient, adventureId: string, use
     .eq('id', adventureId)
   assertOk(updateError, 'activation failed')
 
+  // The guide -> play transition is the only moment the guide exists un-played, so it is the only
+  // moment a restart baseline can be captured exactly (2026-08-01). Best-effort by design: a
+  // failed capture costs a future replay, and must never cost this activation.
+  if (adventure.status === 'guide_ready') {
+    const { error: snapshotError } = await service.rpc('capture_guide_snapshot', {
+      p_adventure_id: adventureId,
+      p_source: 'activate',
+    })
+    if (snapshotError) console.error('guide snapshot capture failed', snapshotError)
+  }
+
   await ensureStateRow(service, adventureId)
   return { status: 200, body: { ok: true, title } }
 }

@@ -2,6 +2,7 @@
 // must never do is offer a command the server will refuse - a fight cannot start without an open
 // session, and a second one cannot start on top of a live one.
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -10,11 +11,13 @@ import type { ReplayBattle, ReplayStatus } from './types'
 const status = vi.hoisted(() => ({ current: null as ReplayStatus | null }))
 const battles = vi.hoisted(() => ({ current: [] as ReplayBattle[] }))
 const startCombat = vi.hoisted(() => vi.fn())
+const restart = vi.hoisted(() => vi.fn())
 
 vi.mock('./api/replay', () => ({
   fetchReplayStatus: () => Promise.resolve(status.current),
   listReplayBattles: () => Promise.resolve(battles.current),
   startReplayCombat: startCombat,
+  restartAdventure: restart,
   enterReplay: vi.fn(),
   exitReplay: vi.fn(),
   startReplaySession: vi.fn(),
@@ -52,6 +55,8 @@ beforeEach(() => {
   status.current = IDLE
   battles.current = [BATTLE]
   startCombat.mockReset()
+  restart.mockReset()
+  restart.mockResolvedValue({ baseline: 'activate', rows_restored: 42 })
 })
 
 afterEach(cleanup)
@@ -99,6 +104,25 @@ describe('ReplayDevPanel', () => {
     battles.current = []
     renderPanel()
     expect(await screen.findByText('This adventure authored no battles.')).toBeTruthy()
+  })
+
+  it('will not wipe a playthrough on one click', async () => {
+    const user = userEvent.setup()
+    renderPanel()
+    await user.click(await screen.findByRole('button', { name: 'Restart from guide' }))
+    expect(restart).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Wipe and restore' }))
+    expect(restart).toHaveBeenCalledWith('adv-1')
+  })
+
+  it('flags a reconstructed baseline as approximate', async () => {
+    restart.mockResolvedValue({ baseline: 'backfill', rows_restored: 30 })
+    const user = userEvent.setup()
+    renderPanel()
+    await user.click(await screen.findByRole('button', { name: 'Restart from guide' }))
+    await user.click(screen.getByRole('button', { name: 'Wipe and restore' }))
+    expect(await screen.findByText(/reconstructed baseline — approximate/)).toBeTruthy()
   })
 
   it('offers Start session in the lobby and End session once live', async () => {

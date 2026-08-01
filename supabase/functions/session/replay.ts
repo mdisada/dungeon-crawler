@@ -18,7 +18,7 @@ import type { AgentEnv } from './agents.ts'
 import { startLiveCombat } from './combat.ts'
 import { activeEncounter, newEncounter, openInteractiveCombat, openEncounter, specState } from './encounters.ts'
 import type { StoredBeatSpec } from './encounters.ts'
-import { loadContext, loadState, logEvent } from './util.ts'
+import { broadcast, ensureStateRow, loadContext, loadState, logEvent } from './util.ts'
 
 const LAB_EMAILS = ['mig.isada@gmail.com', 'madisada@gmail.com']
 
@@ -179,6 +179,61 @@ async function startCombat(
   return { status: 200, body: { ok: true, encounter_id: encounter.id, combatants: started.engine.combatants.length } }
 }
 
+interface SnapshotRow {
+  source: 'activate' | 'backfill'
+  captured_at: string
+}
+
+async function snapshotRow(service: SupabaseClient, adventureId: string): Promise<SnapshotRow | null> {
+  const { data } = await service
+    .from('guide_snapshots')
+    .select('source, captured_at')
+    .eq('adventure_id', adventureId)
+    .maybeSingle()
+  return (data as SnapshotRow | null) ?? null
+}
+
+/**
+ * Put the adventure back to its guide and clear the playthrough.
+ *
+ * An adventure activated before the snapshot mechanism existed has no baseline, so one is
+ * reconstructed first (`backfill`) - best-effort by construction, since rows the story invented
+ * are only distinguishable by having been created after play began. Callers are told which kind
+ * of baseline was used.
+ */
+async function restart(service: SupabaseClient, adventureId: string): Promise<Result> {
+  let snapshot = await snapshotRow(service, adventureId)
+  if (!snapshot) {
+    const { error } = await service.rpc('capture_guide_snapshot', {
+      p_adventure_id: adventureId,
+      p_source: 'backfill',
+    })
+    if (error) return { status: 500, body: { error: `Baseline capture failed: ${error.message}` } }
+    snapshot = await snapshotRow(service, adventureId)
+  }
+
+  const { data: restored, error: restartError } = await service.rpc('restart_adventure', {
+    p_adventure_id: adventureId,
+  })
+  if (restartError) return { status: 500, body: { error: restartError.message } }
+
+  // The restart dropped adventure_state with the rest of the playthrough; the initial GameState
+  // is TypeScript's to define, not SQL's, so the bootstrap happens here.
+  await ensureStateRow(service, adventureId)
+
+  await logEvent(service, adventureId, null, 'adventure_restarted', {
+    baseline: snapshot?.source ?? 'unknown',
+    rows_restored: restored ?? 0,
+  })
+  // Every client is now holding state for a playthrough that no longer exists.
+  await broadcast(`game:${adventureId}`, 'resync_required', { state_version: 0 })
+
+  return {
+    status: 200,
+    body: { ok: true, baseline: snapshot?.source ?? 'unknown', rows_restored: restored ?? 0 },
+  }
+}
+
 export async function replayControl(
   service: SupabaseClient,
   adventureId: string,
@@ -209,6 +264,8 @@ export async function replayControl(
       return exit(service, adventureId)
     case 'battles':
       return listBattles(service, adventureId)
+    case 'restart':
+      return restart(service, adventureId)
     case 'start_combat': {
       const objectiveId = String(body.objective_id ?? '')
       if (!objectiveId) return { status: 400, body: { error: 'objective_id required' } }

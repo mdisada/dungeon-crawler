@@ -24,6 +24,7 @@ export function ReplayDevPanel({ adventureId, adventureStatus }: ReplayDevPanelP
   const control = useReplayControl(adventureId)
   const [open, setOpen] = useState(true)
   const [battleKey, setBattleKey] = useState<string | null>(null)
+  const [confirmRestart, setConfirmRestart] = useState(false)
 
   const selected = control.battles.find((b) => b.encounterId === battleKey) ?? null
   const sessionLive = control.status?.sessionStatus === 'active'
@@ -34,7 +35,7 @@ export function ReplayDevPanel({ adventureId, adventureStatus }: ReplayDevPanelP
       <Button
         size="sm"
         variant="secondary"
-        className="fixed bottom-3 left-3 z-[60] shadow-lg"
+        className="fixed bottom-3 left-3 z-60 shadow-lg"
         onClick={() => setOpen(true)}
       >
         <ChevronUp className="mr-1 size-3" />
@@ -46,7 +47,7 @@ export function ReplayDevPanel({ adventureId, adventureStatus }: ReplayDevPanelP
   return (
     <aside
       aria-label="Replay sandbox controls"
-      className="fixed bottom-3 left-3 z-[60] flex w-80 flex-col gap-3 rounded-lg border bg-card/95 p-3 text-sm shadow-2xl backdrop-blur"
+      className="fixed bottom-3 left-3 z-60 flex w-80 flex-col gap-3 rounded-lg border bg-card/95 p-3 text-sm shadow-2xl backdrop-blur"
     >
       <div className="flex items-center justify-between">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -136,6 +137,37 @@ export function ReplayDevPanel({ adventureId, adventureStatus }: ReplayDevPanelP
         >
           {control.busy === 'start-combat' ? 'Rolling initiative…' : 'Start fight'}
         </Button>
+      </section>
+
+      <section aria-label="Restart from guide" className="border-t pt-2">
+        {confirmRestart ? (
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs text-muted-foreground">
+              Deletes this playthrough — sessions, log, checkpoints, and everything the story
+              invented — and restores the guide. Characters and seats are kept.
+            </p>
+            <div className="flex gap-1.5">
+              <Button
+                size="xs"
+                variant="destructive"
+                disabled={busy}
+                onClick={() => {
+                  setConfirmRestart(false)
+                  control.restart()
+                }}
+              >
+                {control.busy === 'restart' ? 'Restoring…' : 'Wipe and restore'}
+              </Button>
+              <Button size="xs" variant="ghost" onClick={() => setConfirmRestart(false)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button size="xs" variant="outline" disabled={busy} onClick={() => setConfirmRestart(true)}>
+            Restart from guide
+          </Button>
+        )}
       </section>
 
       {control.error && (

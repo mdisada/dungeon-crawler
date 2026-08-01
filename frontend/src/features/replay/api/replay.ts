@@ -101,6 +101,16 @@ export function startReplayCombat(
   })
 }
 
+/**
+ * Wipe the playthrough and restore the guide. `baseline` says how trustworthy the restored guide
+ * is: 'activate' was captured before anyone played, 'backfill' was reconstructed after the fact.
+ */
+export function restartAdventure(
+  adventureId: string,
+): Promise<{ baseline: 'activate' | 'backfill' | 'unknown'; rows_restored: number }> {
+  return callSession({ action: 'replay_control', adventure_id: adventureId, replay_command: 'restart' })
+}
+
 export function startReplaySession(adventureId: string): Promise<{ session_id: string; index: number }> {
   return callSession({ action: 'start_session', adventure_id: adventureId })
 }
