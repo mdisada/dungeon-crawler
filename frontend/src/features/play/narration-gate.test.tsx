@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { initialGameState } from '@rules/state'
@@ -24,7 +25,14 @@ const audio = {
   canAdvance: (): boolean => true,
 }
 
-vi.mock('@/features/tts', () => ({ useNarrationAudio: () => audio }))
+// Synthesis for the line the player has not reached yet, started while they read this one.
+// Hoisted with the vi.mock factory, which is lifted above every other statement in this file.
+const { requestNarration, warmNarrationVoice } = vi.hoisted(() => ({
+  requestNarration: vi.fn(() => Promise.resolve({ silent: true, chunks: [] })),
+  warmNarrationVoice: vi.fn(() => Promise.resolve()),
+}))
+
+vi.mock('@/features/tts', () => ({ useNarrationAudio: () => audio, requestNarration, warmNarrationVoice }))
 
 const adventure = {
   id: 'adv-1',
@@ -42,7 +50,7 @@ const LONG =
   'come back. Somewhere ahead, past the reach of the flame, something displaces enough of it to ' +
   'send one slow ring travelling out toward your boots.'
 
-function stateWith(lines: DialogueLine[], activeLineId: string): GameState {
+function stateWith(lines: DialogueLine[], activeLineId: string | null): GameState {
   const state = initialGameState()
   state.session = { id: 's1', index: 1, status: 'active', recap: null }
   state.players.list = [
@@ -60,7 +68,7 @@ function stateWith(lines: DialogueLine[], activeLineId: string): GameState {
   return state
 }
 
-function scene(state: GameState) {
+function scene(state: GameState, isMuted = false) {
   return (
     <PlayProvider
       adventure={adventure}
@@ -71,8 +79,8 @@ function scene(state: GameState) {
       isSpectator={false}
       connection="live"
       fx={[]}
-      narrationVolume={0.9}
-      isMuted={false}
+      narrationVolume={isMuted ? 0 : 0.9}
+      isMuted={isMuted}
     >
       <NarrationView scene={state.scene} dialogue={state.dialogue} players={state.players} />
     </PlayProvider>
@@ -86,6 +94,8 @@ beforeEach(() => {
   audio.canReveal = true
   audio.settled = 99
   audio.playSequence.mockClear()
+  requestNarration.mockClear()
+  warmNarrationVoice.mockClear()
 })
 
 // Explicit because the project's vitest config does not set `globals`, so Testing Library's
@@ -94,7 +104,8 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('holding a new line for its first clip', () => {
-  it('keeps the previous beat on screen until the incoming line has audio', () => {
+  it('keeps the previous beat on screen until the incoming line has audio', async () => {
+    const user = userEvent.setup()
     audio.canReveal = false
     const { rerender } = render(scene(stateWith([first], 'line-1')))
 
@@ -106,9 +117,13 @@ describe('holding a new line for its first clip', () => {
     rerender(scene(stateWith([first], 'line-1')))
     expect(screen.getByText(first.text)).toBeInTheDocument()
 
-    // A second line lands while its audio is still being made: the first must stay put.
-    audio.canReveal = false
+    // A second line lands. It queues behind the first, which the player has not clicked past.
     rerender(scene(stateWith([first, second], 'line-2')))
+    expect(screen.getByText(first.text)).toBeInTheDocument()
+
+    // They click on, and the second line is held until its first clip is playable.
+    audio.canReveal = false
+    await user.click(screen.getByRole('button', { name: /show more of this line/i }))
     expect(screen.getByText(first.text)).toBeInTheDocument()
 
     audio.canReveal = true
@@ -148,5 +163,38 @@ describe('the advance chevron', () => {
     render(scene(stateWith([second], 'line-2')))
     // Box 0 of the long line is three sentences under the `lead` split, queued back to back.
     expect(audio.playSequence).toHaveBeenCalledWith([0, 1, 2])
+  })
+})
+
+describe('synthesis for the line queued behind the one being read', () => {
+  it('is requested while the player is still on the current line', () => {
+    const { rerender } = render(scene(stateWith([first], 'line-1')))
+    expect(requestNarration).not.toHaveBeenCalled()
+
+    // line-2 lands and queues. It is asked for NOW, so its first clip is not a fresh wait when the
+    // player clicks on. The chunks are the `lead` split - exactly what the real request sends.
+    rerender(scene(stateWith([first, second], 'line-2')))
+    expect(requestNarration).toHaveBeenCalledTimes(1)
+    expect(requestNarration).toHaveBeenCalledWith(
+      expect.objectContaining({ lineId: 'line-2', chunks: expect.arrayContaining([expect.any(String)]) }),
+    )
+
+    // Once per line, however many state broadcasts arrive behind it.
+    rerender(scene(stateWith([first, second], 'line-2')))
+    expect(requestNarration).toHaveBeenCalledTimes(1)
+  })
+
+  it('is not requested at all when the player has muted narration', () => {
+    const { rerender } = render(scene(stateWith([first], 'line-1'), true))
+    rerender(scene(stateWith([first, second], 'line-2'), true))
+    expect(requestNarration).not.toHaveBeenCalled()
+    expect(warmNarrationVoice).not.toHaveBeenCalled()
+  })
+
+  it('registers the narrator voice with Fish before there is a line to speak', () => {
+    // Nothing has been staged yet - the table is still in the lobby - and the ~9s first-use
+    // registration is already under way rather than sitting in front of the session's first line.
+    render(scene(stateWith([], null)))
+    expect(warmNarrationVoice).toHaveBeenCalledWith('adv-1')
   })
 })

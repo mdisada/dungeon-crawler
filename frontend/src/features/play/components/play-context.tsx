@@ -12,40 +12,41 @@ interface PlayProviderProps extends PlayContextInput {
 }
 
 /**
- * The line the scene box delivers: the active line, unless it is a party utterance.
+ * Every line the scene box may still deliver, oldest first, ending at the active one.
  *
- * Every say route stages the player's own words as a dialogue line and points activeLineId at
- * them, so the box would echo what the player just sent and make them click past it to reach the
- * DM's reply. Skipping back to the last narrated line means the previous beat simply stays up
- * until the reply lands - and because the revealed line's id never changes while the DM thinks,
- * the player does not lose their place in it. The full transcript, party lines included, is the
- * sidebar's story log.
+ * A QUEUE rather than "the active line" (2026-08-01). The server points activeLineId at the newest
+ * line it wrote, so a beat the player had not finished used to be replaced by the one after it.
+ * Session start is where that showed: it stages the recap and the party's intros in one write, then
+ * the entry-giver's scene lands seconds later and moved the box to it, so most of the opening was
+ * never read. The player now walks the queue; new lines land behind where they are.
+ *
+ * Party utterances are dropped, not queued. Every say route stages the player's own words and
+ * points activeLineId at them, and the box echoing what they just typed is not a beat to read. The
+ * full transcript, party lines included, is the sidebar's story log.
  *
  * A null activeLineId still means an empty box: the server clears it deliberately (staging a
  * social scene, ending a session) and a stale line must not creep back in.
  */
-function narratedLine(state: GameState): DialogueLine | null {
+function narratableQueue(state: GameState): DialogueLine[] {
   const { lines, activeLineId } = state.dialogue
-  if (!activeLineId) return null
+  if (!activeLineId) return []
   const activeIndex = lines.findIndex((line) => line.id === activeLineId)
-  if (activeIndex < 0) return null
+  if (activeIndex < 0) return []
 
   const partyNames = new Set(state.players.list.map((player) => player.name))
-  for (let i = activeIndex; i >= 0; i--) {
-    const line = lines[i]
-    const isPartyLine = line.npcId == null && line.speaker != null && partyNames.has(line.speaker)
-    if (!isPartyLine) return line
-  }
-  return null
+  return lines
+    .slice(0, activeIndex + 1)
+    .filter((line) => !(line.npcId == null && line.speaker != null && partyNames.has(line.speaker)))
 }
 
 export function PlayProvider({ children, ...value }: PlayProviderProps) {
+  const queue = useMemo(() => narratableQueue(value.state), [value.state])
   // One reveal for the whole play screen: the renderer the player clicks and the input row that
   // waits on them have to agree on how far into the line the table has got. Since F12 it is also
   // where narration audio is gated - the line on screen is held until its first clip is playable.
   const reveal = useNarration({
     adventureId: value.adventure.id,
-    next: narratedLine(value.state),
+    queue,
     narrationVolume: value.narrationVolume,
     isMuted: value.isMuted,
   })

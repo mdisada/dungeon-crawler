@@ -13,6 +13,22 @@ import type { NarrateArgs, NarrationPlan } from '../types'
  * chain (NPC -> adventure narrator -> nothing), so this line is not spoken and the caller should
  * ungate immediately.
  */
+/**
+ * Registers the adventure's narrator voice with Fish without synthesizing anything.
+ *
+ * A built-in voice ships with no `fish_reference_id`, so the first line to use one pays ~9s in
+ * Fish's POST /model before a word is spoken. Sent when the play screen mounts, that cost lands
+ * while the table is still in the lobby. Idempotent and free once the id is cached; best-effort,
+ * because the real request re-does the same resolution anyway.
+ */
+export async function warmNarrationVoice(adventureId: string): Promise<void> {
+  await callEdgeFunction('narration-tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ adventure_id: adventureId, warm: true }),
+  })
+}
+
 export async function requestNarration({
   adventureId,
   lineId,

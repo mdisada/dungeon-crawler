@@ -81,9 +81,40 @@ describe('the scene box', () => {
     // Still on the sentence they had advanced to - not rewound to the top of the line.
     expect(screen.getByText(new RegExp(SECOND))).toBeInTheDocument()
 
-    // The DM's reply lands and takes the box.
+    // The DM's reply lands. It queues behind the sentence being read rather than taking the box.
     rerender(scene(stateWith([narration, partyLine, reply], 'l3')))
+    expect(screen.getByText(new RegExp(SECOND))).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Show more of this line' }))
     expect(screen.getByText(/The statues do not turn to watch you/)).toBeInTheDocument()
+  })
+
+  // Session start writes the recap and points activeLineId at it, then the entry-giver's scene is
+  // staged seconds later and moves activeLineId on. Before the queue, that second write took the
+  // box - so most of the opening was never read (2026-08-01).
+  it('reads out a line staged on top of an unread one, oldest first', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(scene(stateWith([narration], 'l1')))
+    expect(screen.getByText(new RegExp(FIRST))).toBeInTheDocument()
+
+    rerender(scene(stateWith([narration, reply], 'l3')))
+    expect(screen.getByText(new RegExp(FIRST))).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Show more of this line' }))
+    expect(screen.getByText(new RegExp(SECOND))).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Show more of this line' }))
+    expect(screen.getByText(/The statues do not turn to watch you/)).toBeInTheDocument()
+    // Caught up: nothing left to advance to.
+    expect(screen.queryByRole('button', { name: 'Show more of this line' })).not.toBeInTheDocument()
+  })
+
+  // A player opening the page mid-session starts at the live beat; the session so far is the
+  // sidebar's story log, not a backlog to click through.
+  it('starts a fresh mount at the active line, not at the top of the history', () => {
+    render(scene(stateWith([narration, partyLine, reply], 'l3')))
+    expect(screen.getByText(/The statues do not turn to watch you/)).toBeInTheDocument()
+    expect(screen.queryByText(new RegExp(FIRST))).not.toBeInTheDocument()
   })
 
   it('empties when the server clears the active line', () => {

@@ -22,7 +22,7 @@ export interface PlayContextInput {
 }
 
 export interface PlayContextValue extends PlayContextInput {
-  /** Shared sentence pace for the active line - the renderers drive it, the input row reads it. */
+  /** Shared pace through the line queue - the renderers drive it, the input row reads it. */
   reveal: NarrationDelivery
   /** MediaRef -> signed URL, re-signed on a timer. See usePlayMedia. */
   media: MediaResolver

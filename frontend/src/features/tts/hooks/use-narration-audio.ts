@@ -28,15 +28,15 @@ export function useNarrationAudio({
   const [needsUnlock, setNeedsUnlock] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const queueRef = useRef<number[]>([])
+  // True when the queue is parked on a chunk that is still being synthesized - see `step`.
+  const waitingRef = useRef(false)
   const startedAtRef = useRef(0)
   // `play` must stay stable for callers that hand it to memoized children, so it reads the latest
   // state through a ref rather than closing over it. Mirrored in an effect, not during render:
   // playback is only ever started from an event handler or a later effect, both of which run after
-  // this one has committed the current state.
+  // this one has committed the current state. That effect is also where a parked queue resumes,
+  // so it lives below `step`.
   const stateRef = useRef<NarrationState>(state)
-  useEffect(() => {
-    stateRef.current = state
-  }, [state])
 
   // The chunk texts identify a request, but the array's identity changes every render. Round-trip
   // through JSON so the effect re-runs on a content change and only on a content change.
@@ -158,39 +158,65 @@ export function useNarrationAudio({
 
   // One box can map to more than one clip when synthesis is per sentence, so playback is a queue.
   // In the default per-box mode every queue has exactly one entry.
-  const playSequence = useCallback((indices: number[]) => {
+  const step = useCallback(function step() {
     const audio = audioRef.current
     if (!audio) return
-    queueRef.current = [...indices]
-    const step = () => {
-      const next = queueRef.current.shift()
-      if (next === undefined) {
-        audio.onended = null
-        return
-      }
-      const url = playableUrl(stateRef.current, next)
-      // A settled-but-unplayable chunk (failed or timed out) is skipped, not waited on - the rest
-      // of the box still reads aloud.
-      if (!url) {
-        step()
-        return
-      }
-      audio.src = url
-      audio.currentTime = 0
-      audio.onended = step
-      audio.play().then(
-        () => setNeedsUnlock(false),
-        () => setNeedsUnlock(true),
-      )
+    const next = queueRef.current[0]
+    if (next === undefined) {
+      audio.onended = null
+      waitingRef.current = false
+      return
     }
-    audio.pause()
-    step()
+    // Still being synthesized: PARK, do not drop it. Under `lead` the first box is several
+    // sentences and is revealed on the first one, so the rest are routinely still in flight when
+    // that clip ends - skipping them made the narrator fall silent mid-paragraph at session start,
+    // which is exactly where the split was introduced to help. Resumed by the effect below. The
+    // per-chunk deadline guarantees it ends: a chunk that never arrives settles as `timeout` and
+    // is skipped by the check under this one.
+    if (stateRef.current.chunks[next]?.status === 'pending') {
+      waitingRef.current = true
+      return
+    }
+    queueRef.current.shift()
+    waitingRef.current = false
+    const url = playableUrl(stateRef.current, next)
+    // A settled-but-unplayable chunk (failed or timed out) is skipped - the rest of the box still
+    // reads aloud.
+    if (!url) {
+      step()
+      return
+    }
+    audio.src = url
+    audio.currentTime = 0
+    audio.onended = step
+    audio.play().then(
+      () => setNeedsUnlock(false),
+      () => setNeedsUnlock(true),
+    )
   }, [])
+
+  useEffect(() => {
+    stateRef.current = state
+    if (waitingRef.current) step()
+  }, [state, step])
+
+  const playSequence = useCallback(
+    (indices: number[]) => {
+      const audio = audioRef.current
+      if (!audio) return
+      queueRef.current = [...indices]
+      waitingRef.current = false
+      audio.pause()
+      step()
+    },
+    [step],
+  )
 
   const play = useCallback((index: number) => playSequence([index]), [playSequence])
 
   const stop = useCallback(() => {
     queueRef.current = []
+    waitingRef.current = false
     const audio = audioRef.current
     if (!audio) return
     audio.onended = null

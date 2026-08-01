@@ -1,4 +1,4 @@
-export { requestNarration } from './api/narrate'
+export { requestNarration, warmNarrationVoice } from './api/narrate'
 export { synthesize } from './api/synthesize'
 export { settledCount } from './narration-state'
 export type { NarrationChunkState, NarrationState } from './narration-state'

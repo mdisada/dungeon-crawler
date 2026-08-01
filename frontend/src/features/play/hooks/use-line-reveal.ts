@@ -11,7 +11,10 @@ export interface LineReveal {
   chunks: string[]
   /** How many chunks of the active line the player has asked for (1-based). */
   visibleCount: number
-  /** True while the line still has chunks the player has not advanced to. */
+  /**
+   * True while the line still has chunks the player has not advanced to. `useNarration` widens it
+   * to the whole queue, so "still revealing" also covers lines waiting behind this one.
+   */
   isRevealing: boolean
   /**
    * True when the player may advance right now - what the advance chevron is shown on.
