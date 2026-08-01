@@ -116,16 +116,19 @@ export function TtsLabPage() {
             {active.settings.model} &middot; {active.chunking.units.length} clips
           </span>
         )}
-        {audio.state.error && <span className="text-xs text-destructive">{audio.state.error}</span>}
       </div>
 
       {/* Dark, like the play screen, so the box is judged against the background it will live on. */}
       <div className="rounded-xl bg-black p-6">
-        {active && !canReveal ? (
+        {/* Flat branches rather than a nested ternary - an empty black rectangle in the idle state
+            read as a broken component rather than as "nothing is running". */}
+        {!active && <p className="py-8 text-center text-sm text-white/40">Press Run to start a pass.</p>}
+        {active && !canReveal && (
           <p className="py-8 text-center text-sm text-white/40" aria-live="polite">
             Holding for the first clip...
           </p>
-        ) : (
+        )}
+        {active && canReveal && (
           <SceneTextBox
             speaker={null}
             text={current}

@@ -11,21 +11,62 @@ interface LabControlsProps {
   isRunning: boolean
 }
 
+// Kept short on purpose: a <select> is as wide as its longest option, so a sentence in here forces
+// its whole grid column wider than its share and pushes the columns into each other.
 const STRESS_LABELS: Record<StressMode, string> = {
-  manual: 'Manual - you click',
-  reader: 'Reader - auto-advance at reading speed',
-  impatient: 'Impatient - click the moment the chevron appears',
+  manual: 'Manual',
+  reader: 'Reader (auto)',
+  impatient: 'Impatient',
 }
 
-function Knob({ label, value, children }: { label: string; value: string; children: React.ReactNode }) {
+const STRESS_HINTS: Record<StressMode, string> = {
+  manual: 'You click, like a player.',
+  reader: 'Advances at the reading speed below.',
+  impatient: 'Clicks the instant the chevron appears - finds where the gate opens too early.',
+}
+
+const SELECT_CLASS = 'h-9 w-full min-w-0 rounded-md border bg-background px-2 text-sm'
+
+/**
+ * A titled group of controls.
+ *
+ * `fieldset` stays a block and the flex lives on an inner div: with `display:flex` on the fieldset
+ * itself, browsers render the `legend` in its own slot outside the flex formatting context and the
+ * first control is laid out underneath it. `min-w-0` overrides the fieldset's default
+ * `min-inline-size: min-content`, without which a grid column refuses to shrink and spills over
+ * its neighbour.
+ */
+function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex justify-between text-xs">
-        <span>{label}</span>
-        <span className="text-muted-foreground">{value}</span>
-      </div>
-      {children}
-    </div>
+    <fieldset className="min-w-0">
+      <legend className="mb-3 text-xs font-semibold uppercase text-muted-foreground">{title}</legend>
+      <div className="flex min-w-0 flex-col gap-4">{children}</div>
+    </fieldset>
+  )
+}
+
+function Check({
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string
+  checked: boolean
+  disabled?: boolean
+  onChange: (checked: boolean) => void
+}) {
+  return (
+    <label className="flex items-start gap-2 text-xs">
+      <input
+        type="checkbox"
+        className="mt-0.5 shrink-0"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span>{label}</span>
+    </label>
   )
 }
 
@@ -49,7 +90,11 @@ function RangeKnob({
   onValueChange: (value: number) => void
 }) {
   return (
-    <Knob label={label} value={display}>
+    <div className="flex min-w-0 flex-col gap-1">
+      <div className="flex min-w-0 items-baseline justify-between gap-2 text-xs">
+        <span className="truncate">{label}</span>
+        <span className="shrink-0 font-mono text-muted-foreground">{display}</span>
+      </div>
       <Slider
         value={value}
         min={min}
@@ -66,7 +111,7 @@ function RangeKnob({
           </SliderTrack>
         </SliderControl>
       </Slider>
-    </Knob>
+    </div>
   )
 }
 
@@ -75,9 +120,8 @@ export function LabControls({ settings, onChange, profiles, isRunning }: LabCont
     onChange({ ...settings, [key]: value })
 
   return (
-    <div className="grid gap-6 rounded-lg border p-4 sm:grid-cols-3">
-      <fieldset className="flex flex-col gap-4">
-        <legend className="text-xs font-semibold uppercase text-muted-foreground">Timing</legend>
+    <div className="grid gap-x-8 gap-y-6 rounded-lg border p-4 sm:grid-cols-2 lg:grid-cols-3">
+      <Group title="Timing">
         <RangeKnob
           label="Deadline"
           display={`${(settings.deadlineMs / 1000).toFixed(1)}s`}
@@ -88,31 +132,27 @@ export function LabControls({ settings, onChange, profiles, isRunning }: LabCont
           onValueChange={(value) => set('deadlineMs', value)}
         />
         <RangeKnob
-          label="Fan-out after chunk 1"
-          display={settings.maxInFlight === 1 ? 'sequential' : `${settings.maxInFlight} in flight`}
+          label="Fan-out"
+          display={settings.maxInFlight === 1 ? 'sequential' : `${settings.maxInFlight} at once`}
           value={settings.maxInFlight}
           min={1}
           max={5}
           disabled={isRunning}
           onValueChange={(value) => set('maxInFlight', value)}
         />
-        <label className="flex items-center gap-2 text-xs">
-          <input
-            type="checkbox"
-            checked={settings.holdFirstBox}
-            disabled={isRunning}
-            onChange={(e) => set('holdFirstBox', e.target.checked)}
-          />
-          Hold the first box until its audio is ready
-        </label>
-      </fieldset>
+        <Check
+          label="Hold the first box until its audio is ready"
+          checked={settings.holdFirstBox}
+          disabled={isRunning}
+          onChange={(checked) => set('holdFirstBox', checked)}
+        />
+      </Group>
 
-      <fieldset className="flex flex-col gap-4">
-        <legend className="text-xs font-semibold uppercase text-muted-foreground">Engine &amp; voice</legend>
-        <label className="flex flex-col gap-1 text-xs">
+      <Group title="Engine & voice">
+        <label className="flex min-w-0 flex-col gap-1 text-xs">
           Engine
           <select
-            className="h-9 rounded-md border bg-background px-2 text-sm"
+            className={SELECT_CLASS}
             value={settings.model}
             disabled={isRunning}
             onChange={(e) => set('model', e.target.value)}
@@ -125,17 +165,17 @@ export function LabControls({ settings, onChange, profiles, isRunning }: LabCont
             ))}
           </select>
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="flex min-w-0 flex-col gap-1 text-xs">
           Voice
           <select
-            className="h-9 rounded-md border bg-background px-2 text-sm"
+            className={SELECT_CLASS}
             value={settings.voiceProfileId ?? ''}
             disabled={isRunning}
             onChange={(e) => set('voiceProfileId', e.target.value || null)}
           >
             {/* Explicitly opting into silence. The lab has no adventure to fall back to, so this
                 is the only way to reproduce what an unvoiced adventure does - never a default. */}
-            <option value="">No voice - run silently</option>
+            <option value="">No voice (silent)</option>
             {profiles.map((profile) => (
               <option key={profile.id} value={profile.id}>
                 {profile.name}
@@ -143,15 +183,12 @@ export function LabControls({ settings, onChange, profiles, isRunning }: LabCont
             ))}
           </select>
         </label>
-        <label className="flex items-center gap-2 text-xs">
-          <input
-            type="checkbox"
-            checked={settings.force}
-            disabled={isRunning}
-            onChange={(e) => set('force', e.target.checked)}
-          />
-          Bypass the cache (measure synthesis, not storage)
-        </label>
+        <Check
+          label="Bypass the cache - measure synthesis, not storage"
+          checked={settings.force}
+          disabled={isRunning}
+          onChange={(checked) => set('force', checked)}
+        />
         <RangeKnob
           label="Volume"
           display={`${Math.round(settings.volume * 100)}%`}
@@ -160,10 +197,9 @@ export function LabControls({ settings, onChange, profiles, isRunning }: LabCont
           max={100}
           onValueChange={(value) => set('volume', value / 100)}
         />
-      </fieldset>
+      </Group>
 
-      <fieldset className="flex flex-col gap-4">
-        <legend className="text-xs font-semibold uppercase text-muted-foreground">Text shape &amp; stress</legend>
+      <Group title="Text shape & stress">
         <RangeKnob
           label="Box size"
           display={`${settings.maxChars} chars`}
@@ -174,22 +210,22 @@ export function LabControls({ settings, onChange, profiles, isRunning }: LabCont
           disabled={isRunning}
           onValueChange={(value) => set('maxChars', value)}
         />
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="flex min-w-0 flex-col gap-1 text-xs">
           Synthesis unit
           <select
-            className="h-9 rounded-md border bg-background px-2 text-sm"
+            className={SELECT_CLASS}
             value={settings.unit}
             disabled={isRunning}
             onChange={(e) => set('unit', e.target.value as LabSettings['unit'])}
           >
-            <option value="box">One request per text box (shipped)</option>
-            <option value="sentence">One request per sentence (queued playback)</option>
+            <option value="box">Per text box (shipped)</option>
+            <option value="sentence">Per sentence</option>
           </select>
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="flex min-w-0 flex-col gap-1 text-xs">
           Advance mode
           <select
-            className="h-9 rounded-md border bg-background px-2 text-sm"
+            className={SELECT_CLASS}
             value={settings.stress}
             onChange={(e) => set('stress', e.target.value as StressMode)}
           >
@@ -199,6 +235,7 @@ export function LabControls({ settings, onChange, profiles, isRunning }: LabCont
               </option>
             ))}
           </select>
+          <span className="text-muted-foreground">{STRESS_HINTS[settings.stress]}</span>
         </label>
         {settings.stress === 'reader' && (
           <RangeKnob
@@ -210,7 +247,7 @@ export function LabControls({ settings, onChange, profiles, isRunning }: LabCont
             onValueChange={(value) => set('readingCps', value)}
           />
         )}
-      </fieldset>
+      </Group>
     </div>
   )
 }
