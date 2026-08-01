@@ -106,6 +106,7 @@ function NpcOverview({ adventureId, npc, onChanged }: { adventureId: string; npc
       <NpcImagePanel adventureId={adventureId} npc={npc} onChanged={onChanged} />
       <VoicePicker
         label="Voice"
+        kind="npc"
         selectedVoiceId={npc.voiceId}
         onSelect={async (voiceId) => {
           await saveGuideRow('npcs', npc.id, { voice_id: voiceId })

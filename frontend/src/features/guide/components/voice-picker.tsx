@@ -3,10 +3,13 @@ import { useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { useSession } from '@/features/auth'
-import { useVoiceProfiles, useVoiceSample, VOICE_SAMPLE_COUNT } from '@/features/tts'
+import { useVoiceProfiles, useVoiceSample } from '@/features/tts'
+import type { VoiceSampleKind } from '@/features/tts'
 
 interface VoicePickerProps {
   label: string
+  /** Which job this voice is being hired for - it decides what the audition lines are. */
+  kind: VoiceSampleKind
   selectedVoiceId: string | null
   onSelect: (voiceProfileId: string | null) => Promise<void>
 }
@@ -14,14 +17,14 @@ interface VoicePickerProps {
 // F04 SS5.1/SS5.2: pick from the user's voice_profiles collection (plus the built-in voices every
 // account can read) or upload a clip. Clip storage and synthesis both live in features/tts, so
 // this component only picks, uploads, and auditions.
-export function VoicePicker({ label, selectedVoiceId, onSelect }: VoicePickerProps) {
+export function VoicePicker({ label, kind, selectedVoiceId, onSelect }: VoicePickerProps) {
   const { session } = useSession()
   const userId = session?.user.id ?? null
   const { profiles, error, upload } = useVoiceProfiles(userId)
   const [status, setStatus] = useState<string | null>(null)
   const [isBusy, setIsBusy] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const sample = useVoiceSample(userId, selectedVoiceId)
+  const sample = useVoiceSample(userId, selectedVoiceId, kind)
 
   async function handleUpload(file: File) {
     setIsBusy(true)
@@ -61,7 +64,7 @@ export function VoicePicker({ label, selectedVoiceId, onSelect }: VoicePickerPro
             type="button"
             disabled={!selectedVoiceId || sample.isLoading}
             onClick={sample.play}
-            aria-label={`Hear this voice, sample ${sample.nextIndex} of ${VOICE_SAMPLE_COUNT}`}
+            aria-label={`Hear this voice, sample ${sample.nextIndex} of ${sample.total}`}
             className="inline-flex size-9 shrink-0 items-center justify-center rounded-md border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
           >
             {sample.isLoading ? (

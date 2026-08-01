@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { VOICE_SAMPLE_COUNT, VOICE_SAMPLE_LINES } from '../voice-samples'
+import { VOICE_SAMPLE_LINES } from '../voice-samples'
+import type { VoiceSampleKind } from '../voice-samples'
 import { useNarrationAudio } from './use-narration-audio'
 
 /** Short lines; if one has not landed in this long, something is wrong rather than slow. */
@@ -13,6 +14,8 @@ export interface VoiceSample {
   isLoading: boolean
   /** Which line the next press will play, 1-based, for the control's label. */
   nextIndex: number
+  /** How many lines this role auditions with, for the control's label. */
+  total: number
   error: string | null
 }
 
@@ -26,19 +29,25 @@ export interface VoiceSample {
  * Nothing is requested until the user actually presses play. Auditioning on selection would spend
  * credit every time someone opened a dropdown.
  */
-export function useVoiceSample(userId: string | null, voiceProfileId: string | null): VoiceSample {
+export function useVoiceSample(
+  userId: string | null,
+  voiceProfileId: string | null,
+  kind: VoiceSampleKind,
+): VoiceSample {
   // `nonce` distinguishes two presses of the same line, so replaying works.
   const [request, setRequest] = useState<{ index: number; nonce: number } | null>(null)
   const playedRef = useRef(-1)
 
-  const lines = useMemo(() => [...VOICE_SAMPLE_LINES], [])
+  const lines = useMemo(() => [...VOICE_SAMPLE_LINES[kind]], [kind])
 
   const audio = useNarrationAudio({
     // Requesting only once armed: the hook fires as soon as it has a line and chunks.
     scope: request && userId ? `lab-${userId}` : null,
     adventureId: null,
-    // Keyed by voice, not by press, so cycling to line two reuses the same in-flight request.
-    lineId: voiceProfileId ? `voice-sample-${voiceProfileId}` : null,
+    // Keyed by voice AND role, not by press: cycling to line two reuses the same in-flight
+    // request, while a narrator picker and an NPC picker on one screen stay off each other's
+    // broadcasts.
+    lineId: voiceProfileId ? `voice-sample-${kind}-${voiceProfileId}` : null,
     chunks: lines,
     enabled: request !== null && voiceProfileId !== null,
     deadlineMs: SAMPLE_DEADLINE_MS,
@@ -62,10 +71,10 @@ export function useVoiceSample(userId: string | null, voiceProfileId: string | n
 
   const play = useCallback(() => {
     setRequest((prev) => ({
-      index: prev === null ? 0 : (prev.index + 1) % VOICE_SAMPLE_COUNT,
+      index: prev === null ? 0 : (prev.index + 1) % lines.length,
       nonce: (prev?.nonce ?? 0) + 1,
     }))
-  }, [])
+  }, [lines.length])
 
   const failed = chunk !== undefined && chunk.status !== 'pending' && chunk.status !== 'ready'
   return {
@@ -73,7 +82,8 @@ export function useVoiceSample(userId: string | null, voiceProfileId: string | n
     // Derived from the audio state rather than from playedRef: a ref read during render does not
     // re-render when it changes, and this drives a spinner.
     isLoading: request !== null && (chunk === undefined || chunk.status === 'pending'),
-    nextIndex: request === null ? 1 : ((request.index + 1) % VOICE_SAMPLE_COUNT) + 1,
+    nextIndex: request === null ? 1 : ((request.index + 1) % lines.length) + 1,
+    total: lines.length,
     error: audio.state.error ?? (failed ? (chunk?.error ?? 'That voice could not be synthesized') : null),
   }
 }

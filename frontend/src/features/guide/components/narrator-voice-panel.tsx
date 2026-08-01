@@ -13,6 +13,7 @@ export function NarratorVoicePanel({ adventure, onChanged }: NarratorVoicePanelP
       <h2 className="mb-3 text-sm font-semibold">Narrator voice</h2>
       <VoicePicker
         label="Narrator"
+        kind="narrator"
         selectedVoiceId={adventure.narratorVoiceId}
         onSelect={async (voiceId) => {
           await setNarratorVoice(adventure.id, voiceId)
