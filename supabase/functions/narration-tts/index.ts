@@ -67,6 +67,17 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
   if (req.method !== 'POST') return json(405, { error: 'Method not allowed' })
 
+  // Cumulative marks from the top of the request, returned to the caller. Everything before the
+  // first Fish call is dead time the player spends waiting on a box, and it is invisible from the
+  // client - which measures only from when it sent the request. Measured, not assumed: the first
+  // call for an unregistered voice spends ~9s in Fish's POST /model, and without these marks that
+  // is indistinguishable from slow synthesis.
+  const startedAt = Date.now()
+  const timings: Record<string, number> = {}
+  const mark = (name: string) => {
+    timings[name] = Date.now() - startedAt
+  }
+
   try {
     const authHeader = req.headers.get('Authorization')
     if (!authHeader) return json(401, { error: 'Missing Authorization header' })
@@ -77,6 +88,7 @@ Deno.serve(async (req) => {
     const { data: userData, error: userError } = await userClient.auth.getUser()
     if (userError || !userData.user) return json(401, { error: 'Invalid or expired session' })
     const userId = userData.user.id
+    mark('auth')
 
     const body = (await req.json()) as NarrationRequestBody
     const lineId = typeof body.line_id === 'string' && body.line_id ? body.line_id : null
@@ -107,6 +119,7 @@ Deno.serve(async (req) => {
         if (!member) return json(403, { error: 'Not a member of this adventure' })
       }
     }
+    mark('authorize')
 
     const model = body.model ?? DEFAULT_NARRATION_MODEL
     if (!isAllowedMediaModel(model)) return json(403, { error: allowlistMessage(model) })
@@ -119,7 +132,10 @@ Deno.serve(async (req) => {
     })
     // No voice assigned anywhere is a deliberate state, not an error: the line stays silent, the
     // client ungates immediately, and nothing is spent. This is the feature's opt-in switch.
-    if (!profileId) return json(200, { line_id: lineId, silent: true, model, chunks: [] })
+    if (!profileId) {
+      mark('total')
+      return json(200, { line_id: lineId, silent: true, model, chunks: [], timings })
+    }
 
     let referenceId: string | null = null
     try {
@@ -127,6 +143,7 @@ Deno.serve(async (req) => {
     } catch (err) {
       return json(400, { error: err instanceof Error ? err.message : 'Could not resolve the voice' })
     }
+    mark('voice')
 
     const ctx: SynthesisContext = {
       service,
@@ -140,9 +157,11 @@ Deno.serve(async (req) => {
 
     if (body.force === true) {
       await bustCache(ctx, await Promise.all(texts.map((text) => cacheKeyFor(ctx, text))))
+      mark('bust')
     }
 
     const plans = await planChunks(ctx, texts)
+    mark('plan')
     const maxInFlight = Number.isFinite(body.max_in_flight)
       ? Math.max(1, Math.trunc(body.max_in_flight as number))
       : DEFAULT_MAX_IN_FLIGHT
@@ -152,12 +171,14 @@ Deno.serve(async (req) => {
     )
     if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(work)
 
+    mark('total')
     return json(202, {
       line_id: lineId,
       silent: false,
       model,
       voice_profile_id: profileId,
       chunks: plans.map((plan) => ({ index: plan.index, status: plan.status, url: plan.url })),
+      timings,
     })
   } catch (err) {
     console.error('narration-tts failed', err)

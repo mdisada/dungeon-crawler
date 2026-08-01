@@ -52,7 +52,13 @@ export interface NarrationPlan {
   silent: boolean
   model: string
   voiceProfileId: string | null
-  chunks: { index: number; status: 'cached' | 'claimed' | 'awaiting'; url: string | null }[]
+  chunks: { index: number; status: 'cached' | 'claimed' | 'awaiting' | 'mirror'; url: string | null }[]
+  /**
+   * Cumulative server-side marks (ms from the top of the request): auth, authorize, voice, bust,
+   * plan, total. This is time before the first Fish call that the client cannot see, and it was
+   * measured at ~1.0s in play - worth showing rather than leaving as a gap in the lab's timeline.
+   */
+  timings: Record<string, number>
 }
 
 export interface UseNarrationAudioArgs extends Omit<NarrateArgs, 'lineId'> {

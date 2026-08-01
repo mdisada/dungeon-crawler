@@ -116,6 +116,7 @@ export function TtsLabPage() {
           chunks={audio.state.chunks}
           revealedAt={run.revealedAt}
           settledUnits={audio.settled}
+          serverTimings={audio.state.serverTimings}
         />
       )}
     </div>

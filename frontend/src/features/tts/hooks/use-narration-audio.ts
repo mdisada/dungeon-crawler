@@ -87,7 +87,7 @@ export function useNarrationAudio({
         dispatch({ type: 'silent' })
         return
       }
-      dispatch({ type: 'planned', chunks: plan.chunks, atMs: since() })
+      dispatch({ type: 'planned', chunks: plan.chunks, timings: plan.timings, atMs: since() })
     }
 
     // Subscribed before the request goes out: a chunk can be synthesized and broadcast faster than

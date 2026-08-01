@@ -8,6 +8,8 @@ interface ChunkTimelineProps {
   /** ms from the request starting to each box appearing on screen, keyed by box index. */
   revealedAt: Record<number, number>
   settledUnits: number
+  /** Cumulative server marks before the first Fish call - otherwise a blind spot in the timeline. */
+  serverTimings: Record<string, number> | null
 }
 
 const STATUS_STYLES: Record<NarrationChunkState['status'], string> = {
@@ -29,7 +31,13 @@ function ms(value: number | null): string {
  * synthesis time, so `ready - server` is everything else - queueing behind the fan-out cap, the
  * upload, signing, and the broadcast round trip.
  */
-export function ChunkTimeline({ chunking, chunks, revealedAt, settledUnits }: ChunkTimelineProps) {
+export function ChunkTimeline({
+  chunking,
+  chunks,
+  revealedAt,
+  settledUnits,
+  serverTimings,
+}: ChunkTimelineProps) {
   if (chunks.length === 0) return null
 
   const boxOf = new Map<number, number>()
@@ -38,6 +46,15 @@ export function ChunkTimeline({ chunking, chunks, revealedAt, settledUnits }: Ch
 
   return (
     <div className="overflow-x-auto rounded-lg border">
+      {serverTimings && (
+        <p className="border-b px-3 py-2 font-mono text-xs text-muted-foreground">
+          before the first Fish call:{' '}
+          {['auth', 'authorize', 'voice', 'bust', 'plan', 'total']
+            .filter((phase) => serverTimings[phase] !== undefined)
+            .map((phase) => `${phase} ${serverTimings[phase]}ms`)
+            .join(' · ')}
+        </p>
+      )}
       <table className="w-full min-w-[46rem] text-left text-xs">
         <caption className="sr-only">Per-chunk narration synthesis timeline</caption>
         <thead className="bg-muted/50 text-muted-foreground">

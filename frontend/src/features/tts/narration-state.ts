@@ -29,6 +29,8 @@ export interface NarrationState {
   lineId: string | null
   phase: NarrationPhase
   chunks: NarrationChunkState[]
+  /** Cumulative server marks before the first Fish call - measured ~1.0s, invisible from here. */
+  serverTimings: Record<string, number> | null
   error: string | null
 }
 
@@ -36,7 +38,12 @@ export type NarrationAction =
   | { type: 'reset' }
   | { type: 'start'; lineId: string; count: number }
   | { type: 'silent' }
-  | { type: 'planned'; chunks: { index: number; url: string | null }[]; atMs: number }
+  | {
+      type: 'planned'
+      chunks: { index: number; url: string | null }[]
+      timings: Record<string, number>
+      atMs: number
+    }
   | { type: 'ready'; index: number; url: string; atMs: number; serverMs: number | null }
   | { type: 'failed'; index: number; error: string; atMs: number }
   | { type: 'timeout'; index: number; atMs: number }
@@ -46,6 +53,7 @@ export const initialNarrationState: NarrationState = {
   lineId: null,
   phase: 'idle',
   chunks: [],
+  serverTimings: null,
   error: null,
 }
 
@@ -79,12 +87,18 @@ export function narrationReducer(state: NarrationState, action: NarrationAction)
     case 'reset':
       return initialNarrationState
     case 'start':
-      return { lineId: action.lineId, phase: 'requesting', chunks: pending(action.count), error: null }
+      return {
+        lineId: action.lineId,
+        phase: 'requesting',
+        chunks: pending(action.count),
+        serverTimings: null,
+        error: null,
+      }
     case 'silent':
       return { ...state, phase: 'silent' }
     case 'planned': {
       // Cache hits come back in the response body itself, already playable.
-      let next: NarrationState = { ...state, phase: 'active' }
+      let next: NarrationState = { ...state, phase: 'active', serverTimings: action.timings }
       for (const chunk of action.chunks) {
         if (!chunk.url) continue
         next = settle(next, chunk.index, {

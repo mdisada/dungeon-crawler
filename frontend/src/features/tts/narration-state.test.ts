@@ -85,6 +85,7 @@ describe('planned', () => {
     const state = apply(started(3), {
       type: 'planned',
       atMs: 40,
+      timings: { auth: 169, voice: 526, plan: 1168, total: 1169 },
       chunks: [
         { index: 0, url: 'https://audio/cached-0' },
         { index: 1, url: null },
@@ -93,6 +94,7 @@ describe('planned', () => {
     })
 
     expect(state.phase).toBe('active')
+    expect(state.serverTimings).toEqual({ auth: 169, voice: 526, plan: 1168, total: 1169 })
     expect(state.chunks[0].cached).toBe(true)
     expect(playableUrl(state, 1)).toBeNull()
     // Still a prefix: chunk 2 being cached does not open the gate past the miss at 1.

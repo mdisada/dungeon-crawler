@@ -26,7 +26,11 @@ export interface LabSettings {
 }
 
 export const DEFAULT_LAB_SETTINGS: LabSettings = {
-  deadlineMs: 8_000,
+  // 15s, not the 8s first guessed. Measured 2026-08-01 against the real function: a 195-char box -
+  // a normal one - is playable 7.2s after the request on s2.1-pro and 8.2s on the free engine, so
+  // an 8s deadline would have fired on ordinary lines and made the gate look broken. This is a
+  // ceiling that should almost never be reached, not a target.
+  deadlineMs: 15_000,
   holdFirstBox: true,
   maxInFlight: 3,
   // The lab runs free by default; play uses s2.1-pro. Same model, no TTFA guarantee - so a timing

@@ -48,7 +48,8 @@ export async function requestNarration({
     silent: boolean
     model: string
     voice_profile_id?: string | null
-    chunks: { index: number; status: 'cached' | 'claimed' | 'awaiting'; url: string | null }[]
+    chunks: { index: number; status: 'cached' | 'claimed' | 'awaiting' | 'mirror'; url: string | null }[]
+    timings?: Record<string, number>
   }
   return {
     lineId: body.line_id,
@@ -56,5 +57,6 @@ export async function requestNarration({
     model: body.model,
     voiceProfileId: body.voice_profile_id ?? null,
     chunks: body.chunks,
+    timings: body.timings ?? {},
   }
 }
