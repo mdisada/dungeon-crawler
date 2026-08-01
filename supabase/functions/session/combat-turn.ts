@@ -80,14 +80,14 @@ function parseCombatAction(body: Record<string, unknown>): CombatAction | null {
  * the fight is and what it looks like are not the engine's to know - they were settled when it
  * started. Carried forward from what is already on the wire so a turn cannot blank the map.
  *
- * The signed URL rides along unchanged for the length of the fight. It is good for an hour, the
- * same TTL every background and portrait in this app carries; a fight that outlasts one loses its
- * artwork and keeps its grid, which is the same way a long scene loses its backdrop today.
+ * The map REF rides along unchanged for the length of the fight, and that is safe now in a way a
+ * signed URL never was: it names a file rather than granting an hour of access to one, so a fight
+ * that runs past any TTL still has its artwork (see MediaRef).
  */
-function sceneCarryOver(state: GameState): Pick<ToSceneOptions, 'locationId' | 'mapUrl' | 'mapFit'> {
+function sceneCarryOver(state: GameState): Pick<ToSceneOptions, 'locationId' | 'map' | 'mapFit'> {
   return {
     locationId: state.combat?.locationId ?? null,
-    mapUrl: state.combat?.mapUrl ?? null,
+    map: state.combat?.map ?? null,
     mapFit: state.combat?.mapFit ?? 'cover',
   }
 }

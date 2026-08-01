@@ -29,7 +29,7 @@ const adventure: MemberAdventure = {
 }
 
 const emptyCombat: CombatState = {
-  locationId: null, mapUrl: null, obstacles: [], tokens: [], initiative: [],
+  locationId: null, map: null, obstacles: [], tokens: [], initiative: [],
   round: 3, activeTokenId: '', economy: { action: true, bonus: true, move: 6, reaction: true },
 }
 
@@ -78,7 +78,7 @@ describe('DmMainTab', () => {
   it('shows the social encounter controls in roleplay mode', () => {
     renderAsDm(stateWith((s) => {
       s.scene.mode = 'roleplay'
-      s.dialogue.speakers = [{ npcId: 'npc-1', name: 'Serana', side: 'left', imageUrl: null }]
+      s.dialogue.speakers = [{ npcId: 'npc-1', name: 'Serana', side: 'left', image: null }]
     }))
     expect(screen.getByText('Serana')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /End encounter/ })).toBeInTheDocument()
@@ -128,7 +128,7 @@ describe('ReviewConsole (via ReviewPanel in the Main tab)', () => {
   function roleplayState() {
     return stateWith((s) => {
       s.scene.mode = 'roleplay'
-      s.dialogue.speakers = [{ npcId: 'npc-1', name: 'Serana', side: 'left', imageUrl: null }]
+      s.dialogue.speakers = [{ npcId: 'npc-1', name: 'Serana', side: 'left', image: null }]
       s.dm!.pendingReview = review
     })
   }
@@ -149,7 +149,7 @@ describe('ReviewConsole (via ReviewPanel in the Main tab)', () => {
   it('shows no console when nothing is pending', () => {
     renderAsDm(stateWith((s) => {
       s.scene.mode = 'roleplay'
-      s.dialogue.speakers = [{ npcId: 'npc-1', name: 'Serana', side: 'left', imageUrl: null }]
+      s.dialogue.speakers = [{ npcId: 'npc-1', name: 'Serana', side: 'left', image: null }]
     }))
     expect(screen.queryByText(/replies to/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /End encounter/ })).toBeInTheDocument()
@@ -179,7 +179,7 @@ describe('ReviewConsole (via ReviewPanel in the Main tab)', () => {
   it('shows a check ruling with accept and flip actions', () => {
     renderAsDm(stateWith((s) => {
       s.scene.mode = 'roleplay'
-      s.dialogue.speakers = [{ npcId: 'npc-1', name: 'Serana', side: 'left', imageUrl: null }]
+      s.dialogue.speakers = [{ npcId: 'npc-1', name: 'Serana', side: 'left', image: null }]
       s.dm!.pendingReview = {
         id: 'rev-c',
         kind: 'check_ruling',

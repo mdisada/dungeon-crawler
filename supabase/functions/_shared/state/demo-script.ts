@@ -6,18 +6,18 @@
 // so the three renderers and multi-client sync can be tested without any AI (F07) built.
 // The session function's demo_step action applies one step at a time and broadcasts it.
 
-import type { FxEvent, StateDiff, TokenState } from './types.ts'
+import type { FxEvent, MediaRef, StateDiff, TokenState } from './types.ts'
 
-/** Row ids/urls from the seeded demo adventure, resolved by the driver at run time. */
+/** Row ids/media refs from the seeded demo adventure, resolved by the driver at run time. */
 export interface DemoContext {
   locationId: string
   locationName: string
-  backgroundUrl: string | null
-  mapUrl: string | null
+  background: MediaRef | null
+  map: MediaRef | null
   obstacles: [number, number][]
-  npcs: { id: string; name: string; imageUrl: string | null }[]
+  npcs: { id: string; name: string; image: MediaRef | null }[]
   objectives: { id: string; title: string }[]
-  party: { userId: string; characterId: string; name: string; imageUrl: string | null }[]
+  party: { userId: string; characterId: string; name: string; image: MediaRef | null }[]
 }
 
 export interface DemoStep {
@@ -32,7 +32,7 @@ function pcTokens(ctx: DemoContext): TokenState[] {
     kind: 'pc' as const,
     refId: p.characterId,
     name: p.name,
-    imageUrl: p.imageUrl,
+    image: p.image,
     x: 4 + i * 2,
     y: 26,
     hp: { current: 10, max: 12, temp: 0 },
@@ -51,7 +51,7 @@ function npcToken(ctx: DemoContext, index: number, x: number, y: number): TokenS
     kind: 'npc',
     refId: npc?.id ?? `demo-${index}`,
     name: npc?.name ?? 'Bandit',
-    imageUrl: npc?.imageUrl ?? null,
+    image: npc?.image ?? null,
     x,
     y,
     hp: { current: 8, max: 8, temp: 0 },
@@ -79,7 +79,7 @@ export function buildDemoScript(ctx: DemoContext): DemoStep[] {
           domain: 'scene',
           patch: asPatch({
             mode: 'narration', activeVisual: 'background', locationId: ctx.locationId,
-            locationName: ctx.locationName, backgroundUrl: ctx.backgroundUrl, day: 1,
+            locationName: ctx.locationName, background: ctx.background, day: 1,
           }),
         },
         {
@@ -117,7 +117,7 @@ export function buildDemoScript(ctx: DemoContext): DemoStep[] {
         {
           domain: 'dialogue',
           patch: asPatch({
-            speakers: [{ npcId: npcA?.id ?? 'demo-a', name: npcA?.name ?? 'Elder', side: 'left', imageUrl: npcA?.imageUrl ?? null }],
+            speakers: [{ npcId: npcA?.id ?? 'demo-a', name: npcA?.name ?? 'Elder', side: 'left', image: npcA?.image ?? null }],
             lines: [{ id: 'd3', speaker: npcA?.name ?? 'Elder', npcId: npcA?.id ?? 'demo-a', text: 'Thank the stars you came. They took the miller’s boy at moonrise - the third this month.' }],
             activeLineId: 'd3',
           }),
@@ -131,8 +131,8 @@ export function buildDemoScript(ctx: DemoContext): DemoStep[] {
           domain: 'dialogue',
           patch: asPatch({
             speakers: [
-              { npcId: npcA?.id ?? 'demo-a', name: npcA?.name ?? 'Elder', side: 'left', imageUrl: npcA?.imageUrl ?? null },
-              { npcId: npcB?.id ?? 'demo-b', name: npcB?.name ?? 'Stranger', side: 'right', imageUrl: npcB?.imageUrl ?? null },
+              { npcId: npcA?.id ?? 'demo-a', name: npcA?.name ?? 'Elder', side: 'left', image: npcA?.image ?? null },
+              { npcId: npcB?.id ?? 'demo-b', name: npcB?.name ?? 'Stranger', side: 'right', image: npcB?.image ?? null },
             ],
             lines: [
               { id: 'd3', speaker: npcA?.name ?? 'Elder', npcId: npcA?.id ?? 'demo-a', text: 'Thank the stars you came. They took the miller’s boy at moonrise - the third this month.' },
@@ -162,7 +162,7 @@ export function buildDemoScript(ctx: DemoContext): DemoStep[] {
           domain: 'combat',
           patch: asPatch({
             locationId: ctx.locationId,
-            mapUrl: ctx.mapUrl,
+            map: ctx.map,
             obstacles: ctx.obstacles,
             tokens,
             initiative: order,

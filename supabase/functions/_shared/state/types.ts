@@ -18,13 +18,40 @@ export type SceneMode = 'narration' | 'roleplay' | 'battle' | 'puzzle' | 'downti
 /** Grid side length of every battle map (F04/F06: 32x32 over a 1024x1024 image). */
 export const GRID_SIZE = 32
 
+export type MediaBucket = 'adventure-media' | 'characters' | 'battle-maps'
+
+/**
+ * A file in Storage, as state carries it: WHERE it lives, never a link to it (2026-08-01).
+ *
+ * State used to hold signed URLs. Those expire in an hour and GameState is durable, so every image
+ * in a session went dead an hour after it was written and stayed dead - the URL was only re-minted
+ * at session start and on a location change, and `resync` returns the stored state untouched. Live
+ * on 2026-08-01 the two active adventures were carrying background tokens that had expired 8 and 10
+ * hours earlier; speaker-stage.tsx had already grown a silhouette fallback for the same rot.
+ *
+ * A path cannot expire. The client signs it at render time against its own authenticated session,
+ * which is what the guide editor has always done (`useMediaUrl`) - play was the odd one out.
+ *
+ * `path` may also be an absolute URL or a root-relative path for placeholder art; the resolver
+ * passes those straight through rather than trying to sign them.
+ */
+export interface MediaRef {
+  bucket: MediaBucket
+  path: string
+}
+
+/** null path (or empty) -> no media, which is the state every one of these fields starts in. */
+export function mediaRef(bucket: MediaBucket, path: string | null | undefined): MediaRef | null {
+  return path ? { bucket, path } : null
+}
+
 export interface SceneState {
   mode: SceneMode
   /** Background XOR map - decided upstream by the Scene Manager, never by the client. */
   activeVisual: 'background' | 'map'
   locationId: string | null
   locationName: string
-  backgroundUrl: string | null
+  background: MediaRef | null
   musicTrack: string | null
   /** In-game day from the World Clock (F06 header). */
   day: number
@@ -42,7 +69,7 @@ export interface SpeakerSlot {
   npcId: string
   name: string
   side: 'left' | 'right'
-  imageUrl: string | null
+  image: MediaRef | null
 }
 
 /**
@@ -130,7 +157,7 @@ export interface TokenState {
   /** characters.id or npcs.id. */
   refId: string
   name: string
-  imageUrl: string | null
+  image: MediaRef | null
   x: number
   y: number
   hp: HpState | null
@@ -186,7 +213,7 @@ export type MapFit = 'fill' | 'cover' | 'contain'
 
 export interface CombatState {
   locationId: string | null
-  mapUrl: string | null
+  map: MediaRef | null
   obstacles: [number, number][]
   tokens: TokenState[]
   /** Initiative order, highest first. */
@@ -548,7 +575,7 @@ export function initialGameState(): GameState {
       activeVisual: 'background',
       locationId: null,
       locationName: '',
-      backgroundUrl: null,
+      background: null,
       musicTrack: null,
       day: 1,
     },

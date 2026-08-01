@@ -7,7 +7,7 @@ import type { CombatState, GameState, TokenState } from './types.ts'
 
 function token(over: Partial<TokenState>): TokenState {
   return {
-    id: 't1', kind: 'pc', refId: 'c1', name: 'Ash', imageUrl: null, x: 5, y: 5,
+    id: 't1', kind: 'pc', refId: 'c1', name: 'Ash', image: null, x: 5, y: 5,
     hp: { current: 10, max: 10, temp: 0 }, conditions: [], allegiance: 'party',
     controller: 'player', controllerUserId: 'u1', speed: 6,
     ...over,
@@ -16,7 +16,7 @@ function token(over: Partial<TokenState>): TokenState {
 
 function battleState(tokens: TokenState[], over: Partial<CombatState> = {}): GameState {
   const combat: CombatState = {
-    locationId: 'loc', mapUrl: null, obstacles: [[7, 5]], tokens,
+    locationId: 'loc', map: null, obstacles: [[7, 5]], tokens,
     initiative: tokens.map((t, i) => ({ tokenId: t.id, roll: 20 - i })),
     round: 1, activeTokenId: tokens[0].id,
     economy: { action: true, bonus: true, move: 6, reaction: true },

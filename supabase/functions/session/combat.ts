@@ -22,9 +22,9 @@ import type {
 import { deriveNpcStatBlock } from '../_shared/guide/npc-stats.ts'
 import type { NpcStatBlock } from '../_shared/guide/npc-stats.ts'
 import { seededRng } from '../_shared/play/index.ts'
-import type { GameState, Json, MapFit } from '../_shared/state/index.ts'
+import { mediaRef } from '../_shared/state/index.ts'
+import type { GameState, Json, MapFit, MediaRef } from '../_shared/state/index.ts'
 import { activePcIds } from './orchestrate.ts'
-import { resolveMediaUrl } from './util.ts'
 
 const RESOLVE_TURN_CAP = 1000
 
@@ -420,8 +420,8 @@ export interface StartedCombat {
   engine: CombatEngineState
   controllers: CombatControllers
   locationId: string | null
-  /** Signed artwork for the assigned map, or null for a fight with no map (the open field). */
-  mapUrl: string | null
+  /** Where the assigned map's artwork lives, or null for a fight with no map (the open field). */
+  map: MediaRef | null
   mapFit: MapFit
   /** Which of the two authored sources supplied the ground - logged so a bare grid is explainable. */
   mapSource: 'location' | 'library' | 'open_field'
@@ -477,10 +477,10 @@ export async function startLiveCombat(
     engine: opened.state,
     controllers,
     locationId: state.scene?.locationId ?? null,
-    // The map's artwork, signed with the service role the same way backgrounds and portraits are.
-    // The grid, obstacles and spawns from this row are already inside the engine state above -
-    // this is the picture that goes under them.
-    mapUrl: await resolveMediaUrl(service, built.map.bucket, built.map.path),
+    // WHERE the picture is, not a link to it. The grid, obstacles and spawns from this map are
+    // already inside the engine state above; this is the artwork that goes under them, and the
+    // client signs it at render time so it cannot expire mid-fight (see MediaRef).
+    map: mediaRef(built.map.bucket, built.map.path),
     mapFit: built.map.fit,
     mapSource: built.map.source,
     bossRef: built.manifest.bossRef,

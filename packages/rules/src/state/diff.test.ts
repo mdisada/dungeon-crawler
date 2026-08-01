@@ -39,7 +39,7 @@ describe('applyDiff', () => {
     state = applyDiff(state, {
       domain: 'combat',
       patch: {
-        locationId: null, mapUrl: null, obstacles: [], tokens: [], initiative: [],
+        locationId: null, map: null, obstacles: [], tokens: [], initiative: [],
         round: 1, activeTokenId: 't1', economy: { action: true, bonus: true, move: 6, reaction: true },
       },
     })

@@ -7,6 +7,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { npcLocationAt } from '../_shared/guide/npc-itinerary.ts'
 import type { ItineraryStop } from '../_shared/guide/npc-itinerary.ts'
 import { stagedElsewhere } from '../_shared/story/index.ts'
+import { mediaRef } from '../_shared/state/index.ts'
 import type { Json, SpeakerSlot } from '../_shared/state/index.ts'
 import { runGenericNpc, runInteractionSummary } from './agents.ts'
 import type { AgentEnv } from './agents.ts'
@@ -15,7 +16,7 @@ import { npcIsGroup } from './npc-state.ts'
 import { recordProposal } from './proposals.ts'
 import { detectSocialExit, resolveSocialExit } from './social-encounter.ts'
 import {
-  assertOk, commitDiffs, loadContext, loadState, logEvent, resolveMediaUrl,
+  assertOk, commitDiffs, loadContext, loadState, logEvent,
 } from './util.ts'
 
 export interface NpcRow {
@@ -56,12 +57,12 @@ function npcImage(images: Json): string | null {
   return typeof candidate === 'string' ? candidate : null
 }
 
-async function speakerSlot(service: SupabaseClient, npc: NpcRow, side: 'left' | 'right'): Promise<SpeakerSlot> {
+function speakerSlot(npc: NpcRow, side: 'left' | 'right'): SpeakerSlot {
   return {
     npcId: npc.id,
     name: npc.name,
     side,
-    imageUrl: await resolveMediaUrl(service, 'adventure-media', npcImage(npc.images)),
+    image: mediaRef('adventure-media', npcImage(npc.images)),
   }
 }
 
@@ -159,7 +160,7 @@ export async function startSocial(service: SupabaseClient, adventureId: string, 
 
   const speakers: SpeakerSlot[] = []
   for (let i = 0; i < staged.here.length; i++) {
-    speakers.push(await speakerSlot(service, staged.here[i], i % 2 === 0 ? 'right' : 'left'))
+    speakers.push(speakerSlot(staged.here[i], i % 2 === 0 ? 'right' : 'left'))
   }
 
   const after = await commitDiffs(service, adventureId, () => [
@@ -283,7 +284,7 @@ export async function createGenericNpc(service: SupabaseClient, adventureId: str
     mode: ctx.adventure.mode === 'assist' ? 'human' : 'auto',
     summary: `Generic NPC: ${seed.name} (${roleHint || 'bystander'})`,
   })
-  const slot = await speakerSlot(service, npc as NpcRow, row.state.dialogue.speakers.length % 2 === 0 ? 'right' : 'left')
+  const slot = speakerSlot(npc as NpcRow, row.state.dialogue.speakers.length % 2 === 0 ? 'right' : 'left')
   await commitDiffs(service, adventureId, (s) => [
     { domain: 'scene', patch: { mode: 'roleplay' } },
     { domain: 'dialogue', patch: { speakers: [...s.dialogue.speakers, slot] as unknown as Json } },

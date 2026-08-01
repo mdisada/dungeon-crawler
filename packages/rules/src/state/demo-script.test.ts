@@ -10,20 +10,20 @@ import type { GameState, Json } from './types.ts'
 const ctx: DemoContext = {
   locationId: 'loc-1',
   locationName: 'Hollowbrook',
-  backgroundUrl: 'bg.png',
-  mapUrl: 'map.png',
+  background: { bucket: 'adventure-media', path: 'bg.png' },
+  map: { bucket: 'adventure-media', path: 'map.png' },
   obstacles: [[3, 3]],
   npcs: [
-    { id: 'n1', name: 'Elder Maren', imageUrl: null },
-    { id: 'n2', name: 'The Stranger', imageUrl: null },
+    { id: 'n1', name: 'Elder Maren', image: null },
+    { id: 'n2', name: 'The Stranger', image: null },
   ],
   objectives: [
     { id: 'o1', title: 'Find the missing boy' },
     { id: 'o2', title: 'Learn what the stranger wants' },
   ],
   party: [
-    { userId: 'u1', characterId: 'c1', name: 'Ash', imageUrl: null },
-    { userId: 'u2', characterId: 'c2', name: 'Bryn', imageUrl: null },
+    { userId: 'u1', characterId: 'c1', name: 'Ash', image: null },
+    { userId: 'u2', characterId: 'c2', name: 'Bryn', image: null },
   ],
 }
 

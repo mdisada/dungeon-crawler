@@ -20,20 +20,21 @@ import type { MemberAdventure } from './types'
 const ctx: DemoContext = {
   locationId: 'loc-1',
   locationName: 'Hollowbrook',
-  backgroundUrl: 'https://example.test/bg.png',
-  mapUrl: null,
+  // An absolute URL is passed straight through by the resolver rather than signed.
+  background: { bucket: 'adventure-media', path: 'https://example.test/bg.png' },
+  map: null,
   obstacles: [[3, 3]],
   npcs: [
-    { id: 'n1', name: 'Elder Maren', imageUrl: null },
-    { id: 'n2', name: 'The Stranger', imageUrl: null },
+    { id: 'n1', name: 'Elder Maren', image: null },
+    { id: 'n2', name: 'The Stranger', image: null },
   ],
   objectives: [
     { id: 'o1', title: 'Find the missing boy' },
     { id: 'o2', title: 'Learn what the stranger wants' },
   ],
   party: [
-    { userId: 'u1', characterId: 'c1', name: 'Ash', imageUrl: null },
-    { userId: 'u2', characterId: 'c2', name: 'Bryn', imageUrl: null },
+    { userId: 'u1', characterId: 'c1', name: 'Ash', image: null },
+    { userId: 'u2', characterId: 'c2', name: 'Bryn', image: null },
   ],
 }
 

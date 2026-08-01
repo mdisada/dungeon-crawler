@@ -1,5 +1,7 @@
 import type { SceneState } from '@rules/state'
 
+import { usePlay } from '../hooks/use-play-context'
+
 interface SceneBackdropProps {
   scene: SceneState
 }
@@ -11,11 +13,14 @@ interface SceneBackdropProps {
  * a cut between them should not look like a cut between two games.
  */
 export function SceneBackdrop({ scene }: SceneBackdropProps) {
+  const { media } = usePlay()
+  const backgroundUrl = media(scene.background)
+
   return (
     <>
-      {scene.backgroundUrl ? (
+      {backgroundUrl ? (
         <img
-          src={scene.backgroundUrl}
+          src={backgroundUrl}
           alt={scene.locationName || 'Scene background'}
           className="ken-burns absolute inset-0 h-full w-full object-cover"
         />

@@ -571,9 +571,9 @@ export async function openInteractiveCombat(
 ): Promise<void> {
   const combat = combatStateFromEngine(started.engine, {
     locationId: started.locationId,
-    // The map stage 5 bound to this fight, signed server-side. Null when no map matched - the
-    // fight is on the open field and the bare grid is the honest picture of it.
-    mapUrl: started.mapUrl,
+    // The map this fight was bound to. Null when none matched - the fight is on the open field
+    // and the bare grid is the honest picture of it.
+    map: started.map,
     mapFit: started.mapFit,
     controllers: started.controllers,
   })
@@ -599,7 +599,7 @@ export async function openInteractiveCombat(
   await logEvent(service, env.adventureId, sessionId, 'combat_started', {
     label: spec.label, encounter_id: started.encounterId, seed: started.seed,
     grid: `${started.engine.gridWidth}x${started.engine.gridHeight}`, map_source: started.mapSource,
-    mapped: started.mapUrl !== null,
+    mapped: started.map !== null,
     combatants: started.engine.combatants.length,
     player_controlled: Object.keys(started.controllers).length,
     boss: started.boss?.name ?? null, warnings: started.warnings, resolver: 'engine_interactive',

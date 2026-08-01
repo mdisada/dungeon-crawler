@@ -6,6 +6,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { bindCoopSet } from '../_shared/guide/affinity.ts'
 import { bindPersonalSlots } from '../_shared/guide/personal.ts'
 import { AgentCallError, callAgentText } from '../_shared/llm.ts'
+import { mediaRef } from '../_shared/state/index.ts'
 import type { DmState, Json, StateDiff } from '../_shared/state/index.ts'
 import type { AgentEnv } from './agents.ts'
 import { applyDialMoves } from './dials.ts'
@@ -16,7 +17,7 @@ import { entryContract, journalViews, stageEntryOfferIfNeeded } from './story.ts
 import { antagonistTurn } from './steward.ts'
 import {
   applyAndBroadcast, assertOk, broadcast, invalidateStateCache, loadContext, loadState, loadStateFresh, logEvent,
-  resolveMediaUrl, writeCheckpoint,
+  writeCheckpoint,
 } from './util.ts'
 import type { AdventureRow } from './util.ts'
 
@@ -341,7 +342,7 @@ async function buildStartDiffs(
         activeVisual: 'background',
         locationId: location?.id ?? null,
         locationName: location?.name ?? '',
-        backgroundUrl: await resolveMediaUrl(service, 'adventure-media', location?.background_url ?? null),
+        background: mediaRef('adventure-media', location?.background_url ?? null),
         day: 1,
       }),
     },

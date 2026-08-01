@@ -9,12 +9,12 @@ export { computePartyProfile } from './party.ts'
 export type { PartyCharacter, PartyProfile } from './party.ts'
 export { buildDemoScript } from './demo-script.ts'
 export type { DemoContext, DemoStep } from './demo-script.ts'
-export { GRID_SIZE, initialGameState } from './types.ts'
+export { GRID_SIZE, initialGameState, mediaRef } from './types.ts'
 export type {
   ActionEconomy, CheckRulingReview, CombatState, ContextWindowState, ConversationState,
   DialogueLine, DialogueState,
   DiffDomain, DmSettingsState, DmState, EncounterKind, EncounterSpecState, EncounterState,
-  FxEvent, GameState, HpState, Json, LiveCombatState, MapFit, ObjectivesState,
+  FxEvent, GameState, HpState, Json, LiveCombatState, MapFit, MediaBucket, MediaRef, ObjectivesState,
   ObjectiveView, NarrationReview, NpcReplyReview, OfferBannerView, OpeningState, PendingPromptState,
   PendingReviewState, PersonalStake, PlayersState, PlayerView, ProposalEntry, QuestJournalView, ReviewCandidate,
   SceneMode, SceneState, SessionState, SpeakerSlot, StateDiff, SuggestedChoice, TokenState,

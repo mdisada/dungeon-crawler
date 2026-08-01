@@ -229,20 +229,11 @@ export async function loadStateFresh(service: SupabaseClient, adventureId: strin
   return { state: initialGameState(), state_version: 0 }
 }
 
-/**
- * Media columns store storage paths (or absolute/public URLs for placeholders). State carries
- * ready-to-render URLs, so paths get signed here (1h - a resync refreshes them).
- */
-export async function resolveMediaUrl(
-  service: SupabaseClient,
-  bucket: 'adventure-media' | 'characters' | 'battle-maps',
-  path: string | null,
-): Promise<string | null> {
-  if (!path) return null
-  if (path.startsWith('http') || path.startsWith('/')) return path
-  const { data } = await service.storage.from(bucket).createSignedUrl(path, 3600)
-  return data?.signedUrl ?? null
-}
+// resolveMediaUrl lived here and is gone (2026-08-01). It signed a storage path into a 1h URL and
+// the CALLERS wrote that URL into GameState, which is durable - so every image went dead an hour
+// later and stayed dead, and the docstring's claim that "a resync refreshes them" was never true of
+// the code below it: resync returns the stored state verbatim. State carries a MediaRef now and the
+// client signs at render time, the way the guide editor always has.
 
 /** Creates the state row at activation so applyAndBroadcast can always version-guard UPDATE. */
 export async function ensureStateRow(service: SupabaseClient, adventureId: string): Promise<void> {

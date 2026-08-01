@@ -3,10 +3,10 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
-import { buildDemoScript, moveDiff, validateMove } from '../_shared/state/index.ts'
+import { buildDemoScript, mediaRef, moveDiff, validateMove } from '../_shared/state/index.ts'
 import type { DemoContext, Json } from '../_shared/state/index.ts'
 import {
-  applyAndBroadcast, assertOk, loadContext, loadState, logEvent, playerVisibleState, resolveMediaUrl, writeCheckpoint,
+  applyAndBroadcast, assertOk, loadContext, loadState, logEvent, playerVisibleState, writeCheckpoint,
 } from './util.ts'
 
 /** Full-state resync for reconnect/late-join; players get the dm domain stripped. */
@@ -76,7 +76,7 @@ export async function setScene(
     if (!location) return { status: 404, body: { error: 'Location not found' } }
     scenePatch.locationId = location.id
     scenePatch.locationName = location.name
-    scenePatch.backgroundUrl = await resolveMediaUrl(service, 'adventure-media', location.background_url)
+    scenePatch.background = mediaRef('adventure-media', location.background_url) as unknown as Json
   }
   if (Object.keys(scenePatch).length === 0) return { status: 400, body: { error: 'Nothing to change' } }
 
@@ -113,14 +113,14 @@ async function buildDemoContext(service: SupabaseClient, adventureId: string): P
   return {
     locationId: location?.id ?? 'demo-location',
     locationName: location?.name ?? 'Hollowbrook',
-    backgroundUrl: await resolveMediaUrl(service, 'adventure-media', (location?.background_url as string | null) ?? null),
-    mapUrl: await resolveMediaUrl(service, 'adventure-media', map?.imagePath ?? null),
+    background: mediaRef('adventure-media', (location?.background_url as string | null) ?? null),
+    map: mediaRef('adventure-media', map?.imagePath ?? null),
     obstacles: map?.obstacles ?? [],
     npcs: await Promise.all(
       (npcs ?? []).slice(0, 2).map(async (n) => ({
         id: n.id,
         name: n.name,
-        imageUrl: await resolveMediaUrl(service, 'adventure-media', imageOf(n.images as Json)),
+        image: mediaRef('adventure-media', imageOf(n.images as Json)),
       })),
     ),
     objectives: (objectives ?? []).slice(0, 2).map((o) => ({ id: o.id, title: o.title })),
@@ -129,7 +129,7 @@ async function buildDemoContext(service: SupabaseClient, adventureId: string): P
         userId: c.user_id as string,
         characterId: c.id as string,
         name: c.name as string,
-        imageUrl: await resolveMediaUrl(service, 'characters', imageOf(c.images as Json)),
+        image: mediaRef('characters', imageOf(c.images as Json)),
       })),
     ),
   }

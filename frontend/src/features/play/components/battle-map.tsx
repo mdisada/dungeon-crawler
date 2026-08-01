@@ -26,7 +26,8 @@ const FIT_CLASS: Record<MapFit, string> = {
  * ribbon, condition badges, obstacle shading.
  */
 export function BattleMap({ combat }: { combat: CombatState }) {
-  const { adventure, userId, role, isSpectator } = usePlay()
+  const { adventure, userId, role, isSpectator, media } = usePlay()
+  const mapUrl = media(combat.map)
   const containerRef = useRef<HTMLDivElement>(null)
   const { viewport, onWheel, onPointerDown, onPointerMove, onPointerUp, toGrid } = useMapViewport(containerRef)
   // Optimistic position while the server round-trips; snapped back on rejection.
@@ -184,9 +185,9 @@ export function BattleMap({ combat }: { combat: CombatState }) {
             transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
           }}
         >
-          {combat.mapUrl ? (
+          {mapUrl ? (
             <img
-              src={combat.mapUrl}
+              src={mapUrl}
               alt="Battle map"
               className={cn('absolute inset-0 h-full w-full', FIT_CLASS[combat.mapFit ?? 'cover'])}
               draggable={false}
@@ -247,8 +248,8 @@ export function BattleMap({ combat }: { combat: CombatState }) {
                 )}
                 style={{ left: pos.x * CELL_PX, top: pos.y * CELL_PX, width: CELL_PX, height: CELL_PX }}
               >
-                {token.imageUrl ? (
-                  <img src={token.imageUrl} alt="" className="h-full w-full rounded-full object-cover" draggable={false} />
+                {media(token.image) ? (
+                  <img src={media(token.image) ?? undefined} alt="" className="h-full w-full rounded-full object-cover" draggable={false} />
                 ) : (
                   <span className="flex h-full w-full items-center justify-center rounded-full bg-slate-700 text-xs font-bold text-white">
                     {token.name.charAt(0)}
@@ -313,6 +314,7 @@ function HpPip({ token }: { token: TokenState }) {
 }
 
 function InitiativeRibbon({ combat }: { combat: CombatState }) {
+  const { media } = usePlay()
   const byId = new Map(combat.tokens.map((t) => [t.id, t]))
   return (
     <ol className="absolute left-1/2 top-2 z-20 flex -translate-x-1/2 gap-1 rounded-full bg-black/70 px-3 py-1.5" aria-label="Initiative order">
@@ -328,7 +330,9 @@ function InitiativeRibbon({ combat }: { combat: CombatState }) {
               tokenId === combat.activeTokenId ? 'border-sky-300 shadow-[0_0_8px_2px_rgb(56_189_248/0.7)]' : 'border-white/30 opacity-70',
             )}
           >
-            {token.imageUrl ? <img src={token.imageUrl} alt={token.name} className="h-full w-full object-cover" /> : token.name.charAt(0)}
+            {media(token.image)
+              ? <img src={media(token.image) ?? undefined} alt={token.name} className="h-full w-full object-cover" />
+              : token.name.charAt(0)}
           </li>
         )
       })}

@@ -11,25 +11,30 @@
 
 import { formatDiceExpr } from './dice.ts'
 import type { CombatEngineState } from './types.ts'
-import type { CombatState, MapFit, TokenState, TurnOptions } from '../state/types.ts'
+import type { CombatState, MapFit, MediaRef, TokenState, TurnOptions } from '../state/types.ts'
 
 export interface ToSceneOptions {
   /** Where the fight happens, for the scene banner. */
   locationId: string | null
   /**
-   * Signed URL of the battle map's artwork, or null to render the bare grid.
+   * Where the battle map's artwork lives, or null to render the bare grid.
    *
-   * The fight's map is authored: stage 5 binds each battle encounter to a `battle_maps` row by tag
-   * match against its fiction and its location, and the initiator already reads that row's grid,
-   * obstacles and spawn cells. The caller signs `battle_maps.path` server-side (the same
-   * resolveMediaUrl path backgrounds and portraits take) and passes the URL here.
+   * The fight's map is authored: the location's own drawn map first, else the `battle_maps` row
+   * stage 5 bound to the encounter by tag match - and the initiator already reads that map's grid,
+   * obstacles and spawn cells. A REF, not a URL: the client signs it at render time, so it cannot
+   * rot the way a signed link baked into durable state does (see MediaRef).
    *
    * Null stays a working state, not a broken one - grid and tokens render without artwork, which
    * is what an unassigned fight on the open field gets.
    */
-  mapUrl: string | null
+  map: MediaRef | null
   /** How the artwork lays over the grid; 'cover' when the map row does not say. */
   mapFit?: MapFit
+  /**
+   * Portrait per combatant id, keyed like `controllers`. Absent is null - which is every token in
+   * an engine-run fight today, because the manifest carries no artwork for its combatants.
+   */
+  tokenImages?: Record<string, MediaRef | null>
   /**
    * Who may drive each token, keyed by combatant id. Anything absent is 'ai'.
    *
@@ -80,7 +85,7 @@ export function combatStateFromEngine(engine: CombatEngineState, opts: ToSceneOp
   const activeId = engine.initiative[engine.turnIndex]?.id ?? engine.combatants[0]?.id ?? ''
   return {
     locationId: opts.locationId,
-    mapUrl: opts.mapUrl,
+    map: opts.map,
     obstacles: engine.obstacles,
     tokens: engine.combatants.map((c): TokenState => {
       const control = opts.controllers?.[c.id]
@@ -91,7 +96,7 @@ export function combatStateFromEngine(engine: CombatEngineState, opts: ToSceneOp
         // string is the value the demo script already uses for a token with nothing behind it.
         refId: c.refId ?? '',
         name: c.name,
-        imageUrl: c.imageUrl,
+        image: opts.tokenImages?.[c.id] ?? null,
         x: c.x,
         y: c.y,
         hp: { current: c.hp.current, max: c.hp.max, temp: c.hp.temp },

@@ -19,7 +19,7 @@ const engine = {
 
 describe('combatStateFromEngine', () => {
   it('maps combatants onto scene tokens the battle map can render', () => {
-    const scene = combatStateFromEngine(engine, { locationId: 'loc-1', mapUrl: null })
+    const scene = combatStateFromEngine(engine, { locationId: 'loc-1', map: null })
     expect(scene.tokens.map((t) => [t.name, t.x, t.y, t.allegiance])).toEqual([
       ['Bram', 2, 3, 'party'],
       ['Dredger', 8, 8, 'enemy'],
@@ -30,21 +30,21 @@ describe('combatStateFromEngine', () => {
 
   it('reads the active token from initiative order, not array order', () => {
     // turnIndex indexes INITIATIVE, so the active combatant is the second-highest roller here.
-    expect(combatStateFromEngine(engine, { locationId: null, mapUrl: null }).activeTokenId).toBe('pc1')
-    expect(combatStateFromEngine(engine, { locationId: null, mapUrl: null }).initiative)
+    expect(combatStateFromEngine(engine, { locationId: null, map: null }).activeTokenId).toBe('pc1')
+    expect(combatStateFromEngine(engine, { locationId: null, map: null }).initiative)
       .toEqual([{ tokenId: 'e1', roll: 19 }, { tokenId: 'pc1', roll: 12 }])
   })
 
   it('leaves every token AI-controlled unless told otherwise', () => {
     // battle-map.tsx gates drags on controller/controllerUserId, so this is what keeps the map
     // read-only until a combat action route exists to receive a player's input.
-    const scene = combatStateFromEngine(engine, { locationId: null, mapUrl: null })
+    const scene = combatStateFromEngine(engine, { locationId: null, map: null })
     expect(scene.tokens.every((t) => t.controller === 'ai' && t.controllerUserId === null)).toBe(true)
   })
 
   it('grants control only where a controller is supplied', () => {
     const scene = combatStateFromEngine(engine, {
-      locationId: null, mapUrl: null,
+      locationId: null, map: null,
       controllers: { pc1: { controller: 'player', userId: 'user-9' } },
     })
     expect(scene.tokens.find((t) => t.id === 'pc1')).toMatchObject({ controller: 'player', controllerUserId: 'user-9' })
@@ -52,7 +52,7 @@ describe('combatStateFromEngine', () => {
   })
 
   it('survives an ad-hoc combatant with no row behind it', () => {
-    const scene = combatStateFromEngine(engine, { locationId: null, mapUrl: null })
+    const scene = combatStateFromEngine(engine, { locationId: null, map: null })
     expect(scene.tokens.find((t) => t.id === 'e1')?.refId).toBe('')
   })
 
@@ -61,15 +61,15 @@ describe('combatStateFromEngine', () => {
     // assigned map's authored grid, so those two disagreed for every map that was not 32x32.
     const sized = { ...engine, gridWidth: 20, gridHeight: 15 } as CombatEngineState
     const scene = combatStateFromEngine(sized, {
-      locationId: 'loc-1', mapUrl: 'https://signed/crypt.png', mapFit: 'contain',
+      locationId: 'loc-1', map: { bucket: 'battle-maps', path: 'crypt.png' }, mapFit: 'contain',
     })
     expect(scene).toMatchObject({
-      mapUrl: 'https://signed/crypt.png', mapFit: 'contain', gridWidth: 20, gridHeight: 15,
+      map: { bucket: 'battle-maps', path: 'crypt.png' }, mapFit: 'contain', gridWidth: 20, gridHeight: 15,
     })
   })
 
   it('falls back to cover when the map row does not say how to fit', () => {
-    expect(combatStateFromEngine(engine, { locationId: null, mapUrl: null }).mapFit).toBe('cover')
+    expect(combatStateFromEngine(engine, { locationId: null, map: null }).mapFit).toBe('cover')
   })
 })
 
@@ -109,6 +109,6 @@ describe('turnOptions', () => {
   })
 
   it('rides along on the scene state, so the action bar needs no second read', () => {
-    expect(combatStateFromEngine(playable, { locationId: null, mapUrl: null }).options?.tokenId).toBe('pc1')
+    expect(combatStateFromEngine(playable, { locationId: null, map: null }).options?.tokenId).toBe('pc1')
   })
 })

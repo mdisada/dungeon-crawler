@@ -3,6 +3,8 @@ import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import type { SpeakerSlot } from '@rules/state'
 
+import { usePlay } from '../hooks/use-play-context'
+
 interface SpeakerStageProps {
   speakers: SpeakerSlot[]
   /** Whoever holds the text box right now; null dims the whole stage (narrator voice). */
@@ -15,13 +17,16 @@ interface SpeakerStageProps {
  * pipeline produces, so `object-bottom` is what puts their feet on the floor rather than floating
  * them in the middle of the frame.
  *
- * SpeakerSlot.imageUrl is signed for an hour when the scene is staged, so a conversation that
- * outlives it renders a broken image unless someone resyncs. The silhouette is the fallback for
- * that as much as for an NPC who never got a portrait.
+ * The portrait is signed at render time from SpeakerSlot.image and re-signed on a timer, so a
+ * conversation no longer outlives its own artwork (it used to: the URL was signed for an hour when
+ * the scene was staged and nothing renewed it). The silhouette remains the fallback for an NPC who
+ * never got a portrait, and for a link that fails for any other reason.
  */
 function Figure({ speaker, isSpeaking }: { speaker: SpeakerSlot; isSpeaking: boolean }) {
+  const { media } = usePlay()
   const [brokenUrl, setBrokenUrl] = useState<string | null>(null)
-  const imageUrl = speaker.imageUrl && speaker.imageUrl !== brokenUrl ? speaker.imageUrl : null
+  const signed = media(speaker.image)
+  const imageUrl = signed && signed !== brokenUrl ? signed : null
 
   return (
     <figure
