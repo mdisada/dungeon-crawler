@@ -1,8 +1,10 @@
 // Which voice speaks a line, and what Fish calls it.
 //
-// The fallback chain is the whole feature's opt-in switch: an adventure with no narrator voice
-// assigned resolves to null, narration-tts returns `silent`, and play behaves exactly as it did
-// before this feature existed - no synthesis, no cost, no gate.
+// The chain ends at the built-in default (2026-08-01): a table that has assigned no narrator is
+// narrated by it rather than sitting silent, because an unset column was too easy to mistake for a
+// broken feature. Silence is now the player's mute switch - a muted client never asks for synthesis
+// at all - rather than an adventure-level accident. Null, and therefore `silent`, remains reachable
+// if no row carries the default flag.
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
@@ -15,7 +17,7 @@ export interface ResolvedVoice {
 }
 
 /**
- * NPC line -> that NPC's voice -> else the adventure's narrator voice -> else null (silent).
+ * NPC line -> that NPC's voice -> the adventure's narrator voice -> the built-in default -> null.
  *
  * `explicitProfileId` short-circuits the chain for the TTS lab, which picks a voice directly and
  * has no adventure to fall back to.
@@ -61,7 +63,17 @@ export async function resolveVoiceProfileId(
     .select('narrator_voice_id')
     .eq('id', opts.adventureId)
     .maybeSingle()
-  return (adventure?.narrator_voice_id as string | null) ?? null
+  const assigned = (adventure?.narrator_voice_id as string | null) ?? null
+  if (assigned) return assigned
+
+  // Nothing assigned anywhere: the built-in default narrates. One row at most carries the flag and
+  // it is always ownerless, both enforced by 20260801200000_default_narrator_voice.sql.
+  const { data: fallback } = await service
+    .from('voice_profiles')
+    .select('id')
+    .eq('is_default', true)
+    .maybeSingle()
+  return (fallback?.id as string | null) ?? null
 }
 
 /**

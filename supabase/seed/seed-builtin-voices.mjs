@@ -21,7 +21,17 @@ const TARGET_RATE = 16_000
 const MAX_SECONDS = 15
 const BUCKET = 'voices'
 
-const VOICES = [{ name: 'Carl', file: new URL('../../voices/carl.wav', import.meta.url), path: 'builtin/carl.wav' }]
+// `isDefault` marks the voice a table falls back to when it has assigned no narrator of its own
+// (20260801200000_default_narrator_voice.sql). At most one entry may carry it.
+const VOICES = [
+  { name: 'Carl', file: new URL('../../voices/carl.wav', import.meta.url), path: 'builtin/carl.wav' },
+  {
+    name: 'Juliet',
+    file: new URL('../../voices/juliet.wav', import.meta.url),
+    path: 'builtin/juliet.wav',
+    isDefault: true,
+  },
+]
 
 const projectUrl = (process.argv[2] ?? process.env.SUPABASE_URL ?? '').replace(/\/$/, '')
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -118,19 +128,38 @@ async function main() {
     const existing = await (
       await api(`/rest/v1/voice_profiles?select=id&user_id=is.null&name=eq.${encodeURIComponent(voice.name)}`)
     ).json()
+
+    let id
     if (existing.length > 0) {
-      console.log(`  row exists (${existing[0].id}) - clip refreshed, row left alone`)
-      continue
+      id = existing[0].id
+      console.log(`  row exists (${id}) - clip refreshed, row left alone`)
+    } else {
+      const inserted = await (
+        await api('/rest/v1/voice_profiles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+          body: JSON.stringify({ user_id: null, name: voice.name, storage_path: voice.path }),
+        })
+      ).json()
+      id = inserted[0].id
+      console.log(`  inserted ${id}`)
     }
 
-    const inserted = await (
-      await api('/rest/v1/voice_profiles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
-        body: JSON.stringify({ user_id: null, name: voice.name, storage_path: voice.path }),
+    // Cleared before it is set: only one row may hold the flag, and the unique index would reject
+    // the update rather than quietly move it.
+    if (voice.isDefault) {
+      await api(`/rest/v1/voice_profiles?is_default=is.true&id=neq.${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_default: false }),
       })
-    ).json()
-    console.log(`  inserted ${inserted[0].id}`)
+      await api(`/rest/v1/voice_profiles?id=eq.${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_default: true }),
+      })
+      console.log('  marked as the default narrator voice')
+    }
   }
   console.log('Done.')
 }
