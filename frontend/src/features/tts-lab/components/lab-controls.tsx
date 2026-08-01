@@ -218,7 +218,8 @@ export function LabControls({ settings, onChange, profiles, isRunning }: LabCont
             disabled={isRunning}
             onChange={(e) => set('unit', e.target.value as LabSettings['unit'])}
           >
-            <option value="box">Per text box (shipped)</option>
+            <option value="lead">Lead sentence (shipped)</option>
+            <option value="box">Per text box</option>
             <option value="sentence">Per sentence</option>
           </select>
         </label>

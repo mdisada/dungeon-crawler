@@ -76,8 +76,15 @@ export function fishSpeak(opts: {
   input: string
   referenceId?: string | null
   format?: string
+  /**
+   * Latency-quality trade-off. Fish's default is `normal`; `balanced` halves time-to-first-audio
+   * on the paid engine for no measurable cost to total generation time (measured 2026-08-01 on a
+   * 195-char box: first byte 393ms -> 196ms, complete 3429ms -> 3278ms). No effect on the free
+   * engine, which sat at ~237ms either way.
+   */
+  latency?: 'normal' | 'balanced'
 }): Promise<Response> {
-  const { model, input, referenceId, format = 'mp3' } = opts
+  const { model, input, referenceId, format = 'mp3', latency } = opts
   return fetch(FISH_TTS_URL, {
     method: 'POST',
     headers: {
@@ -88,6 +95,7 @@ export function fishSpeak(opts: {
     body: JSON.stringify({
       text: input,
       ...(referenceId ? { reference_id: referenceId } : {}),
+      ...(latency ? { latency } : {}),
       format,
     }),
   })

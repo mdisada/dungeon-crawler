@@ -19,6 +19,7 @@ export interface LabSettings {
   /** Re-synthesize instead of serving the cache, so a run measures synthesis. */
   force: boolean
   maxChars: number
+  /** Matches play's default, so what the lab measures is what a session will do. */
   unit: SynthesisUnit
   /**
    * manual    - you click, like a player
@@ -44,7 +45,7 @@ export const DEFAULT_LAB_SETTINGS: LabSettings = {
   voiceProfileId: undefined,
   force: true,
   maxChars: 240,
-  unit: 'box',
+  unit: 'lead',
   stress: 'manual',
   readingCps: 18,
   volume: 0.9,

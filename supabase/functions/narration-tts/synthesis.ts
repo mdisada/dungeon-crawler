@@ -33,7 +33,13 @@ async function broadcast(
 async function speak(ctx: SynthesisContext, text: string): Promise<Blob> {
   let lastDetail = ''
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const res = await fishSpeak({ model: ctx.model, input: text, referenceId: ctx.referenceId, format: 'mp3' })
+    const res = await fishSpeak({
+      model: ctx.model,
+      input: text,
+      referenceId: ctx.referenceId,
+      format: 'mp3',
+      latency: 'balanced',
+    })
     if (res.ok) return await res.blob()
     lastDetail = `${res.status} ${await res.text().catch(() => '')}`
     if (!RETRY_STATUSES.has(res.status) || attempt === MAX_ATTEMPTS - 1) break
@@ -43,7 +49,18 @@ async function speak(ctx: SynthesisContext, text: string): Promise<Blob> {
   throw new Error(`Fish Audio error: ${lastDetail}`)
 }
 
-async function synthesizeOne(ctx: SynthesisContext, plan: ChunkPlan): Promise<Record<string, unknown>> {
+/**
+ * Synthesizes one chunk and returns what the player needs, plus the bookkeeping to run afterwards.
+ *
+ * The two writes are deliberately NOT awaited before the caller broadcasts. Marking the row ready
+ * and logging cost are two more round trips on the path between "audio exists" and "the player can
+ * hear it", and neither is something the player waits for. They are collected and awaited at the
+ * end of the run instead, so a dying isolate cannot drop them.
+ */
+async function synthesizeOne(
+  ctx: SynthesisContext,
+  plan: ChunkPlan,
+): Promise<{ payload: Record<string, unknown>; bookkeeping: Promise<unknown> }> {
   const startedAt = Date.now()
   try {
     const audio = await speak(ctx, plan.text)
@@ -52,26 +69,29 @@ async function synthesizeOne(ctx: SynthesisContext, plan: ChunkPlan): Promise<Re
       .upload(plan.storagePath, audio, { contentType: 'audio/mpeg', upsert: true })
     if (uploadError) throw new Error(`upload failed: ${uploadError.message}`)
 
-    await ctx.service
-      .from('narration_clips')
-      .update({ ready_at: new Date().toISOString(), byte_size: audio.size })
-      .eq('scope', ctx.scope)
-      .eq('cache_key', plan.cacheKey)
-
+    const url = await signedUrl(ctx, plan.storagePath)
     const latencyMs = Date.now() - startedAt
-    // Logged per synthesized chunk only. A cache hit costs nothing and writes nothing, which is
-    // what keeps the navbar's credit meter an honest picture of narration spend.
-    await ctx.service.from('usage_log').insert({
-      user_id: ctx.ownerId,
-      adventure_id: ctx.adventureId,
-      agent_role: 'narrator',
-      model: ctx.model,
-      kind: 'tts',
-      cost_usd: fishCostUsd(ctx.model, plan.text),
-      latency_ms: latencyMs,
-    })
 
-    return { url: await signedUrl(ctx, plan.storagePath), ms: latencyMs }
+    const bookkeeping = Promise.all([
+      ctx.service
+        .from('narration_clips')
+        .update({ ready_at: new Date().toISOString(), byte_size: audio.size })
+        .eq('scope', ctx.scope)
+        .eq('cache_key', plan.cacheKey),
+      // Logged per synthesized chunk only. A cache hit costs nothing and writes nothing, which is
+      // what keeps the navbar's credit meter an honest picture of narration spend.
+      ctx.service.from('usage_log').insert({
+        user_id: ctx.ownerId,
+        adventure_id: ctx.adventureId,
+        agent_role: 'narrator',
+        model: ctx.model,
+        kind: 'tts',
+        cost_usd: fishCostUsd(ctx.model, plan.text),
+        latency_ms: latencyMs,
+      }),
+    ])
+
+    return { payload: { url, ms: latencyMs }, bookkeeping }
   } catch (err) {
     // Releasing the reservation is what lets the next request retry, instead of inheriting a
     // tombstone that would keep this chunk silent until the 60s steal window elapsed.
@@ -127,13 +147,19 @@ export async function runSynthesis(
     return chain
   }
 
+  // Bookkeeping deferred off the broadcast path (see synthesizeOne), awaited before the run ends.
+  const bookkeeping: Promise<unknown>[] = []
+
   const record = async (plan: ChunkPlan) => {
     // The same outcome is recorded for every box that plays this clip, under each box's own index,
     // so a repeated line reads aloud both times off a single synthesis.
     const indices = [plan.index, ...plan.mirrors]
     try {
       const result = await synthesizeOne(ctx, plan)
-      for (const index of indices) done.set(index, { event: 'chunk_ready', payload: { ...result, index } })
+      bookkeeping.push(result.bookkeeping)
+      for (const index of indices) {
+        done.set(index, { event: 'chunk_ready', payload: { ...result.payload, index } })
+      }
     } catch (err) {
       console.error(`narration chunk ${plan.index} failed`, err)
       const error = err instanceof Error ? err.message : 'synthesis failed'
@@ -151,4 +177,7 @@ export async function runSynthesis(
       while (next < rest.length) await record(rest[next++])
     }),
   )
+
+  // Settled, not all: a failed ready_at write costs a future cache miss, never this line's audio.
+  await Promise.allSettled(bookkeeping)
 }

@@ -52,6 +52,80 @@ export const REVEAL_MAX_CHARS = 240
  *
  * Lossless like `splitSentences`: the chunks rejoin into the original text.
  */
+/**
+ * How a line is cut into the pieces sent for narration synthesis.
+ *
+ *   box      - one clip per text box. Best prosody, but the player waits on a whole box.
+ *   sentence - one clip per sentence throughout. Fastest first clip, most seams.
+ *   lead     - only the FIRST box is split into sentences; the rest stay whole.
+ */
+export type NarrationSplit = 'box' | 'sentence' | 'lead'
+
+export interface NarrationUnits {
+  /** What the player clicks through. Always whole sentences up to the box budget. */
+  boxes: string[]
+  /** What is sent for synthesis, in order. */
+  units: string[]
+  /** unitsFor[boxIndex] lists the unit indices that box plays, in order. */
+  unitsFor: number[][]
+}
+
+/**
+ * Splits a line into boxes, and separately into synthesis units.
+ *
+ * `lead` is the default because of what the first box costs: measured 2026-08-01, a 195-char box
+ * takes ~4.6s to synthesize, and the player stares at the previous beat for all of it. Its first
+ * sentence alone took ~0.9s. Splitting only that box buys back most of the wait while leaving
+ * every later box whole, so the seams a per-sentence split introduces appear once per line rather
+ * than throughout - and by the time the player reaches box 2, synthesis is well ahead of them.
+ */
+export function splitNarration(
+  text: string,
+  maxChars: number = REVEAL_MAX_CHARS,
+  split: NarrationSplit = 'lead',
+): NarrationUnits {
+  const boxes = chunkSentences(text, maxChars)
+    .map((box) => box.trim())
+    .filter(Boolean)
+
+  if (split === 'box') {
+    return { boxes, units: boxes, unitsFor: boxes.map((_, index) => [index]) }
+  }
+
+  const units: string[] = []
+  const unitsFor: number[][] = []
+  for (const [boxIndex, box] of boxes.entries()) {
+    const wholeBox = split === 'lead' && boxIndex > 0
+    const pieces = wholeBox
+      ? [box]
+      : splitSentences(box)
+          .map((sentence) => sentence.trim())
+          .filter(Boolean)
+    const indices = pieces.map((piece) => units.push(piece) - 1)
+    // A box whose sentences all trimmed away still needs an entry, or every later box would map
+    // to the wrong audio.
+    unitsFor.push(indices.length > 0 ? indices : [units.push(box) - 1])
+  }
+  return { boxes, units, unitsFor }
+}
+
+/**
+ * How many leading BOXES are playable, given how many leading units have settled.
+ *
+ * A box is playable only when every unit it plays has settled - otherwise the chevron would offer
+ * a box that runs out of audio halfway through. The one exception is the first box under `lead`,
+ * which the caller deliberately reveals on its first sentence; see useNarration.
+ */
+export function settledBoxCount(unitsFor: number[][], settledUnits: number): number {
+  let count = 0
+  while (count < unitsFor.length) {
+    const last = unitsFor[count][unitsFor[count].length - 1]
+    if (last >= settledUnits) break
+    count++
+  }
+  return count
+}
+
 export function chunkSentences(text: string, maxChars: number = REVEAL_MAX_CHARS): string[] {
   const chunks: string[] = []
   let current = ''

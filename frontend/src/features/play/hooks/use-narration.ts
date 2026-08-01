@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNarrationAudio } from '@/features/tts'
 import type { DialogueLine } from '@rules/state'
 
-import { chunkSentences } from '../sentences'
+import { settledBoxCount, splitNarration } from '../sentences'
 import { useLineReveal } from './use-line-reveal'
 import type { LineReveal } from './use-line-reveal'
 
@@ -48,14 +48,16 @@ export function useNarration({
   narrationVolume,
   isMuted,
 }: UseNarrationOptions): NarrationDelivery {
-  const chunks = useMemo(() => (next ? chunkSentences(next.text) : []), [next])
+  // `lead` splits only the first box into sentences, so the story starts speaking on a ~1s clip
+  // instead of waiting ~4.6s for the whole box. Later boxes stay whole and keep their prosody.
+  const split = useMemo(() => splitNarration(next?.text ?? ''), [next])
 
   const audio = useNarrationAudio({
     scope: adventureId,
     adventureId,
     lineId: next?.id ?? null,
     npcId: next?.npcId ?? null,
-    chunks,
+    chunks: split.units,
     // Muted costs nothing and waits for nothing: this client never even asks for synthesis.
     enabled: !isMuted && narrationVolume > 0,
     deadlineMs: NARRATION_DEADLINE_MS,
@@ -82,7 +84,13 @@ export function useNarration({
   // effectively finished this one. Ungating here costs at most a free click through a beat they
   // have already heard, and it is the alternative to freezing the old line behind the new line's
   // audio, which would read as a hang.
-  const canAdvance = reveal.isRevealing && (isHolding || audio.canAdvance(reveal.visibleCount))
+  //
+  // Box-level, not unit-level: a box with three sentences is only safe to advance to once all
+  // three have settled, or the chevron would offer a box that runs out of audio halfway through.
+  // The first box is the deliberate exception - `audio.canReveal` opens it on its first sentence,
+  // with the rest queued behind and synthesis running well ahead of the reading.
+  const playableBoxes = settledBoxCount(split.unitsFor, audio.settled)
+  const canAdvance = reveal.isRevealing && (isHolding || playableBoxes >= reveal.visibleCount + 1)
 
   const advance = useCallback(() => {
     if (canAdvance) reveal.advance()
@@ -97,8 +105,9 @@ export function useNarration({
     const key = `${heldId}:${index}`
     if (playedRef.current === key) return
     playedRef.current = key
-    audio.play(index)
-  }, [isHolding, heldId, reveal.visibleCount, audio])
+    // A box can map to several clips under `lead`, so playback is a queue, not a single file.
+    audio.playSequence(split.unitsFor[index] ?? [])
+  }, [isHolding, heldId, reveal.visibleCount, split.unitsFor, audio])
 
   return useMemo(
     () => ({

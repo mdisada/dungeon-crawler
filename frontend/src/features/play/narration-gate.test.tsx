@@ -9,6 +9,8 @@ import { PlayProvider } from './components/play-context'
 import type { MemberAdventure } from './types'
 
 // The gate is what this file is about, so the audio layer is a dial rather than a network call.
+// `settled` counts leading SYNTHESIS UNITS, which under the `lead` split is not the same as boxes:
+// LONG below becomes boxes [3 sentences][1 sentence], so units [0,1,2] and [3].
 const audio = {
   canReveal: true,
   settled: 99,
@@ -18,6 +20,7 @@ const audio = {
   needsUnlock: false,
   unlock: vi.fn(),
   state: { lineId: null, phase: 'active' as const, chunks: [], serverTimings: null, error: null },
+  // Unused by useNarration since it gates on boxes, kept to satisfy the hook's contract.
   canAdvance: (): boolean => true,
 }
 
@@ -81,8 +84,8 @@ const second: DialogueLine = { id: 'line-2', speaker: null, npcId: null, text: L
 
 beforeEach(() => {
   audio.canReveal = true
-  audio.canAdvance = () => true
-  audio.play.mockClear()
+  audio.settled = 99
+  audio.playSequence.mockClear()
 })
 
 // Explicit because the project's vitest config does not set `globals`, so Testing Library's
@@ -129,20 +132,21 @@ describe('holding a new line for its first clip', () => {
 })
 
 describe('the advance chevron', () => {
-  it('is withheld while the next chunk has no audio, and appears once it does', () => {
-    audio.canAdvance = () => false
+  it('is withheld until every clip of the NEXT box has settled', () => {
+    // Box 0's three sentences are done, so it is on screen - but box 1's clip is not, so there is
+    // nothing to advance to yet. Gating on units rather than boxes would wrongly offer it here.
+    audio.settled = 3
     const { rerender } = render(scene(stateWith([second], 'line-2')))
-
-    // The line has more to show - it is longer than one box - but the next clip is not ready.
     expect(screen.queryByRole('button', { name: /show more of this line/i })).not.toBeInTheDocument()
 
-    audio.canAdvance = () => true
+    audio.settled = 4
     rerender(scene(stateWith([second], 'line-2')))
     expect(screen.getByRole('button', { name: /show more of this line/i })).toBeInTheDocument()
   })
 
-  it('plays the chunk that is on screen', () => {
-    render(scene(stateWith([first], 'line-1')))
-    expect(audio.play).toHaveBeenCalledWith(0)
+  it('plays every clip the visible box is made of, in order', () => {
+    render(scene(stateWith([second], 'line-2')))
+    // Box 0 of the long line is three sentences under the `lead` split, queued back to back.
+    expect(audio.playSequence).toHaveBeenCalledWith([0, 1, 2])
   })
 })
