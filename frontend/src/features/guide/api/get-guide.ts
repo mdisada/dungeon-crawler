@@ -94,6 +94,7 @@ export async function getGuide(adventureId: string): Promise<GuideData> {
         personality: n.personality ?? {},
         faction: n.faction,
         voiceId: n.voice_id,
+        voiceSampleLines: Array.isArray(n.voice_sample_lines) ? n.voice_sample_lines : null,
         imagePrompt: n.image_prompt,
         images: n.images ?? {},
         description: n.description,

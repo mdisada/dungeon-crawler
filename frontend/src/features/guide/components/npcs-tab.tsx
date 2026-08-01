@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { regenerateRow } from '../api/pipeline'
 import { deleteGuideRow, insertGuideRow, saveGuideRow } from '../api/save-guide-row'
+import { useNpcVoiceLines } from '../hooks/use-npc-voice-lines'
 import type { GuideData, Npc } from '../types'
 import { NpcImagePanel } from './npc-image-panel'
 import { NpcStatBlockPanel } from './npc-stat-block'
@@ -24,6 +25,7 @@ function NpcOverview({ adventureId, npc, onChanged }: { adventureId: string; npc
     traits: String(npc.personality.traits ?? ''),
     wants: String(npc.personality.wants ?? ''),
   })
+  const voiceLines = useNpcVoiceLines(npc)
   const [error, setError] = useState<string | null>(null)
 
   function save(patch: Record<string, unknown>) {
@@ -106,7 +108,10 @@ function NpcOverview({ adventureId, npc, onChanged }: { adventureId: string; npc
       <NpcImagePanel adventureId={adventureId} npc={npc} onChanged={onChanged} />
       <VoicePicker
         label="Voice"
-        kind="npc"
+        // Written in this character's voice on the first press, then cached on the row.
+        sampleLines={voiceLines.lines}
+        sampleKey={`npc-${npc.id}`}
+        onNeedLines={voiceLines.ensure}
         selectedVoiceId={npc.voiceId}
         onSelect={async (voiceId) => {
           await saveGuideRow('npcs', npc.id, { voice_id: voiceId })

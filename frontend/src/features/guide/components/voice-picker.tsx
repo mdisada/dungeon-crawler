@@ -4,12 +4,15 @@ import { useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useSession } from '@/features/auth'
 import { useVoiceProfiles, useVoiceSample } from '@/features/tts'
-import type { VoiceSampleKind } from '@/features/tts'
 
 interface VoicePickerProps {
   label: string
-  /** Which job this voice is being hired for - it decides what the audition lines are. */
-  kind: VoiceSampleKind
+  /** What the audition says. Null means the caller is about to write them - see onNeedLines. */
+  sampleLines: readonly string[] | null
+  /** Distinguishes this audition's broadcasts from another picker's on the same screen. */
+  sampleKey: string
+  /** Called on the first press while `sampleLines` is null; the press plays once they arrive. */
+  onNeedLines?: () => void
   selectedVoiceId: string | null
   onSelect: (voiceProfileId: string | null) => Promise<void>
 }
@@ -17,14 +20,27 @@ interface VoicePickerProps {
 // F04 SS5.1/SS5.2: pick from the user's voice_profiles collection (plus the built-in voices every
 // account can read) or upload a clip. Clip storage and synthesis both live in features/tts, so
 // this component only picks, uploads, and auditions.
-export function VoicePicker({ label, kind, selectedVoiceId, onSelect }: VoicePickerProps) {
+export function VoicePicker({
+  label,
+  sampleLines,
+  sampleKey,
+  onNeedLines,
+  selectedVoiceId,
+  onSelect,
+}: VoicePickerProps) {
   const { session } = useSession()
   const userId = session?.user.id ?? null
   const { profiles, error, upload } = useVoiceProfiles(userId)
   const [status, setStatus] = useState<string | null>(null)
   const [isBusy, setIsBusy] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const sample = useVoiceSample(userId, selectedVoiceId, kind)
+  const sample = useVoiceSample({
+    userId,
+    voiceProfileId: selectedVoiceId,
+    lines: sampleLines,
+    sampleKey,
+    onNeedLines,
+  })
 
   async function handleUpload(file: File) {
     setIsBusy(true)

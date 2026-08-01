@@ -20,6 +20,7 @@ export type AgentRole =
   | 'consistency_checker'
   | 'summarizer'
   | 'image_prompter'
+  | 'voice_caster'
   | 'user_direct'
 
 /**
@@ -49,6 +50,20 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   loop_classifier: 'google/gemini-2.5-flash-lite',
   npc_tactician: 'google/gemini-2.5-flash-lite',
   summarizer: 'google/gemini-2.5-flash-lite',
+  // Writes the three lines a voice is auditioned on for one NPC (2026-08-01).
+  //
+  // The blast-radius rule points the other way and it is worth writing down which way: a person
+  // READS this output directly, it is the only signal they get before committing a voice to a
+  // character, and nothing downstream can tell a flat line from a characterful one. By the letter
+  // of this table that is a primary seat.
+  //
+  // Cheap seat by the owner's call, and the arithmetic is not the reason - at one call per NPC,
+  // cached on the row, either seat is ~$0.00006. What makes it defensible is that the failure is
+  // cheap and visible: bad lines are heard immediately by the person who triggered them, cost one
+  // NPC's audition rather than a whole guide, and are re-rolled by clearing the row. That is the
+  // opposite of the group-classifier case above, where a wrong answer deleted rows nothing could
+  // put back. If auditions start sounding interchangeable, this is the line to move.
+  voice_caster: 'google/gemini-2.5-flash-lite',
   // Not a Story agent -- direct user-triggered calls (e.g. the Settings test box). Cheap default.
   // Primary seat: what it writes goes straight into a paid image with nothing downstream to
   // catch a bad brief - a background plate full of people is a plate you pay for twice.

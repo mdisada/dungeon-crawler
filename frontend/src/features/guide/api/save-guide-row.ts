@@ -28,12 +28,16 @@ export async function saveGuideRow(
 }
 
 /**
- * Stores generated media paths WITHOUT marking the row human-edited.
+ * Stores GENERATED output WITHOUT marking the row human-edited.
  *
  * `human_edited` means "a person authored this text, so regeneration must propose rather than
  * overwrite" (SS7). A portrait is not authorship: the automatic image pass touches every NPC in the
  * guide, and routing that through saveGuideRow would quietly protect the whole cast from ever being
  * regenerated again. Re-framing a crop by hand is the same - it changes the picture, not the fiction.
+ *
+ * Same rule, same reason, for anything else a model wrote and a person merely triggered - the NPC
+ * audition lines cached by voice-sample-lines.ts land here, not in saveGuideRow, or pressing play
+ * on a voice would silently freeze that NPC against every future regeneration.
  */
 export async function saveGeneratedMedia(
   table: GuideTable,

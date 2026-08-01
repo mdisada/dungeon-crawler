@@ -19,6 +19,7 @@ export type AgentRole =
   | 'consistency_checker'
   | 'summarizer'
   | 'image_prompter'
+  | 'voice_caster'
   | 'user_direct'
 
 export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
@@ -36,6 +37,7 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   consistency_checker: 'Consistency Checker',
   summarizer: 'Summarizer',
   image_prompter: 'Image Prompter',
+  voice_caster: 'Voice Caster (NPC audition lines)',
   user_direct: 'Direct requests (e.g. this test box)',
 }
 
@@ -69,6 +71,7 @@ export const SYSTEM_DEFAULT_MODEL_MAP: Record<AgentRole, string> = {
   // Primary seat: what it writes goes straight into a paid image with nothing downstream to
   // catch a bad brief - a background plate full of people is a plate you pay for twice.
   image_prompter: 'openai/gpt-5.6-luna',
+  voice_caster: 'google/gemini-2.5-flash-lite',
   user_direct: 'google/gemini-2.5-flash-lite',
 }
 

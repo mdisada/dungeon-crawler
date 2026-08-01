@@ -66,6 +66,8 @@ export interface Npc {
   personality: Record<string, unknown>
   faction: string
   voiceId: string | null
+  /** Three in-character audition lines; null until first generated (voice-sample-lines.ts). */
+  voiceSampleLines: string[] | null
   imagePrompt: string
   images: NpcImages
   description: string

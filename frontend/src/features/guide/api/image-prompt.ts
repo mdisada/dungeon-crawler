@@ -72,7 +72,15 @@ export async function writeLocationScenePrompt(
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: source },
           ],
-          max_tokens: 200,
+          // 200 until 2026-08-01, when this silently stopped working. The primary seat moved to
+          // openai/gpt-5.6-luna on 2026-07-31, and that is a REASONING model: it spends the token
+          // budget thinking before emitting any visible content, so every call came back
+          // finish_reason "length" with content null and this function returned null. The caller
+          // then used the deterministic strip - the exact outcome the comment at the top of this
+          // file exists to prevent, and it had been happening on every location image since.
+          // Measured on a real location: 200 -> empty, 1000 -> a clean brief with 282 reasoning
+          // tokens. A ceiling, not a spend.
+          max_tokens: 1000,
         },
       }),
     })
